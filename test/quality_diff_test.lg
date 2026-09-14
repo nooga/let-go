@@ -1,6 +1,7 @@
 (ns test.quality-diff-test
   (:require
    [quality.diff :as d]
+   [quality.touched :as touched]
    [test :refer :all]))
 
 (deftest name-status-preserves-nul-delimited-paths
@@ -44,6 +45,16 @@
     (is (= [:renamed :modified] (map :status got)))
     (is (= [] (:old-spans (first got))))
     (is (= [] (:new-spans (second got))))))
+
+(deftest patch-does-not-mistake-regular-text-for-gitlink
+  (let [paths (d/parse-name-status-z "M\u0000note.lg\u0000")
+        oid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        patch (str "diff --git a/note.lg b/note.lg\n"
+                   "index 1234567..7654321 100644\n"
+                   "@@ -1 +1 @@\n"
+                   "-Subproject commit " oid "\n"
+                   "+Subproject commit " oid "-dirty\n")]
+    (is (not (:gitlink? (first (d/parse-patch-hunks patch paths)))))))
 
 (deftest patch-header-quoted-paths-match-exact-nul-records
   (let [path "odd\tline\nname.lg"
@@ -277,3 +288,62 @@
           (is (path-only? (get by-new "added.lg")))
           (is (path-only? (get by-new "modified.lg")))))
       (finally (os/delete-tree dir)))))
+
+(defn- with-gitlink-fixture [f]
+  (let [dir (str (os/temp-dir) "/quality-diff-gitlink-" (System/nanoTime))
+        module (str dir "/module.lg")
+        git (fn [root & args]
+              (let [r (apply os/sh "git" "-C" root args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed"
+                                  {:root root :args args :stderr (:err r)})))
+                (clojure.string/trim (:out r))))
+        commit (fn [root message]
+                 (git root "-c" "user.name=Quality Test"
+                      "-c" "user.email=quality@example.invalid"
+                      "commit" "-qm" message))]
+    (try
+      (is (zero? (:exit (os/sh "mkdir" "-p" module))))
+      (git dir "init" "-q")
+      (git dir "config" "diff.ignoreSubmodules" "none")
+      (git module "init" "-q")
+      (spit (str module "/file.lg") "old\n")
+      (git module "add" "file.lg")
+      (commit module "module base")
+      (git dir "update-index" "--add" "--cacheinfo" "160000"
+           (git module "rev-parse" "HEAD") "module.lg")
+      (commit dir "outer base")
+      (let [base (git dir "rev-parse" "HEAD")]
+        (spit (str module "/file.lg") "new\n")
+        (git module "add" "file.lg")
+        (commit module "module head")
+        (git dir "update-index" "--add" "--cacheinfo" "160000"
+             (git module "rev-parse" "HEAD") "module.lg")
+        (commit dir "outer head")
+        (spit (str module "/file.lg") "dirty\n")
+        (f dir base (git dir "rev-parse" "HEAD")))
+      (finally (os/delete-tree dir)))))
+
+(deftest git-changes-keeps-committed-gitlinks-path-only
+  (with-gitlink-fixture
+    (fn [dir base head]
+      (let [rows (d/git-changes base head dir)
+            row (first rows)]
+        (is (= 1 (count rows)))
+        (is (= {:status :modified :old-path "module.lg" :new-path "module.lg"}
+               (select-keys row [:status :old-path :new-path])))
+        (is (not (contains? row :old-text)))
+        (is (not (contains? row :new-text)))
+        (is (= :path-only (:entry-type (first (touched/build rows)))))))))
+
+(deftest git-changes-keeps-dirty-working-gitlinks-path-only
+  (with-gitlink-fixture
+    (fn [dir _ head]
+      (let [rows (d/git-changes head nil dir)
+            row (first rows)]
+        (is (= 1 (count rows)))
+        (is (= {:status :modified :old-path "module.lg" :new-path "module.lg"}
+               (select-keys row [:status :old-path :new-path])))
+        (is (not (contains? row :old-text)))
+        (is (not (contains? row :new-text)))
+        (is (= :path-only (:entry-type (first (touched/build rows)))))))))
