@@ -942,7 +942,7 @@
                                  (str/trim (str (:err r))))
                             {:rev rev}))))
         {:dir dir :name name :vcs :jj})
-      (let [tarball (str (os/temp-dir) name ".tar")]
+      (let [tarball (str (os/temp-dir) "/" name ".tar")]
         (os/delete-tree dir)
         (try
           (let [a (os/sh "git" "archive" "--format=tar" "-o" tarball sha)]

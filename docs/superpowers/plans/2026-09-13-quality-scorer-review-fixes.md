@@ -1,3 +1,8 @@
+---
+status: active
+last-verified: 2026-09-14
+---
+
 # Quality scorer review fixes — 2026-09-13
 
 Scope: prepare local fixes for PR #871 without moving its bookmark or updating the PR.

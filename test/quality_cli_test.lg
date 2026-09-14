@@ -11,7 +11,7 @@
 (def fixtures "fixtures/quality")
 
 (deftest cli-produces-deterministic-report-over-fixtures
-  (let [edn-path (str (os/temp-dir) "quality-cli-test.edn")
+  (let [edn-path (str (os/temp-dir) "/quality-cli-test.edn")
         args ["--ci-seconds" "300" "--go-cover" (str fixtures "/cover.out")
               "--edn" edn-path "--since" "2000-01-01" "--top" "5"
               "--source-root" fixtures fixtures]
@@ -82,7 +82,7 @@
   (is (str/includes? (with-out-str (q/main ["--help"])) "usage: ./lg scripts/quality.lg")))
 
 (deftest pr-cli-keeps-touched-forms-out-of-the-whole-corpus-score
-  (let [edn-path (str (os/temp-dir) "quality-pr-delta-test.edn")
+  (let [edn-path (str (os/temp-dir) "/quality-pr-delta-test.edn")
         out (with-out-str
               (q/main ["--base" "HEAD" "--head" "HEAD" "--top" "5"
                        "--edn" edn-path "--source-root" fixtures fixtures]))
@@ -122,7 +122,7 @@
   ;; without remembering which metrics invert. The files table therefore
   ;; prints DEBT (0 perfect, lower better, unbounded), not the measurements
   ;; behind them.
-  (let [edn-path (str (os/temp-dir) "quality-direction-test.edn")
+  (let [edn-path (str (os/temp-dir) "/quality-direction-test.edn")
         out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
                                    "--source-root" fixtures fixtures]))
         r (read-string (slurp edn-path))
@@ -151,7 +151,7 @@
       (is (contains? f :defects-per-kloc)))))
 
 (deftest files-are-listed-worst-first
-  (let [edn-path (str (os/temp-dir) "quality-order-test.edn")]
+  (let [edn-path (str (os/temp-dir) "/quality-order-test.edn")]
     (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
                            "--source-root" fixtures fixtures]))
     (let [debts (map :debt (:files (read-string (slurp edn-path))))]
@@ -160,7 +160,7 @@
 (deftest the-edn-keeps-every-raw-measurement
   ;; The EDN is the trend-tracking surface: raw fields must not change shape
   ;; when the presented value does.
-  (let [edn-path (str (os/temp-dir) "quality-raw-test.edn")]
+  (let [edn-path (str (os/temp-dir) "/quality-raw-test.edn")]
     (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
                            "--source-root" fixtures fixtures]))
     (let [r (read-string (slurp edn-path))
@@ -175,7 +175,7 @@
 (deftest erosion-and-verbosity-are-reported-with-their-caveats
   ;; Reported, not yet scored: both must appear with the paper's baselines
   ;; and with verbosity marked as the lower bound it is.
-  (let [edn-path (str (os/temp-dir) "quality-terms-test.edn")
+  (let [edn-path (str (os/temp-dir) "/quality-terms-test.edn")
         out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
                                    "--source-root" fixtures fixtures]))
         r (read-string (slurp edn-path))]
@@ -195,7 +195,7 @@
                 (:files r)))))
 
 (deftest dead-code-is-reported-with-its-upper-bound-caveat
-  (let [edn-path (str (os/temp-dir) "quality-dead-test.edn")
+  (let [edn-path (str (os/temp-dir) "/quality-dead-test.edn")
         out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
                                    "--source-root" fixtures fixtures]))
         r (read-string (slurp edn-path))]
@@ -226,7 +226,7 @@
   ;; If lint cannot run, the flagged half is OMITTED and the term
   ;; renormalizes. Silently scoring a smaller numerator would look exactly
   ;; like the codebase improving, which is the worst way to be wrong.
-  (let [edn-path (str (os/temp-dir) "quality-nolint.edn")]
+  (let [edn-path (str (os/temp-dir) "/quality-nolint.edn")]
     (os/setenv "QUALITY_LINT" "/nonexistent/lint.lg")
     (let [out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
                                      "--source-root" fixtures fixtures]))
@@ -255,7 +255,7 @@
   (is (not (contains? (:unscored q/comment-kinds) :let-identity))))
 
 (deftest clone-classes-lead-the-duplicate-story-in-the-report
-  (let [edn-path (str (os/temp-dir) "quality-classes.edn")
+  (let [edn-path (str (os/temp-dir) "/quality-classes.edn")
         out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
                                    "--source-root" fixtures fixtures]))
         r (read-string (slurp edn-path))]
