@@ -776,7 +776,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		argc := 0
 		if args != nil {
 			if coll, ok := args.(vm.Collection); ok {
-				argc = coll.Count().Unbox().(int)
+				argc = int(coll.Count().(vm.Int))
 			} else {
 				for s := args; s != nil; s = s.Next() {
 					argc++
@@ -1526,7 +1526,7 @@ func recurCompiler(c *Context, form vm.Value) error {
 	argc := 0
 	if args != nil {
 		if coll, ok := args.(vm.Collection); ok {
-			argc = coll.Count().Unbox().(int)
+			argc = int(coll.Count().(vm.Int))
 		} else {
 			for s := args; s != nil; s = s.Next() {
 				argc++
