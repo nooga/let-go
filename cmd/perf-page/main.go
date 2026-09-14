@@ -2402,6 +2402,14 @@ const pageTemplate = `<!doctype html>
           function mount() {
             const host = document.getElementById("perf-cpu-filter");
             if (!host) return;
+            // A ?cpu= naming a tier this build does not carry falls back to
+            // All rather than filtering every row out.
+            //
+            // This has to run BEFORE the single-tier return below. A page
+            // built with -cpu carries one tier and renders no selector, so a
+            // stale query there would empty both views with no control left
+            // to recover with.
+            if (current && cpus.indexOf(current) < 0) { current = ""; sync(); }
             // One tier means nothing to choose between.
             if (cpus.length < 2) { host.hidden = true; return; }
             host.hidden = false;
@@ -2417,9 +2425,6 @@ const pageTemplate = `<!doctype html>
               o.value = c; o.textContent = c;
               sel.append(o);
             });
-            // A ?cpu= naming a tier absent from this build falls back to All
-            // rather than rendering an empty page.
-            if (current && cpus.indexOf(current) < 0) { current = ""; sync(); }
             sel.value = current;
             sel.addEventListener("change", function () {
               current = this.value; sync(); notify();
