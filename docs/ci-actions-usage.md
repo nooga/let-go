@@ -12,6 +12,28 @@ human-verified:
 it reported for the week of **2026-09-07 to 2026-09-14** and what follows from
 it. Numbers below are that window; re-run the script for current ones.
 
+## Running it
+
+```
+scripts/ci-usage.sh [owner/repo] [since-YYYY-MM-DD]
+```
+
+Defaults to the repo of the current checkout and the last seven days. Needs
+`gh` (authenticated) and `jq`, and makes roughly one API call per run, so a
+week here is about 700 calls against a 5,000/hour limit.
+
+Six sections: runner-minutes by workflow, by runner OS, the top jobs with
+matrix legs folded together, minutes burned by jobs that ended cancelled or
+failed, and the queue wait per workflow and OS. Skipped jobs are excluded from
+every minutes figure and counted separately, because several workflows here
+skip all their jobs on most PRs and would otherwise read as load.
+
+Two limits worth knowing. The runs list caps at 1,000 results however you
+paginate, so a window wider than that is silently truncated and the script
+warns instead. And `filter=latest` keeps a re-run attempt from being counted
+twice, which means a job re-run after a flake reports once, at its final
+duration.
+
 ## Why a script and not the metrics page
 
 The `/actions/metrics/usage` page has no REST equivalent for this repo. The
