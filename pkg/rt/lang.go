@@ -2984,7 +2984,7 @@ func installLangNS() {
 			if f < minInt32 || f > maxInt32 {
 				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 			}
-			return vm.MakeInt(int(math.Trunc(f))), nil
+			return vm.MakeInt64(int64(math.Trunc(f))), nil
 		}
 		switch v := vs[0].(type) {
 		case vm.Int:
@@ -3004,7 +3004,7 @@ func installLangNS() {
 			if i < minInt32 || i > maxInt32 {
 				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 			}
-			return vm.MakeInt(int(i)), nil
+			return vm.MakeInt64(int64(i)), nil
 		case *vm.BigDecimal:
 			f, _ := v.Val().Float64()
 			return coerce(f)
@@ -4728,7 +4728,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("bitCount expects 1 arg")
 		}
-		a, ok := vm.ToInt(vs[0])
+		a, ok := vm.ToInt64(vs[0])
 		if !ok {
 			return vm.NIL, fmt.Errorf("bitCount expected integer, got %s", vs[0].Type().Name())
 		}
@@ -4738,7 +4738,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("reverse expects 1 arg")
 		}
-		a, ok := vm.ToInt(vs[0])
+		a, ok := vm.ToInt64(vs[0])
 		if !ok {
 			return vm.NIL, fmt.Errorf("reverse expected integer, got %s", vs[0].Type().Name())
 		}
@@ -4899,12 +4899,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	installHostStringBuilder(ns)
 }
 
-func longCompatValue(v int64) vm.Value {
-	if strconv.IntSize == 64 {
-		return vm.Int(v)
-	}
-	return vm.NewBigIntFromInt64(v)
-}
+func longCompatValue(v int64) vm.Value { return vm.MakeInt64(v) }
 
 func strValue(v vm.Value) string {
 	if v == vm.NIL {
@@ -5204,12 +5199,12 @@ func CoreUncheckedNegate(vs ...vm.Value) (vm.Value, error) {
 	if _, isInt := vs[0].(vm.Int); !isInt {
 		return vm.NumNeg(vs[0])
 	}
-	a, ok := vm.ToInt(vs[0])
+	a, ok := vm.ToInt64(vs[0])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-negate expected integer, got %s", vs[0].Type().Name())
 	}
 
-	return vm.MakeInt(int(-int64(a))), nil
+	return vm.MakeInt64(-int64(a)), nil
 }
 
 //lg:native
@@ -5218,11 +5213,11 @@ func CoreUncheckedDivideInt(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
+	a, ok := vm.ToInt64(vs[0])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[0].Type().Name())
 	}
-	b, ok := vm.ToInt(vs[1])
+	b, ok := vm.ToInt64(vs[1])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[1].Type().Name())
 	}
@@ -5233,7 +5228,7 @@ func CoreUncheckedDivideInt(vs ...vm.Value) (vm.Value, error) {
 	if int64(a) == math.MinInt64 && int64(b) == -1 {
 		return vm.NIL, fmt.Errorf("integer overflow")
 	}
-	return vm.MakeInt(int(int64(a) / int64(b))), nil
+	return vm.MakeInt64(int64(a) / int64(b)), nil
 }
 
 //lg:native
@@ -5249,9 +5244,9 @@ func CoreUncheckedLong(vs ...vm.Value) (vm.Value, error) {
 
 		mask := new(big.Int).Lsh(big.NewInt(1), 64)
 		lo := new(big.Int).Mod(v.Val(), mask)
-		return vm.MakeInt(int(int64(lo.Uint64()))), nil
+		return vm.MakeInt64(int64(lo.Uint64())), nil
 	case vm.Float:
-		return vm.MakeInt(int(int64(float64(v)))), nil
+		return vm.MakeInt64(int64(float64(v))), nil
 	case vm.Char:
 		// Java widens char to int; Clojure's unchecked-* inherit that.
 		return vm.MakeInt(int(rune(v))), nil
@@ -7963,7 +7958,7 @@ func CoreBitAnd(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-and expected Int")
 	}
-	return vm.MakeInt(int(a) & int(b)), nil
+	return vm.MakeInt64(int64(a) & int64(b)), nil
 }
 
 //lg:native
@@ -7980,7 +7975,7 @@ func CoreBitOr(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-or expected Int")
 	}
-	return vm.MakeInt(int(a) | int(b)), nil
+	return vm.MakeInt64(int64(a) | int64(b)), nil
 }
 
 //lg:native
@@ -7997,7 +7992,7 @@ func CoreBitXor(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-xor expected Int")
 	}
-	return vm.MakeInt(int(a) ^ int(b)), nil
+	return vm.MakeInt64(int64(a) ^ int64(b)), nil
 }
 
 //lg:native
@@ -8010,7 +8005,7 @@ func CoreBitNot(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-not expected Int")
 	}
-	return vm.MakeInt(^int(a)), nil
+	return vm.MakeInt64(^int64(a)), nil
 }
 
 //lg:native
@@ -8027,7 +8022,7 @@ func CoreBitShiftLeft(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
 	}
-	return vm.MakeInt(int(a) << uint(b)), nil
+	return vm.MakeInt64(int64(a) << uint(b)), nil
 }
 
 //lg:native
@@ -8044,7 +8039,7 @@ func CoreBitShiftRight(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
 	}
-	return vm.MakeInt(int(a) >> uint(b)), nil
+	return vm.MakeInt64(int64(a) >> uint(b)), nil
 }
 
 //lg:native
@@ -8061,7 +8056,7 @@ func CoreUnsignedBitShiftRight(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
 	}
-	return vm.MakeInt(int(uint(a) >> uint(b))), nil
+	return vm.MakeInt64(int64(uint64(a) >> uint(b))), nil
 }
 
 //lg:native
@@ -8078,7 +8073,7 @@ func CoreBitTest(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-test expected Int")
 	}
-	return vm.Boolean(int(a)&(1<<uint(b)) != 0), nil
+	return vm.Boolean(int64(a)&(1<<uint(b)) != 0), nil
 }
 
 //lg:native
@@ -8095,7 +8090,7 @@ func CoreBitSet(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-set expected Int")
 	}
-	return vm.MakeInt(int(a) | (1 << uint(b))), nil
+	return vm.MakeInt64(int64(a) | (1 << uint(b))), nil
 }
 
 //lg:native
@@ -8112,7 +8107,7 @@ func CoreBitClear(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-clear expected Int")
 	}
-	return vm.MakeInt(int(a) &^ (1 << uint(b))), nil
+	return vm.MakeInt64(int64(a) &^ (1 << uint(b))), nil
 }
 
 //lg:native
@@ -8129,7 +8124,7 @@ func CoreBitAndNot(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-and-not expected Int")
 	}
-	return vm.MakeInt(int(a) &^ int(b)), nil
+	return vm.MakeInt64(int64(a) &^ int64(b)), nil
 }
 
 //lg:native
@@ -8146,7 +8141,7 @@ func CoreBitFlip(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-flip expected Int")
 	}
-	return vm.MakeInt(int(a) ^ (1 << uint(b))), nil
+	return vm.MakeInt64(int64(a) ^ (1 << uint(b))), nil
 }
 
 //lg:native
