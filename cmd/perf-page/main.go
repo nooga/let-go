@@ -347,7 +347,7 @@ func main() {
 	}
 
 	if *viewerOut != "" {
-		if err := writeViewer(*viewerOut, *viewerDataOut, *viewerDataURL, timeline, logo); err != nil {
+		if err := writeViewer(*viewerOut, *viewerDataOut, *viewerDataURL, *outPath, timeline, logo); err != nil {
 			die("write timeline explorer: %v", err)
 		}
 	}
@@ -355,7 +355,7 @@ func main() {
 	page := buildPage(current, reference, referenceName, timeline, logo)
 	page.ExplorerURL = *explorerURL
 	if *viewerOut != "" {
-		page.ViewerURL = viewerLinkFrom(*outPath, *viewerOut)
+		page.ViewerURL = relLink(*outPath, *viewerOut)
 	}
 	html, err := renderPage(page)
 	if err != nil {
@@ -1643,6 +1643,8 @@ type viewerPoint struct {
 type viewerChart struct {
 	Title    string         `json:"title"`
 	Subtitle string         `json:"subtitle"`
+	Unit     string         `json:"unit"`
+	Relative bool           `json:"relative"`
 	Series   []viewerSeries `json:"series"`
 }
 
@@ -1675,22 +1677,59 @@ func buildViewerData(timeline []Snapshot) viewerData {
 	// what it measures.
 	specs := []struct {
 		title, subtitle string
-		series          []viewerSeriesSpec
+		unit            string
+		// metric picks the number plotted; sample picks it out of a retained
+		// sample for the min/max band. relative plots % against the window
+		// start, matching the summary page's timing charts; the deterministic
+		// metrics are plotted absolute because a percentage of an allocation
+		// count hides the thing you want to see.
+		metric   func(BenchmarkEntry) float64
+		sample   func(BenchmarkSample) float64
+		relative bool
+		series   []viewerSeriesSpec
 	}{
-		{"End-to-end suite", "Execution wall time. Lower is better.", []viewerSeriesSpec{
-			{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
-			{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
-			{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
-		}},
-		{"Suite, compile + run", "Compile and execution together — what each mode costs end to end.", []viewerSeriesSpec{
-			{"total_bytecode", "#8a5a9e", []string{run + " [total_bytecode]"}},
-			{"total_ir_bytecode", "#245c73", []string{run + " [total_ir_bytecode]"}},
-			{"total_aot_native", "#167a48", []string{run + " [total_aot_native]"}},
-		}},
-		{"IR compile", "Compile time through the IR pipeline. Lower is better.", []viewerSeriesSpec{
-			{"bytecode", "#245c73", []string{ir + " [bytecode]"}},
-			{"gogen_ir", "#167a48", []string{ir + " [gogen_ir]"}},
-		}},
+		{"End-to-end suite", "Execution wall time. Lower is better.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+		{"Suite, compile + run", "Compile and execution together - what each mode costs end to end.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"total_bytecode", "#8a5a9e", []string{run + " [total_bytecode]"}},
+				{"total_ir_bytecode", "#245c73", []string{run + " [total_ir_bytecode]"}},
+				{"total_aot_native", "#167a48", []string{run + " [total_aot_native]"}},
+			}},
+		{"IR compile", "Compile time through the IR pipeline. Lower is better.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"bytecode", "#245c73", []string{ir + " [bytecode]"}},
+				{"gogen_ir", "#167a48", []string{ir + " [gogen_ir]"}},
+			}},
+		// The deterministic metrics. These do not depend on the host, so a tier
+		// split here would mean something quite different from one on a timing
+		// chart - which is exactly why they are worth having per tier.
+		{"Suite allocations", "Allocations per op. Machine-independent, so tiers should agree.", "allocs/op",
+			func(e BenchmarkEntry) float64 { return float64(e.AllocsPerOp) },
+			func(x BenchmarkSample) float64 { return float64(x.AllocsPerOp) }, false,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+		{"Suite memory", "Heap bytes per op. Machine-independent, so tiers should agree.", "B/op",
+			func(e BenchmarkEntry) float64 { return float64(e.BytesPerOp) },
+			func(x BenchmarkSample) float64 { return float64(x.BytesPerOp) }, false,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
 	}
 
 	cpus := map[string]struct{}{}
@@ -1699,28 +1738,56 @@ func buildViewerData(timeline []Snapshot) viewerData {
 		out.Charts = append(out.Charts, gm)
 	}
 	for _, spec := range specs {
-		chart := viewerChart{Title: spec.title, Subtitle: spec.subtitle}
+		chart := viewerChart{Title: spec.title, Subtitle: spec.subtitle, Unit: spec.unit, Relative: spec.relative}
 		for _, ss := range spec.series {
-			s := viewerSeries{Label: ss.label, Color: ss.color}
+			// Non-nil: an empty slice marshals as [] where a nil marshals as
+			// null, and the page reads .length on it.
+			s := viewerSeries{Label: ss.label, Color: ss.color, Points: []viewerPoint{}}
 			for _, snap := range timeline {
 				entry, ok := lookupEntry(snap.Baseline.Benchmarks, ss.names)
-				if !ok || entry.RatioToAnchor <= 0 {
+				if !ok {
 					continue
 				}
-				lo, hi, hasBand := sampleSpread(entry.Samples, func(x BenchmarkSample) float64 { return x.RatioToAnchor })
+				value := spec.metric(entry)
+				if value <= 0 {
+					continue
+				}
+				lo, hi, hasBand := sampleSpread(entry.Samples, spec.sample)
 				if !hasBand {
-					lo, hi = entry.RatioToAnchor, entry.RatioToAnchor
+					lo, hi = value, value
 				}
 				cpu := shortCPUModel(snap.Baseline.Machine.CPUModel)
 				cpus[cpu] = struct{}{}
 				s.Points = append(s.Points, viewerPoint{
-					Date: formatDate(snap.Baseline.CapturedAt), CPU: cpu,
-					Value: entry.RatioToAnchor, Low: lo, High: hi,
+					// RFC3339 verbatim: Date.parse only guarantees that format.
+					// formatDate's "2006-01-02 15:04 UTC" is non-standard and
+					// JavaScriptCore rejects it outright, so a display string
+					// here renders an empty page in Safari.
+					Date: snap.Baseline.CapturedAt, CPU: cpu,
+					Value: value, Low: lo, High: hi,
 				})
 			}
-			chart.Series = append(chart.Series, s)
+			// A series with no points draws nothing and only clutters the
+			// legend; a chart with no series at all is worse, because it
+			// renders an empty card for data this timeline does not have.
+			if len(s.Points) > 0 {
+				chart.Series = append(chart.Series, s)
+			}
 		}
-		out.Charts = append(out.Charts, chart)
+		if len(chart.Series) > 0 {
+			out.Charts = append(out.Charts, chart)
+		}
+	}
+	// Derive the tier list from what is actually plotted, geomean included.
+	// Deriving it from the named specs alone hides a tier that appears only in
+	// the aggregate: it cannot be selected or excluded, and "All (n)" then
+	// plots more tiers than it counts.
+	for _, ch := range out.Charts {
+		for _, ser := range ch.Series {
+			for _, pt := range ser.Points {
+				cpus[pt.CPU] = struct{}{}
+			}
+		}
 	}
 	for c := range cpus {
 		out.CPUs = append(out.CPUs, c)
@@ -1765,7 +1832,7 @@ func viewerGeomean(timeline []Snapshot) (viewerChart, bool) {
 	if len(basket) < 2 {
 		return viewerChart{}, false
 	}
-	s := viewerSeries{Label: "geomean", Color: "#8a5a9e"}
+	s := viewerSeries{Label: "geomean", Color: "#8a5a9e", Points: []viewerPoint{}}
 	for _, snap := range timeline {
 		sum := 0.0
 		for name := range basket {
@@ -1773,7 +1840,8 @@ func viewerGeomean(timeline []Snapshot) (viewerChart, bool) {
 		}
 		g := math.Exp(sum / float64(len(basket)))
 		s.Points = append(s.Points, viewerPoint{
-			Date:  formatDate(snap.Baseline.CapturedAt),
+			// RFC3339 verbatim, as above: Date.parse only guarantees that.
+			Date:  snap.Baseline.CapturedAt,
 			CPU:   shortCPUModel(snap.Baseline.Machine.CPUModel),
 			Value: g, Low: g, High: g,
 		})
@@ -1781,6 +1849,8 @@ func viewerGeomean(timeline []Snapshot) (viewerChart, bool) {
 	return viewerChart{
 		Title:    fmt.Sprintf("Overall (geomean of %d benchmarks)", len(basket)),
 		Subtitle: "One line for the whole suite, over benchmarks present in every snapshot.",
+		Unit:     "ratio",
+		Relative: true,
 		Series:   []viewerSeries{s},
 	}, true
 }
@@ -2313,19 +2383,25 @@ const pageStyle = `
 // viewerStyle is the only CSS the explorer adds on top of pageStyle: controls
 // the summary page has no equivalent for. Everything else — type, colour,
 // cards, chart internals — comes from the shared stylesheet.
-// viewerLinkFrom builds the summary page's href to the explorer. Both paths are
-// local filesystem paths at build time; the pages are served from the same tree,
-// so a path relative to the summary page is what the link needs.
-func viewerLinkFrom(pagePath, viewerPath string) string {
-	rel, err := filepath.Rel(filepath.Dir(pagePath), filepath.Dir(viewerPath))
+// relLink builds the href from one emitted page to another. Both are local
+// paths at build time and the pages are served from the same tree, so a path
+// relative to the linking page is what the browser needs.
+//
+// It links to the file, not the directory. Assuming an index.html and emitting
+// a bare "dir/" breaks every layout except the nested one the Makefile happens
+// to use — `-out summary.html -viewer-out timeline.html` would link to "./".
+// A server that serves index.html for a directory still resolves the explicit
+// filename, so naming it costs nothing and is right in both layouts.
+func relLink(fromPage, toPage string) string {
+	rel, err := filepath.Rel(filepath.Dir(fromPage), toPage)
 	if err != nil {
 		return ""
 	}
-	return filepath.ToSlash(rel) + "/"
+	return filepath.ToSlash(rel)
 }
 
 // writeViewer renders the Timeline explorer page and its chart payload.
-func writeViewer(outPath, dataPath, dataURL string, timeline []Snapshot, logo string) error {
+func writeViewer(outPath, dataPath, dataURL, summaryPath string, timeline []Snapshot, logo string) error {
 	if dataPath == "" {
 		dataPath = filepath.Join(filepath.Dir(outPath), "timeline-charts.json")
 	}
@@ -2349,8 +2425,9 @@ func writeViewer(outPath, dataPath, dataURL string, timeline []Snapshot, logo st
 	if err := tpl.Execute(&buf, struct {
 		LogoDataURI   template.URL
 		ViewerDataURL string
+		SummaryURL    string
 		SnapshotCount int
-	}{template.URL(logo), dataURL, len(timeline)}); err != nil {
+	}{template.URL(logo), dataURL, relLink(outPath, summaryPath), len(timeline)}); err != nil {
 		return fmt.Errorf("render viewer: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
@@ -2402,15 +2479,14 @@ const viewerTemplate = `<!doctype html>
           <span>let-go perf</span>
         </div>
         <nav class="links" aria-label="Links">
-          <a href="../">Summary</a>
-          <a href="../../">WASM repl</a>
+          <a href="{{.SummaryURL}}">Summary</a>
           <a href="https://github.com/nooga/let-go">GitHub</a>
           <a href="https://github.com/nooga/let-go/blob/main/docs/perf/ratchet.md">Ratchet docs</a>
         </nav>
       </div>
       <h1>Timeline explorer</h1>
-      <p class="lede">Every timeline chart, redrawn in the browser so it can be cut to one CPU tier.
-        {{.SnapshotCount}} snapshots. <code>ratio_to_anchor</code> only normalizes within a CPU model,
+      <p class="lede">The summary page's timeline charts, redrawn in the browser so they can be cut to one CPU tier,
+        plus the compile+run totals it does not plot. {{.SnapshotCount}} snapshots. <code>ratio_to_anchor</code> only normalizes within a CPU model,
         so a chart pooling tiers shows runner assignment as much as code: select tiers below to read a real trend.</p>
       <div class="controls">
         <span>CPU <span id="cpu" class="chips"></span></span>
@@ -2430,7 +2506,7 @@ const viewerTemplate = `<!doctype html>
 
   <footer class="wrap">
     <p>Rendered by <code>cmd/perf-page</code> from the <code>perf-data</code> timeline.
-      The <a href="../">summary page</a> carries the ratchet baseline and release comparison.</p>
+      The <a href="{{.SummaryURL}}">summary page</a> carries the ratchet baseline and release comparison.</p>
   </footer>
 
 <script>
@@ -2502,11 +2578,18 @@ function renderCPU(){
 // % change against the first point in the visible window, matching the
 // relative charts on the summary page. Recomputed per filter: the window start
 // moves when the tier selection moves, and that is the intent.
-function relative(pts){
+// Relative charts plot % against the window start, matching the summary page.
+// Absolute charts (allocs, bytes) plot the raw number: a percentage of an
+// allocation count hides the very thing you are looking at.
+function project(pts,rel){
   if(!pts.length) return [];
+  if(!rel) return pts.map(p=>({...p, r:p.v, rlo:p.lo, rhi:p.hi}));
   const base=pts[0].v;
+  if(!base) return pts.map(p=>({...p, r:0, rlo:0, rhi:0}));
   return pts.map(p=>({...p, r:(p.v-base)/base*100, rlo:(p.lo-base)/base*100, rhi:(p.hi-base)/base*100}));
 }
+const fmtVal=(v,rel)=> rel ? v.toFixed(1)+"%"
+  : Math.abs(v)>=1000 ? Math.round(v).toLocaleString() : (+v.toFixed(2)).toString();
 
 function draw(){
   const host=document.getElementById("charts");
@@ -2515,9 +2598,11 @@ function draw(){
   DATA.charts.forEach(ch=>{
     const series=ch.series.map(s=>{
       const off=hidden.has(ch.title+"::"+s.label);
-      const pts=allSelected()?s.pts:s.pts.filter(p=>sel.has(p.cpu));
-      if(!off){ total+=s.pts.length; shown+=pts.length; }
-      return {...s, off, pts:relative(pts)};
+      // A payload written by an older build can carry pts:null.
+      const src=s.pts||[];
+      const pts=allSelected()?src:src.filter(p=>sel.has(p.cpu));
+      if(!off){ total+=src.length; shown+=pts.length; }
+      return {...s, off, pts:project(pts,ch.relative)};
     });
     host.append(chartEl(ch,series));
   });
@@ -2529,6 +2614,7 @@ function draw(){
                   : shown.toLocaleString()+" of "+total.toLocaleString()+" points — "+label;
 }
 
+const day=t=>String(t).slice(0,10);
 function chartEl(ch,series){
   const art=document.createElement("article"); art.className="chart";
   const head='<div class="chart-head"><h3>'+esc(ch.title)+'</h3></div><p>'+esc(ch.subtitle)+
@@ -2545,7 +2631,7 @@ function chartEl(ch,series){
     art.innerHTML=head+'<div class="empty">'+
       (series.some(s=>s.off)?"All series hidden — re-enable one below."
                            :"No points for the selected tiers.")+'</div>'+
-      legendEl(ch.title,series,"click a series to hide it");
+      legendEl(ch.title,series,"click a series to hide it",ch.relative);
     return art;
   }
   const lo=Math.min(...extent.map(p=>p.rlo)), hi=Math.max(...extent.map(p=>p.rhi));
@@ -2556,11 +2642,14 @@ function chartEl(ch,series){
   const y=v=>B-((v-yMin)/((yMax-yMin)||1))*(B-T);
 
   let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(ch.title)+' trend chart">';
-  svg+='<line class="ref-line" x1="'+L+'" y1="'+y(0).toFixed(2)+'" x2="'+R+'" y2="'+y(0).toFixed(2)+'"></line>';
+  // The 0% guide only means something on a relative chart.
+  if(ch.relative && yMin<=0 && yMax>=0){
+    svg+='<line class="ref-line" x1="'+L+'" y1="'+y(0).toFixed(2)+'" x2="'+R+'" y2="'+y(0).toFixed(2)+'"></line>';
+  }
   svg+='<line class="axis" x1="'+L+'" y1="'+T+'" x2="'+L+'" y2="'+B+'"></line>';
   svg+='<line class="axis" x1="'+L+'" y1="'+B+'" x2="'+R+'" y2="'+B+'"></line>';
-  svg+='<text class="axis-label" x="42" y="26" text-anchor="end">'+yMax.toFixed(1)+'%</text>';
-  svg+='<text class="axis-label" x="42" y="173" text-anchor="end">'+yMin.toFixed(1)+'%</text>';
+  svg+='<text class="axis-label" x="42" y="26" text-anchor="end">'+fmtVal(yMax,ch.relative)+'</text>';
+  svg+='<text class="axis-label" x="42" y="173" text-anchor="end">'+fmtVal(yMin,ch.relative)+'</text>';
   for(let i=0;i<5;i++){
     const t=tMin+(tMax-tMin)*i/4, px=x(new Date(t));
     svg+='<line class="tick" x1="'+px.toFixed(2)+'" y1="'+B+'" x2="'+px.toFixed(2)+'" y2="'+(B+3)+'"></line>';
@@ -2576,26 +2665,24 @@ function chartEl(ch,series){
          s.pts.map(p=>x(p.d).toFixed(2)+","+y(p.r).toFixed(2)).join("L")+'"></path>';
     s.pts.forEach(p=>{
       svg+='<circle class="point" fill="'+s.color+'" cx="'+x(p.d).toFixed(2)+'" cy="'+y(p.r).toFixed(2)+
-           '" r="2.4"><title>'+esc(p.d+" · "+p.cpu+"\n"+s.label+": "+p.r.toFixed(1)+"%")+'</title></circle>';
+           '" r="2.4"><title>'+esc(day(p.d)+" · "+p.cpu+"\n"+s.label+": "+fmtVal(p.r,ch.relative))+'</title></circle>';
     });
   });
   svg+='</svg>';
-  // Dates only; the point tooltips carry the full stamp.
-  const day=t=>String(t).slice(0,10);
   const span=visPts.length?(day(visPts[0].d)+" to "+day(visPts[visPts.length-1].d)):"";
   art.innerHTML=head+svg+legendEl(ch.title,series,
-    "% vs window start · "+span+" · click a series to hide it");
+    (ch.relative?"% vs window start":ch.unit)+" · "+span+" · click a series to hide it", ch.relative);
   return art;
 }
 
 // The legend doubles as the series toggle: it is already the key, and a
 // separate row of checkboxes would say the same thing twice.
-function legendEl(title,series,meta){
+function legendEl(title,series,meta,rel){
   return '<div class="chart-foot"><p class="chart-meta">'+esc(meta||"")+'</p><div class="legend">'+
     series.map(s=>'<button type="button" data-key="'+esc(title+"::"+s.label)+
       '" aria-pressed="'+(!s.off)+'"><i class="swatch" style="--series: '+s.color+'"></i>'+
       esc(s.label)+" ("+s.pts.length+")</button>").join("")+
-    '<span><i class="swatch dash"></i>window start = 0%</span></div></div>';
+    (rel?'<span><i class="swatch dash"></i>window start = 0%</span>':"")+'</div></div>';
 }
 
 document.addEventListener("click",e=>{
@@ -2631,8 +2718,8 @@ const pageTemplate = `<!doctype html>
         </div>
         <nav class="links" aria-label="Links">
           <a href="../">WASM repl</a>
-          {{if .ViewerURL}}<a href="{{.ViewerURL}}">Timeline explorer</a>{{end}}
-          <a href="https://github.com/nooga/let-go">GitHub</a>
+          {{if .ViewerURL}}<a href="{{.ViewerURL}}">Timeline explorer</a>
+          {{end}}<a href="https://github.com/nooga/let-go">GitHub</a>
           <a href="https://github.com/nooga/let-go/blob/main/docs/perf/ratchet.md">Ratchet docs</a>
         </nav>
       </div>
