@@ -1958,10 +1958,17 @@ const pageTemplate = `<!doctype html>
       th, td { padding: 9px; }
     }
     .explorer-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
-    .cpu-filter { align-items: center; }
-    .cpu-filter label { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; }
-    .cpu-filter select { font: inherit; font-size: 0.8rem; padding: 0.2rem 0.4rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); }
-    .cpu-filter .scope { font-size: 0.75rem; opacity: 0.7; }
+    .cpu-filter { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
+    .cpu-filter .cpu-label { font-size: 0.8rem; color: var(--muted); }
+    .cpu-filter .chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+    .cpu-filter .chips button {
+      font: inherit; font-size: 0.78rem; color: inherit; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.6rem; cursor: pointer;
+    }
+    .cpu-filter .chips button:hover { border-color: var(--ink); }
+    .cpu-filter .chips button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .cpu-filter .chips button.all { font-weight: 600; }
+    .cpu-filter .scope { font-size: 0.75rem; color: var(--muted); }
     .explorer-controls label { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
     .explorer-controls select { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); max-width: 420px; }
     .explorer-controls input[type="search"] { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); min-width: 180px; }
@@ -2018,12 +2025,6 @@ const pageTemplate = `<!doctype html>
         <span class="chip">{{.Current.Machine.CPUModel}}</span>
         <span class="chip">{{.Current.Machine.GoVersion}}</span>
       </div>
-      <!-- Mounted by the first timeline view that loads; stays hidden when the
-           timeline has fewer than two CPU tiers, since a one-option filter is
-           just clutter. The chips above describe the committed baseline, which
-           is a single profile chosen at build time and is NOT what this
-           filters -- see the note in the Timeline section. -->
-      <div class="meta cpu-filter" id="perf-cpu-filter" hidden></div>
     </div>
   </header>
 
@@ -2054,7 +2055,7 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Timeline</h2>
-        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts are drawn server-side from the whole timeline, so they pool every CPU tier and the page-wide filter cannot reach them; <code>-cpu</code> cuts them at build time. The baseline sections further down are a different case again: they render one machine profile picked at build time, which neither the filter nor <code>-cpu</code> changes.</p>
+        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts are drawn server-side from the whole timeline, so they pool every CPU tier and the CPU chips below cannot reach them; <code>-cpu</code> cuts them at build time. The baseline sections further down are a different case again: they render one machine profile picked at build time, which neither the filter nor <code>-cpu</code> changes.</p>
       </div>
       {{if .Charts}}
       <div class="chart-grid">
@@ -2106,10 +2107,18 @@ const pageTemplate = `<!doctype html>
       {{end}}
     </section>
 
+    <!-- The filter sits here, not in the header, because here is where its
+         effect starts. Everything above is rendered at build time from one
+         committed profile and cannot react to it; a control that appears to do
+         nothing where it sits reads as broken. Mounted by the first timeline
+         view that loads, and hidden when the timeline carries fewer than two
+         tiers. -->
+    <div class="cpu-filter" id="perf-cpu-filter" hidden></div>
+
     <section>
       <div class="section-head">
         <h2>Explore metrics over time</h2>
-        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them — use the CPU filter at the top of the page to cut this chart and the sparklines below to one tier.</p>
+        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them — use the CPU chips just above to cut this chart and the sparklines below to one tier.</p>
       </div>
       <div id="perf-explorer" style="width:100%;min-height:420px"></div>
     </section>
@@ -2275,73 +2284,87 @@ const pageTemplate = `<!doctype html>
         cpu: (function () {
           const subs = [];
           let cpus = [];
-          let mounted = false;
-          // A shared selection belongs in the URL: it makes "the regression is
-          // only on EPYC 9V74" a link rather than a description.
+          // Selected tiers. Every tier selected is the default and writes no
+          // ?cpu=, so a tier that appears in the data later shows up rather
+          // than being excluded by an old link.
+          const sel = new Set();
+          let seeded = false;
           const params = new URLSearchParams(location.search);
-          let current = params.get("cpu") || "";
+          const wanted = (params.get("cpu") || "").split(",").map(function (x) { return x.trim(); }).filter(Boolean);
 
+          const allSelected = function () { return sel.size === cpus.length; };
           function notify() { subs.forEach(function (fn) { fn(); }); }
 
           function sync() {
             const u = new URL(location.href);
-            if (current) { u.searchParams.set("cpu", current); } else { u.searchParams.delete("cpu"); }
+            if (allSelected()) { u.searchParams.delete("cpu"); }
+            else { u.searchParams.set("cpu", Array.from(sel).join(",")); }
             history.replaceState(null, "", u);
           }
 
           function mount() {
             const host = document.getElementById("perf-cpu-filter");
             if (!host) return;
-            // A ?cpu= naming a tier this build does not carry falls back to
-            // All rather than filtering every row out.
-            //
-            // This has to run BEFORE the single-tier return below. A page
-            // built with -cpu carries one tier and renders no selector, so a
-            // stale query there would empty both views with no control left
-            // to recover with.
-            if (current && cpus.indexOf(current) < 0) { current = ""; sync(); }
-            // One tier means nothing to choose between.
+            // One tier is nothing to choose between.
             if (cpus.length < 2) { host.hidden = true; return; }
             host.hidden = false;
             host.innerHTML = "";
-            const lab = document.createElement("label");
-            lab.append("CPU ");
-            const sel = document.createElement("select");
-            const all = document.createElement("option");
-            all.value = ""; all.textContent = "All CPUs (" + cpus.length + ")";
-            sel.append(all);
+            const label = document.createElement("span");
+            label.className = "cpu-label";
+            label.textContent = "CPU";
+            host.append(label);
+            const chips = document.createElement("span");
+            chips.className = "chips";
+            const all = document.createElement("button");
+            all.type = "button";
+            all.className = "all";
+            all.textContent = "All (" + cpus.length + ")";
+            all.setAttribute("aria-pressed", String(allSelected()));
+            all.onclick = function () { cpus.forEach(function (c) { sel.add(c); }); mount(); sync(); notify(); };
+            chips.append(all);
             cpus.forEach(function (c) {
-              const o = document.createElement("option");
-              o.value = c; o.textContent = c;
-              sel.append(o);
+              const b = document.createElement("button");
+              b.type = "button";
+              b.textContent = c;
+              b.setAttribute("aria-pressed", String(sel.has(c)));
+              b.title = "Click to toggle this tier. Alt-click to show only this tier.";
+              b.onclick = function (e) {
+                if (e.altKey) { sel.clear(); sel.add(c); }
+                else if (sel.has(c)) { sel.delete(c); }
+                else { sel.add(c); }
+                mount(); sync(); notify();
+              };
+              chips.append(b);
             });
-            sel.value = current;
-            sel.addEventListener("change", function () {
-              current = this.value; sync(); notify();
-            });
-            lab.append(sel);
-            host.append(lab);
+            host.append(chips);
             const scope = document.createElement("span");
             scope.className = "scope";
-            scope.textContent = "applies to Explore + Trend sparklines";
+            scope.textContent = "applies to this chart and the sparklines below";
             host.append(scope);
           }
 
           return {
-            // Called by each view once it knows which CPUs its rows carry.
             register: function (list) {
               list.forEach(function (c) { if (c && cpus.indexOf(c) < 0) cpus.push(c); });
               cpus.sort();
-              if (!mounted) { mounted = true; }
+              // Seed once, from ?cpu= when it names tiers this build carries.
+              // Tiers it does not carry are dropped; if that leaves nothing,
+              // fall back to every tier rather than an empty page.
+              if (!seeded) {
+                seeded = true;
+                const known = wanted.filter(function (c) { return cpus.indexOf(c) >= 0; });
+                (known.length ? known : cpus).forEach(function (c) { sel.add(c); });
+                if (known.length !== wanted.length) { sync(); }
+              } else {
+                cpus.forEach(function (c) { if (!wanted.length) { sel.add(c); } });
+              }
               mount();
             },
             onChange: function (fn) { subs.push(fn); },
-            value: function () { return current; },
-            // Rows carry the full CPU model; the control shows the short tag,
-            // so compare on the short form both sides.
+            // Rows carry the full CPU model; chips show the short tag.
             apply: function (rows, shortOf) {
-              if (!current) return rows;
-              return rows.filter(function (r) { return shortOf(r.cpu) === current; });
+              if (allSelected()) { return rows; }
+              return rows.filter(function (r) { return sel.has(shortOf(r.cpu)); });
             }
           };
         })(),
