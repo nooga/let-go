@@ -113,13 +113,26 @@ day on `main` into a day-long backlog.
 
 ## 4. Does per-commit sampling buy resolution?
 
-Section 1 leaves the cadence question open on cost alone. This answers it on
-value, using the 474 snapshots on the `perf-data` branch (2026-06-04 to
-2026-09-13).
+Section 1 leaves the cadence question open on cost alone. This section answers
+it on value.
 
-The test: track how the median per-benchmark delta grows with the separation
-between two snapshots. Data dominated by run-to-run noise stays flat as
-separation grows. Data carrying real signal rises, because more code changed.
+Most of the surrounding ground is already measured and filed. #651 measured
+per-runner noise from within-capture rep spread (amd64 median 1.006x; arm64
+macos-14 median 1.048x, with 27.2% of benchmarks moving over 10% between reps
+of identical code). #445 measured the perf-pr A/B floor: about one run in four
+blows a cluster of memory-bound micro-benchmarks to 25-40% on a no-op PR. #705
+notes the 5% ratchet budget has never been calibrated against either. #597
+filed the cross-runner comparability problem, and the same #651 comment
+documented that CI does not hand out a single amd64 key. As a refresh of that
+count, the 474 snapshots on `perf-data` (2026-06-04 to 2026-09-13) split across
+seven profiles: amd64 EPYC 7763 (204), arm64 Apple M1 (128), amd64 EPYC 9V74
+(100), Xeon 8370C (21), Xeon 8573C (11), Xeon 6973P-C (8), EPYC 9V45 (2).
+
+What none of those ask is what the noise implies for **how often to sample**,
+which is the question that decides the cost. So: track how the median
+per-benchmark delta grows with the separation between two snapshots on one
+profile. Data dominated by run-to-run noise stays flat as separation grows.
+Data carrying real signal rises, because more code changed between the ends.
 
 | Profile | lag 1 | lag 2 | lag 5 | lag 10 | lag 20 |
 |---|---:|---:|---:|---:|---:|
@@ -128,33 +141,27 @@ separation grows. Data carrying real signal rises, because more code changed.
 | arm64 Apple M1 | 11.01% | 11.28% | 11.44% | 11.97% | 12.03% |
 
 **The arm64 leg is noise-dominated.** Comparing commits 20 apart tells you 9%
-more than comparing adjacent ones, against 103% on amd64. Its resolution is
-set by run-to-run variance rather than by the code under test, so per-commit
-sampling adds little a weekly cadence would not also give. That leg is the
-most expensive thing the repo runs: 133 minutes per leg, 37% of all runner
-time in the section-1 window, and the sole cause of the queue backlog in
-section 3.
+more than comparing adjacent ones, against 103% on amd64. Its resolution is set
+by run-to-run variance rather than by the code under test, so per-commit
+sampling adds little that a weekly cadence would not also give. That is the
+cadence consequence of the 27.2% #651 already measured, and it lands on the
+most expensive thing the repo runs: 133 minutes per leg, 37% of all runner time
+in the section-1 window, and the sole cause of the queue backlog in section 3.
 
 The amd64 lanes carry real signal, but at lag 1 the delta sits on the noise
-floor; separation of 10 to 20 commits is where a change clearly clears it.
-That is an argument for sampling coarsely and backfilling on detection, which
-is the workflow header's own stated design.
+floor; separation of 10 to 20 commits is where a change clearly clears it. That
+argues for sampling coarsely and backfilling on detection, which is the
+workflow header's own stated design.
 
-Two structural findings came out of the same data.
-
-**The amd64 lane is six CPU models, not one.** Snapshots since 2026-06-04
-split as EPYC 7763 (204), EPYC 9V74 (100), Xeon 8370C (21), Xeon 8573C (11),
-Xeon 6973P-C (8), EPYC 9V45 (2). The ratchet partitions by machine profile, so
-these are six series, not one. Pushing per commit therefore does not produce a
-per-commit series in any comparable lane: roughly 60% of snapshots land in the
-top profile and the rest scatter into series too sparse to read.
-
-**No snapshot has an A/A control.** Across all seven profiles, every snapshot
-carries a distinct `captured_at_sha`: 474 snapshots, 474 distinct commits, zero
-repeats. The timeline therefore cannot separate a regression from noise using
-its own data, since it never measures one commit twice on one profile.
-`perf-pr-repeat.yml` exists for exactly that measurement and skipped every job
-in the section-1 window.
+One gap worth naming, since it bounds everything above. #651's method uses the
+reps inside a single capture, which share a process, a runner and a warm cache.
+A between-run repeat — the same commit captured twice on the same profile in
+two separate jobs — would also carry VM-to-VM and cache-state variance, and the
+timeline has none: 474 snapshots carry 474 distinct `captured_at_sha` values,
+zero repeated, on every one of the seven profiles. `perf-pr-repeat.yml` is the
+workflow that would produce that comparison, and it skipped every job in the
+section-1 window. So the true between-run floor is bounded below by #651's
+within-capture figure and above by #445's 25-40%, and is not otherwise pinned.
 
 ## 5. What runs on every PR push
 
@@ -203,7 +210,8 @@ so a docs-only PR runs the full matrix. Measured, that was 21 of 465 runs and
    resolution cost.
 3. The "Expensive lowering e2e" step: 47 runner-hours a month, and the open
    question is whether it needs to run on every push.
-4. `gogen-diff` path-gating: 25 runner-hours a month, gate preserved.
+4. `gogen-diff` path-gating: 25 runner-hours a month, gate preserved. Adjacent
+   to #581 item 2, which proposed merging the two generation jobs.
 5. A docs path filter on `go.yml`: 7 runner-hours a month.
 
 ## What this leaves open
@@ -218,10 +226,24 @@ Trade-offs for the team, not conclusions:
   amd64 snapshots are being lost at full price.
 - **Drift watch.** Both legs reached their ceilings by growing into them. Some
   check on leg runtime would catch the next one before it starts dropping data.
-- **What the legs measure.** Neither the per-commit cadence nor the workload
-  size has been re-justified against what the timeline is actually used for.
-  That analysis is not in this doc.
+- **The between-run noise floor.** Bounded but not pinned (section 4). A
+  handful of deliberate same-commit re-captures per profile would fix that,
+  and would also give #705 the calibration it asks for.
+- **Workload size.** Cadence is one lever and `-count`/benchtime is the other;
+  this doc measures only the first. #573 is the history on the second.
 
-Related: #581 (CI audit, item 6 is the ancestor of this), #573 and #583 (the
-macOS timeout fix), #693 (label-opt-in benchmark lane), #752 (pages.yml
-redeploys on any Timeline conclusion).
+## Related
+
+This doc measures cost and cadence. The measurement-quality cluster it leans on:
+
+- #581: CI audit; item 6 is the direct ancestor of sections 1 to 3.
+- #573, #583: the macOS timeout history and fix.
+- #651: per-runner noise from within-capture reps, and the multi-key finding
+  that section 4 refreshes. Still open on the re-seed workflow.
+- #445: the perf-pr A/B single-shot noise floor (25-40% on a no-op).
+- #705: the 5% ratchet budget has never been calibrated against that floor.
+- #597: cross-runner comparability of the release reference.
+- #663: the ratchet is not consulted; a regression went unnoticed.
+- #795: bench-baton, a machine-quiescence lease for benchmarks.
+- #693: label-opt-in `benchmark/` lane.
+- #752: pages.yml redeploys on any Timeline conclusion.
