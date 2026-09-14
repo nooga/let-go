@@ -158,6 +158,33 @@
           (is (not (str/includes? new-line " cc ")))))
       (finally (os/delete-tree dir)))))
 
+(deftest touched-text-distinguishes-method-dispatch-and-explains-parse-fallback
+  (let [old "(ns demo)\n(defmethod paint :red [x] (inc x))\n(defmethod paint :blue [x] (dec x))\n"
+        new "(ns demo)\n(defmethod paint :red [x] (+ x 2))\n(defmethod paint :blue [x] (- x 2))\n"
+        methods (touched/build [{:status :modified :old-path "methods.lg"
+                                 :new-path "methods.lg" :old-text old :new-text new
+                                 :old-spans [{:start 2 :count 2}]
+                                 :new-spans [{:start 2 :count 2}]}])
+        fallback (first (touched/build [{:status :modified :old-path "broken.lg"
+                                         :new-path "broken.lg"
+                                         :old-text "(ns demo)\n(defn f [] 1)\n"
+                                         :new-text "(ns demo)\n(defn f [] 1\n"
+                                         :old-spans [{:start 2 :count 1}]
+                                         :new-spans [{:start 2 :count 1}]}]))
+        out (report/delta-text
+              (assoc (q/compare-results base head-worse "BASE" "HEAD")
+                     :touched (conj methods fallback)))
+        method-lines (filter #(str/includes? % "demo/paint") (str/split out #"\n"))
+        fallback-line (first (filter #(str/includes? % "broken.lg") (str/split out #"\n")))]
+    (is (= #{":red" ":blue"} (set (map :dispatch methods))))
+    (is (= 2 (count method-lines)))
+    (is (some #(str/includes? % "dispatch :red") method-lines))
+    (is (some #(str/includes? % "dispatch :blue") method-lines))
+    (is (= :file-fallback (:entry-type fallback)))
+    (is (= :invalid-source (:reason fallback)))
+    (is (str/includes? fallback-line "could not parse source"))
+    (is (str/includes? fallback-line (:message fallback)))))
+
 (deftest explicit-and-working-tree-deltas-share-corpus-and-diff-endpoints
   (let [sha (str/trim (:out (os/sh "git" "rev-parse" "HEAD")))
         opts {:base "HEAD" :top 5 :paths ["fixtures/quality"]

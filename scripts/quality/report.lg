@@ -270,6 +270,7 @@
          (when (:status entry) (str " " (name (:status entry))))
          (when (= kind :form)
            (str " " (or (:identity entry) (:name entry) "unnamed")
+                (when (:dispatch entry) (str " dispatch " (:dispatch entry)))
                 " " (name (:pairing entry))))
          (when (or (= kind :form) (:old-span entry) (:new-span entry))
            (str "  " (touched-side "old" (:old-span entry) (:old-metrics entry))
@@ -277,7 +278,12 @@
          (when-let [delta (:delta entry)]
            (str "  cc " (signed-int (:cc delta))
                 "  sloc " (signed-int (:sloc delta))))
-         (when (:reason entry) (str "  " (name (:reason entry)))))))
+         (when (:reason entry)
+           (str "  " (if (= :invalid-source (:reason entry))
+                        "could not parse source"
+                        (name (:reason entry)))))
+         (when (and (= :file-fallback kind) (seq (:message entry)))
+           (str ": " (str/trim (str/replace (:message entry) #"\s+" " ")))))))
 
 (defn delta-text
   "The PR surface: every term and the composite at base, at head, and the
