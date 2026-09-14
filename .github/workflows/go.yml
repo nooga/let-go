@@ -228,14 +228,28 @@ jobs:
         run: |
           wget -q https://github.com/tinygo-org/tinygo/releases/download/v0.41.1/tinygo_0.41.1_amd64.deb
           sudo dpkg -i tinygo_0.41.1_amd64.deb
-      # Pinned like TinyGo above. Unpinned, install.sh resolves "latest" by
-      # sed-ing tag_name out of an unauthenticated GitHub API response; when
-      # that call is rate-limited the sed yields a literal `{`, the download
-      # 404s, and the script still exits 0 — so the job died two steps later
-      # at `wasmtime run` with `command not found` (#682).
+      # Pinned like TinyGo above, and fetched directly rather than through
+      # `curl https://wasmtime.dev/install.sh | bash`. #682 pinned the version
+      # because unpinned "latest" resolution could 404 while the script still
+      # exited 0. The exit-0 half of that was never fixed and is not about
+      # version resolution: install.sh's install_version() ends with a bare
+      # `if [ "$?" == 0 ]`, and a false if with no else returns 0, so the
+      # script reports success after ANY failed download. `pipefail` does not
+      # help — the pipeline's last element is that bash, and it exits 0.
+      #
+      # Seen on 2026-09-14 (run 34859297430): a transient 504 from the release
+      # CDN left the step green with nothing installed. #682's guard below is
+      # what caught it, at the cost of a red PR. Fetching the pinned asset
+      # ourselves makes curl's own exit status the step's, and --retry rides
+      # out the transient that caused this.
       - name: Install wasmtime
         run: |
-          curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version v47.0.3
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.3/wasmtime-v47.0.3-x86_64-linux.tar.xz \
+            -o "$RUNNER_TEMP/wasmtime.tar.xz"
+          tar -xJf "$RUNNER_TEMP/wasmtime.tar.xz" -C "$RUNNER_TEMP"
+          mkdir -p "$HOME/.wasmtime/bin"
+          install -m755 "$RUNNER_TEMP/wasmtime-v47.0.3-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/wasmtime"
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
       - name: Verify wasmtime is on PATH
         run: wasmtime --version
