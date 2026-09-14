@@ -682,6 +682,16 @@ func TestLintEdnAndGate(t *testing.T) {
 	}
 }
 
+func lintFixtureEnv() []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			env = append(env, entry)
+		}
+	}
+	return env
+}
+
 // R6 — comment churn for a revision range: comment-lines-added / code-lines-
 // added within the range, compared against the corpus's own current
 // comment/code ratio (the "baseline" — a snapshot proxy for typical density,
@@ -691,7 +701,7 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(lintFixtureEnv(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.com",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.com")
 	out, err := cmd.CombinedOutput()
@@ -702,6 +712,11 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 }
 
 func TestLintR6CommentChurn(t *testing.T) {
+	hookRepo := t.TempDir()
+	gitRun(t, hookRepo, "init", "-q")
+	t.Setenv("GIT_DIR", filepath.Join(hookRepo, ".git"))
+	t.Setenv("GIT_WORK_TREE", hookRepo)
+
 	dir := t.TempDir()
 	gitRun(t, dir, "init", "-q")
 	gitRun(t, dir, "config", "commit.gpgsign", "false")
@@ -729,6 +744,7 @@ func TestLintR6CommentChurn(t *testing.T) {
 	cmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
 		"--churn", c1sha+".."+c2sha, ".")
 	cmd.Dir = dir
+	cmd.Env = lintFixtureEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("lint.lg --churn: %v\n%s", err, out)
@@ -764,6 +780,7 @@ func TestLintR6CommentChurn(t *testing.T) {
 	c3sha := gitRun(t, dir, "rev-parse", "HEAD")
 	emptyCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), "--churn", c2sha+".."+c3sha, ".")
 	emptyCmd.Dir = dir
+	emptyCmd.Env = lintFixtureEnv()
 	emptyOut, err := emptyCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("comment-only range: %v\n%s", err, emptyOut)
@@ -777,6 +794,7 @@ func TestLintR6CommentChurn(t *testing.T) {
 	// Without --churn, R6 must not run at all (no default range makes sense).
 	noChurnCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), ".")
 	noChurnCmd.Dir = dir
+	noChurnCmd.Env = lintFixtureEnv()
 	noChurnOut, err := noChurnCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("lint.lg (no --churn): %v\n%s", err, noChurnOut)
@@ -808,6 +826,7 @@ func TestLintR6ZeroCommentRangeIsDiagnostic(t *testing.T) {
 
 	cmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), "--churn", rangeArg, ".")
 	cmd.Dir = dir
+	cmd.Env = lintFixtureEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("zero-comment range: %v\n%s", err, out)
@@ -819,6 +838,7 @@ func TestLintR6ZeroCommentRangeIsDiagnostic(t *testing.T) {
 	gate := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
 		"--gate", "comment-churn", "--churn", rangeArg, ".")
 	gate.Dir = dir
+	gate.Env = lintFixtureEnv()
 	gateOut, err := gate.CombinedOutput()
 	if err != nil {
 		t.Fatalf("R6 is a measurement, not a gate: %v\n%s", err, gateOut)
@@ -831,6 +851,7 @@ func TestLintR6ZeroCommentRangeIsDiagnostic(t *testing.T) {
 	noChurn := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
 		"--gate", "comment-churn", ".")
 	noChurn.Dir = dir
+	noChurn.Env = lintFixtureEnv()
 	noChurnOut, err := noChurn.CombinedOutput()
 	if err != nil {
 		t.Fatalf("R6 without --churn must not gate: %v\n%s", err, noChurnOut)
@@ -872,6 +893,7 @@ func TestLintR6ZeroBaselineIsUndefined(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command(lgBin, append([]string{filepath.Join(repoRoot, "scripts", "lint.lg")}, tc.args...)...)
 			cmd.Dir = dir
+			cmd.Env = lintFixtureEnv()
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("zero baseline: %v\n%s", err, out)
