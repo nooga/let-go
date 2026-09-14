@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nooga/let-go/pkg/perfdata"
 )
 
 func TestSplitBenchmarkName(t *testing.T) {
@@ -176,6 +181,134 @@ func TestFormatRatioCompactsLargeValues(t *testing.T) {
 	for input, want := range tests {
 		if got := formatRatio(input); got != want {
 			t.Fatalf("formatRatio(%v) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+// Timeline-explorer regression tests. Each of these pins a failure that
+// reached review on #880: a null slice the page reads .length on, a timestamp
+// only Chromium would parse, a tier reachable in the data but not in the
+// filter, and a link that assumed one directory layout.
+
+func viewerTestSnapshot(at, cpu string, ratio float64) Snapshot {
+	return Snapshot{Baseline: Baseline{
+		CapturedAt: at,
+		Machine:    Machine{Arch: "amd64", CPUModel: cpu},
+		Anchor:     perfdata.Anchor{NSPerOp: 1},
+		Benchmarks: map[string]BenchmarkEntry{
+			"github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile [bytecode]": {
+				RatioToAnchor: ratio, AllocsPerOp: 10, BytesPerOp: 100,
+			},
+		},
+	}}
+}
+
+func TestBuildViewerDataEmitsNoNilPointSlices(t *testing.T) {
+	// A nil slice marshals as null, and the page reads .length on it, so an
+	// empty series must not survive into the payload at all.
+	data := buildViewerData([]Snapshot{viewerTestSnapshot("2026-06-04T22:25:22Z", "AMD EPYC 7763", 2)})
+	blob, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(blob, []byte(`"pts":null`)) {
+		t.Error(`payload contains "pts":null; the page does s.pts.length on it`)
+	}
+	for _, ch := range data.Charts {
+		if len(ch.Series) == 0 {
+			t.Errorf("chart %q has no series and should have been dropped", ch.Title)
+		}
+		for _, s := range ch.Series {
+			if len(s.Points) == 0 {
+				t.Errorf("chart %q series %q is empty and should have been dropped", ch.Title, s.Label)
+			}
+		}
+	}
+}
+
+func TestBuildViewerDataKeepsTimestampsParseable(t *testing.T) {
+	// Date.parse only guarantees RFC3339. formatDate's "2006-01-02 15:04 UTC"
+	// is accepted by Chromium and rejected by JavaScriptCore, so emitting it
+	// renders an empty page in Safari.
+	const want = "2026-06-04T22:25:22Z"
+	data := buildViewerData([]Snapshot{
+		viewerTestSnapshot(want, "AMD EPYC 7763", 2),
+		viewerTestSnapshot("2026-06-05T10:00:00Z", "AMD EPYC 7763", 3),
+	})
+	for _, ch := range data.Charts {
+		for _, s := range ch.Series {
+			for _, p := range s.Points {
+				if _, err := time.Parse(time.RFC3339, p.Date); err != nil {
+					t.Fatalf("chart %q series %q: %q is not RFC3339", ch.Title, s.Label, p.Date)
+				}
+			}
+		}
+	}
+}
+
+func TestBuildViewerDataListsEveryPlottedTier(t *testing.T) {
+	// A tier that appears only in the geomean must still be selectable, or
+	// "All (n)" plots more tiers than it counts.
+	//
+	// The fixture has to earn that: both snapshots share an UNCHARTED
+	// benchmark, so the geomean basket is non-empty, while only the first also
+	// carries a charted one. Apple M3 is therefore reachable through the
+	// geomean and through nothing else — which is the case that a CPU list
+	// built from the chart specs alone silently drops.
+	// Two of them: viewerGeomean needs a basket of at least two benchmarks
+	// before it will emit a line at all.
+	uncharted := []string{
+		"github.com/nooga/let-go/pkg/vm.BenchmarkSomethingElse",
+		"github.com/nooga/let-go/pkg/vm.BenchmarkSomethingElser",
+	}
+	withBasket := func(at, cpu string, charted bool) Snapshot {
+		snap := viewerTestSnapshot(at, cpu, 2)
+		for i, name := range uncharted {
+			snap.Baseline.Benchmarks[name] = BenchmarkEntry{
+				RatioToAnchor: float64(5 + i), AllocsPerOp: 1, BytesPerOp: 8,
+			}
+		}
+		if !charted {
+			delete(snap.Baseline.Benchmarks, "github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile [bytecode]")
+		}
+		return snap
+	}
+	data := buildViewerData([]Snapshot{
+		withBasket("2026-06-04T22:25:22Z", "AMD EPYC 7763", true),
+		withBasket("2026-06-05T10:00:00Z", "Apple M3", false),
+	})
+	if len(data.Charts) == 0 {
+		t.Fatal("fixture produced no charts; the geomean basket is empty")
+	}
+	if data.Charts[0].Title[:7] != "Overall" {
+		t.Fatalf("expected the geomean chart first, got %q", data.Charts[0].Title)
+	}
+	listed := map[string]bool{}
+	for _, c := range data.CPUs {
+		listed[c] = true
+	}
+	for _, ch := range data.Charts {
+		for _, s := range ch.Series {
+			for _, p := range s.Points {
+				if !listed[p.CPU] {
+					t.Errorf("chart %q plots tier %q, which is not in CPUs %v", ch.Title, p.CPU, data.CPUs)
+				}
+			}
+		}
+	}
+}
+
+func TestRelLinkNamesTheFileNotTheDirectory(t *testing.T) {
+	for _, tc := range []struct{ from, to, want string }{
+		{"out/perf/index.html", "out/perf/explore/index.html", "explore/index.html"},
+		{"out/perf/explore/index.html", "out/perf/index.html", "../index.html"},
+		// A flat layout has no index.html to fall back on, so a bare "./" here
+		// would link the summary to itself.
+		{"out/summary.html", "out/timeline.html", "timeline.html"},
+		{"out/timeline.html", "out/summary.html", "summary.html"},
+	} {
+		if got := relLink(tc.from, tc.to); got != tc.want {
+			t.Errorf("relLink(%q, %q) = %q, want %q", tc.from, tc.to, got, tc.want)
 		}
 	}
 }
