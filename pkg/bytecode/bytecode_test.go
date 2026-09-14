@@ -184,7 +184,7 @@ func TestBoolRoundtrip(t *testing.T) {
 }
 
 func TestIntRoundtrip(t *testing.T) {
-	cases := []int{0, 42, -1, math.MaxInt64, math.MinInt64}
+	cases := []int64{0, 42, -1, math.MaxInt64, math.MinInt64}
 	for _, tc := range cases {
 		got := roundtripValue(t, vm.Int(tc))
 		if got != vm.Int(tc) {

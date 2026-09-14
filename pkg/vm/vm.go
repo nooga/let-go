@@ -66,8 +66,11 @@ const (
 	OP_INC // inc (1 arg)
 	OP_DEC // dec (1 arg)
 	OP_BIT_NOT
-	OP_QUOT // quot — integer quotient, truncated toward zero (2 args)
-	OP_DIV  // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
+	OP_QUOT          // quot — integer quotient, truncated toward zero (2 args)
+	OP_DIV           // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
+	OP_UNCHECKED_ADD // unchecked-add — Int + Int wrapping at the platform width, never promoted (2 args)
+	OP_UNCHECKED_SUB // unchecked-subtract — Int - Int wrapping at the platform width, never promoted (2 args)
+	OP_UNCHECKED_MUL // unchecked-multiply — Int * Int wrapping at the platform width, never promoted (2 args)
 
 	OP_FINALLY_END // end of a finally block (finallyOffset int32, negative): rethrow the pending error after an abnormal entry
 
@@ -122,6 +125,9 @@ var opcodeNames = []string{
 	"BIT_NOT",
 	"QUOT",
 	"DIV",
+	"UNCHECKED_ADD",
+	"UNCHECKED_SUB",
+	"UNCHECKED_MUL",
 	"FINALLY_END",
 }
 
@@ -435,6 +441,16 @@ func releaseFrame(f *Frame) {
 	framePoolMu.Unlock()
 }
 
+// NewFrameIn is NewFrame with the given execution context installed, so the
+// frame resolves dynamic bindings and its structured-concurrency scope against
+// the caller rather than the root. Used by eval-style natives that compile a
+// form and must run it where the caller is.
+func NewFrameIn(code *CodeChunk, args []Value, ec *ExecContext) *Frame {
+	f := NewFrame(code, args)
+	f.ec = ec.orRoot()
+	return f
+}
+
 func NewFrame(code *CodeChunk, args []Value) *Frame {
 	return initFrame(acquireFrame(), code, args)
 }
@@ -531,6 +547,13 @@ func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
 	f := NewFrame(code, args)
 	f.debug = true
 	return f
+}
+
+// SetExecContext installs the dynamic execution state used when the frame
+// invokes bytecode and context-aware native functions. A nil context retains
+// the normal RootExecContext fallback.
+func (f *Frame) SetExecContext(ec *ExecContext) {
+	f.ec = ec
 }
 
 // Fast-path stack operations. The compiler guarantees correct stack depth,
@@ -925,6 +948,23 @@ func errDivByZero() error {
 //go:noinline
 func errBitOpType(name string) error {
 	return fmt.Errorf("%s expected Int", name)
+}
+
+// errUncheckedOpType is the type error for an operand ToInt rejects; every
+// unchecked-* path reports it through numUnchecked, so the wording is one.
+func uncheckedOpName(op int32) string {
+	switch op {
+	case OP_UNCHECKED_ADD:
+		return "unchecked-add"
+	case OP_UNCHECKED_SUB:
+		return "unchecked-subtract"
+	default:
+		return "unchecked-multiply"
+	}
+}
+
+func errUncheckedOpType(name string, v Value) error {
+	return fmt.Errorf("%s expected integer, got %s", name, v.Type().Name())
 }
 
 // debugTraceInst prints the per-instruction trace when frame tracing is on.
@@ -1433,7 +1473,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 						}
 						return NIL, errIntOverflow()
 					}
-					f.stack[f.sp-2] = r
+					// Through the cache rather than a bare store: on a 32-bit host an
+					// 8-byte Int does not fit the interface word, so every bare store
+					// would allocate. Same for the other Int fast paths below.
+					f.stack[f.sp-2] = MakeInt64(int64(r))
 					f.sp--
 					f.ip++
 					continue
@@ -1462,7 +1505,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 						}
 						return NIL, errIntOverflow()
 					}
-					f.stack[f.sp-2] = r
+					f.stack[f.sp-2] = MakeInt64(int64(r))
 					f.sp--
 					f.ip++
 					continue
@@ -1491,7 +1534,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 						}
 						return NIL, errIntOverflow()
 					}
-					f.stack[f.sp-2] = r
+					f.stack[f.sp-2] = MakeInt64(int64(r))
 					f.sp--
 					f.ip++
 					continue
@@ -1525,7 +1568,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-and")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) & int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) & int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1546,7 +1589,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-or")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) | int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) | int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1567,7 +1610,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-xor")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) ^ int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) ^ int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1588,7 +1631,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-and-not")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) &^ int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) &^ int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1609,7 +1652,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-shift-left")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) << uint(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) << uint(bi))
 			f.sp--
 			f.ip++
 
@@ -1630,7 +1673,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-shift-right")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) >> uint(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) >> uint(bi))
 			f.sp--
 			f.ip++
 
@@ -1651,7 +1694,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("unsigned-bit-shift-right")
 			}
-			f.stack[f.sp-2] = MakeInt(int(uint(ai) >> uint(bi)))
+			f.stack[f.sp-2] = MakeInt64(int64(uint64(ai) >> uint(bi)))
 			f.sp--
 			f.ip++
 
@@ -1668,7 +1711,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 					}
 					// Int quot is truncated toward zero — Go's / on
 					// signed ints matches Clojure's quot semantics.
-					f.stack[f.sp-2] = Int(int64(ai) / int64(bi))
+					f.stack[f.sp-2] = MakeInt64(int64(ai) / int64(bi))
 					f.sp--
 					f.ip++
 					continue
@@ -1703,6 +1746,34 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			f.sp--
 			f.ip++
 
+		case OP_UNCHECKED_ADD, OP_UNCHECKED_SUB, OP_UNCHECKED_MUL:
+			// Wrapping integer arithmetic (clojure.core/unchecked-*). Same shape
+			// as OP_ADD: inline the Int/Int path, and fall back to the generic
+			// implementation the core fn uses (numUnchecked, which coerces
+			// through ToInt) for anything else, so the opcode is never stricter
+			// than the var it replaces.
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			op := inst & 0xff
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = uncheckedIntOp(op, ai, bi)
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := numUnchecked(op, a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = r
+			f.sp--
+			f.ip++
+
 		case OP_BIT_NOT:
 			a := f.stack[f.sp-1]
 			ai, ok := a.(Int)
@@ -1712,7 +1783,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-not")
 			}
-			f.stack[f.sp-1] = MakeInt(^int(ai))
+			f.stack[f.sp-1] = MakeInt64(^int64(ai))
 			f.ip++
 
 		case OP_LT:
@@ -1838,7 +1909,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 					}
 					return NIL, errIntOverflow()
 				}
-				f.stack[f.sp-1] = r
+				f.stack[f.sp-1] = MakeInt64(int64(r))
 				f.ip++
 				continue
 			}
@@ -1862,7 +1933,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 					}
 					return NIL, errIntOverflow()
 				}
-				f.stack[f.sp-1] = r
+				f.stack[f.sp-1] = MakeInt64(int64(r))
 				f.ip++
 				continue
 			}

@@ -142,6 +142,9 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	}
 	body := ress.ValueAt(vm.Keyword("body"))
 	resp.WriteHeader(int(status.(vm.Int)))
+	if streamResponseBody(resp, request, body) {
+		return
+	}
 	respBody, bodyErr := coerceResponseBody(body)
 	if bodyErr != nil {
 		_ = WriteToErr(nil, fmt.Sprintln("HTTP Error coercing body:", bodyErr))
@@ -153,6 +156,57 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		_ = WriteToErr(nil, fmt.Sprintln("HTTP Error while writing error 500", err))
 	}
+}
+
+// streamResponseBody writes a channel or lazy sequence body incrementally,
+// flushing after every element, so a handler can hold or pace a response
+// mid-body (SSE fixtures, long polls). Strings and readers keep the buffered
+// path. Iteration stops when the client goes away. Reports whether it handled
+// the body.
+func streamResponseBody(resp http.ResponseWriter, request *http.Request, body vm.Value) bool {
+	flusher, _ := resp.(http.Flusher)
+	writeChunk := func(v vm.Value) bool {
+		var chunk string
+		if str, ok := v.(vm.String); ok {
+			chunk = string(str)
+		} else {
+			chunk = v.String()
+		}
+		if _, err := resp.Write([]byte(chunk)); err != nil {
+			return false
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return request.Context().Err() == nil
+	}
+	switch b := body.(type) {
+	case vm.Chan:
+		if flusher != nil {
+			flusher.Flush()
+		}
+		for {
+			select {
+			case v, ok := <-b:
+				if !ok || !writeChunk(v) {
+					return true
+				}
+			case <-request.Context().Done():
+				return true
+			}
+		}
+	case *vm.LazySeq:
+		if flusher != nil {
+			flusher.Flush()
+		}
+		for s := b.Seq(); s != nil; s = s.Next() {
+			if !writeChunk(s.First()) {
+				return true
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func init() { RegisterInstaller(installHttpNS) }
@@ -222,7 +276,7 @@ func installHttpNS() {
 	}
 
 	// http/get — (http/get url) or (http/get url opts)
-	httpGet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	httpGet := vm.NewCtxNativeFn("http/get", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("http/get expects 1-2 args")
 		}
@@ -230,7 +284,7 @@ func installHttpNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		req, err := http.NewRequest("GET", urlStr, nil)
+		req, err := http.NewRequestWithContext(ec.Context(), "GET", urlStr, nil)
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -241,6 +295,9 @@ func installHttpNS() {
 					if sq, ok := hdrs.(vm.Sequable); ok {
 						for s := sq.Seq(); s != nil; s = s.Next() {
 							entry := s.First()
+							if entry == vm.NIL {
+								continue
+							}
 							eSeq, ok := entry.(vm.Sequable)
 							if !ok {
 								continue
@@ -266,7 +323,7 @@ func installHttpNS() {
 	})
 
 	// http/post — (http/post url body) or (http/post url body opts)
-	httpPost, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	httpPost := vm.NewCtxNativeFn("http/post", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("http/post expects 2-3 args")
 		}
@@ -280,7 +337,7 @@ func installHttpNS() {
 		} else {
 			bodyStr = vs[1].String()
 		}
-		req, err := http.NewRequest("POST", urlStr, strings.NewReader(bodyStr))
+		req, err := http.NewRequestWithContext(ec.Context(), "POST", urlStr, strings.NewReader(bodyStr))
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -295,6 +352,9 @@ func installHttpNS() {
 					if sq, ok := hdrs.(vm.Sequable); ok {
 						for s := sq.Seq(); s != nil; s = s.Next() {
 							entry := s.First()
+							if entry == vm.NIL {
+								continue
+							}
 							eSeq, ok := entry.(vm.Sequable)
 							if !ok {
 								continue
@@ -320,7 +380,7 @@ func installHttpNS() {
 	})
 
 	// http/request — (http/request {:method :get :url "..." :headers {...} :body "..."})
-	httpRequest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	httpRequest := vm.NewCtxNativeFn("http/request", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("http/request expects 1 arg (options map)")
 		}
@@ -352,7 +412,7 @@ func installHttpNS() {
 				bodyReader = strings.NewReader(b.String())
 			}
 		}
-		req, err := http.NewRequest(method, reqURL, bodyReader)
+		req, err := http.NewRequestWithContext(ec.Context(), method, reqURL, bodyReader)
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -361,6 +421,9 @@ func installHttpNS() {
 			if sq, ok := hdrs.(vm.Sequable); ok {
 				for s := sq.Seq(); s != nil; s = s.Next() {
 					entry := s.First()
+					if entry == vm.NIL {
+						continue
+					}
 					eSeq, ok := entry.(vm.Sequable)
 					if !ok {
 						continue
@@ -379,18 +442,15 @@ func installHttpNS() {
 		return buildResponseMap(resp, isStreamOpt(vs[0]))
 	})
 
-	if err != nil {
-		panic("http NS init failed")
-	}
-
 	ns := vm.NewNamespace("http")
 
 	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
 	ns.Exclude("get")
 
 	ns.Def("serve", serve)
-	ns.Def("get", httpGet)
-	ns.Def("post", httpPost)
-	ns.Def("request", httpRequest)
+	clientMeta := vm.EmptyPersistentMap.Assoc(vm.Keyword("scope-cancellation"), vm.TRUE)
+	ns.Def("get", httpGet).SetMeta(clientMeta)
+	ns.Def("post", httpPost).SetMeta(clientMeta)
+	ns.Def("request", httpRequest).SetMeta(clientMeta)
 	RegisterNS(ns)
 }

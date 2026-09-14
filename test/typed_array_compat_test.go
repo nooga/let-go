@@ -24,6 +24,21 @@ func TestTypedArraysAcceptEmptySeqableInputs(t *testing.T) {
 	}
 }
 
+func TestByteArrayMutationSurvivesGoInterop(t *testing.T) {
+	got, err := evalCoreCompat(`(do
+		(require '[io :as io])
+		(let [r (io/string-reader "ABC")
+		      b (byte-array 3)
+		      n (.Read r b)]
+		  [n (vec b)]))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != "[3 [65 66 67]]" {
+		t.Fatalf("Go mutation must remain visible through the typed array: got %s", got)
+	}
+}
+
 func TestContainsRejectsUnsupportedCollectionsAndArrayKeys(t *testing.T) {
 	cases := map[string]string{
 		"array nil key":     `(contains? (int-array [0 1 2]) nil)`,

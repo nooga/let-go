@@ -1,5 +1,3 @@
-//go:build !bootstrap
-
 /*
  * Copyright (c) 2026 let-go contributors
  * SPDX-License-Identifier: MIT
@@ -21,6 +19,11 @@ import _ "embed"
 // native lowering fixpoint (TestLoweringDeterminism). Registered as an
 // auxiliary embedded source (see EmbeddedSource) instead, so it resolves like
 // embedded core without joining that universe.
+//
+// Embedded under -tags bootstrap as well, unlike the rest of the AOT surface:
+// lg.compiler requires gogen, so lgbgen must resolve gogen when it compiles
+// lg.compiler for Go lowering. That still leaves gogen auxiliary — absent from
+// EmbeddedNSNames, never precompiled into the bundle, never lowered itself.
 //
 //go:embed gogen/gogen.lg
 var gogenSrc string

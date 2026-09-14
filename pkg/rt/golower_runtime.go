@@ -259,6 +259,34 @@ func AddValue(a, b vm.Value) vm.Value {
 	return r
 }
 
+// UncheckedAddValue / UncheckedSubValue / UncheckedMulValue back the IR's
+// :unchecked-add/-sub/-mul when an operand is not a proven int. They call the
+// same vm.NumUnchecked* implementation as the opcode and the core fn, so they
+// coerce and wrap identically, and panic (like AddValue) on what ToInt rejects.
+func UncheckedAddValue(a, b vm.Value) vm.Value {
+	r, err := vm.NumUncheckedAdd(a, b)
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
+func UncheckedSubValue(a, b vm.Value) vm.Value {
+	r, err := vm.NumUncheckedSubtract(a, b)
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
+func UncheckedMulValue(a, b vm.Value) vm.Value {
+	r, err := vm.NumUncheckedMultiply(a, b)
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
 func SubValue(a, b vm.Value) vm.Value {
 	r, err := vm.NumSub(a, b)
 	if err != nil {

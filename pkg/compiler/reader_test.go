@@ -164,3 +164,41 @@ func TestReaderConditionalSplicing(t *testing.T) {
 		assert.Equal(t, e, o)
 	}
 }
+
+func TestDataReaderFollowsClojureDataSemantics(t *testing.T) {
+	// clojure.edn/read-string reads data: metadata attaches (or is dropped
+	// for values without metadata support) instead of producing a
+	// (with-meta ...) call, sets read as sets, and a discard between a key
+	// and its value splices nothing.
+	m, err := ReadDataString(`^{:doc "mapping"} {"a" "b"}`)
+	assert.NoError(t, err)
+	assert.True(t, vm.NewArrayMap([]vm.Value{vm.String("a"), vm.String("b")}).Equals(m), "%v", m)
+	assert.Equal(t, vm.String("mapping"), m.(vm.IMeta).Meta().(vm.Lookup).ValueAt(vm.Keyword("doc")))
+
+	m2, err := ReadDataString(`{"a" #_[:ignored] "b"}`)
+	assert.NoError(t, err)
+	assert.True(t, vm.NewArrayMap([]vm.Value{vm.String("a"), vm.String("b")}).Equals(m2), "%v", m2)
+
+	_, err = ReadDataString(`{:a #_ 1 :b 2}`)
+	assert.Error(t, err, "Clojure: an odd map literal is an error, the key is not dropped")
+	_, err = ReadDataString(`{"a" "x" "a" "y"}`)
+	assert.Error(t, err, "Clojure: duplicate map key is an error")
+	_, err = ReadDataString(`#{1 1}`)
+	assert.Error(t, err, "Clojure: duplicate set element is an error")
+
+	set, err := ReadDataString(`#{1 2}`)
+	assert.NoError(t, err)
+	assert.Equal(t, vm.SetType, set.Type())
+
+	forms, err := ReadAllDataString("#_x {\"a\" \"b\"} ;; trailing\n [1 2]")
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(forms))
+
+	_, err = ReadAllDataString(`{"a" "b"} {`)
+	assert.Error(t, err, "EOF mid-form is an error")
+
+	// Code reading is unchanged.
+	code, err := ReadString(`#{1 2}`)
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Symbol("hash-set"), code.(*vm.List).First())
+}

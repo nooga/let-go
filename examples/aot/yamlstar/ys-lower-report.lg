@@ -1,6 +1,6 @@
 ;; ys-lower-report — actually ATTEMPT to lower each single-arity defn in a file
 ;; and report :lowered vs fallback (with the error). Loads the file form-by-form
-;; first (so refers resolve), then runs compile-form* per lowerable form under
+;; first (so refers resolve), then runs compile-form per lowerable form under
 ;; *target* :go, catching failures.
 ;;
 ;;   ./lg scripts/ys-lower-report.lg <file.lg>   (one ns per invocation)
@@ -42,7 +42,7 @@
     (let [r (reduce
               (fn [acc f]
                 (let [nm  (form-name f)
-                      res (try (ir.passes.pipeline/compile-form* f)
+                      res (try (ir.passes.pipeline/compile-form f)
                                (catch e {:status :threw :err (str e)}))
                       st  (:status res)]
                   (cond

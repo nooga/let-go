@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/bits"
 	"math/rand/v2"
 	"os"
 	"reflect"
@@ -23,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -2708,6 +2710,32 @@ func installLangNS() {
 		return vm.OpenChildEC(ec), nil
 	})
 
+	// scope-cancelled? reports whether a scope's cancellation context is done.
+	// With no argument it inspects the calling execution's current scope. Lisp
+	// code cannot otherwise observe cancellation: blocking natives such as
+	// sleep return early and silently when their scope is cancelled, so a
+	// coordinator loop parked on sleep has no way to tell "woke up" from
+	// "was cancelled" without this predicate.
+	scopeCancelled := vm.NewCtxNativeFn("scope-cancelled?", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		var s *vm.Scope
+		switch len(vs) {
+		case 0:
+			s = ec.Scope()
+		case 1:
+			var ok bool
+			s, ok = vs[0].(*vm.Scope)
+			if !ok {
+				return vm.NIL, fmt.Errorf("scope-cancelled? expected a scope")
+			}
+		default:
+			return vm.NIL, fmt.Errorf("scope-cancelled? expects 0 or 1 arguments")
+		}
+		if s.Context().Err() != nil {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+
 	chanput := vm.NewCtxNativeFn(">!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -2864,21 +2892,33 @@ func installLangNS() {
 		return vm.ListType.Box(temp)
 	})
 
+	// split is the raw primitive under clojure.string/split (string.lg), which
+	// adds Java Pattern.split's limit-zero rule. The optional third argument is
+	// Go's SplitN count: n > 0 yields at most n fields with the last holding the
+	// remainder, n < 0 yields every field. Both match Java for the same sign.
 	split, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 || len(vs) > 2 {
+		if len(vs) < 1 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		s, ok := vs[0].(vm.String)
 		if !ok {
 			return vm.NIL, fmt.Errorf("split expected String")
 		}
+		n := -1
+		if len(vs) == 3 {
+			lim, ok := vs[2].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("split expected Int limit")
+			}
+			n = int(lim)
+		}
 		var frags []string
-		if len(vs) == 2 {
+		if len(vs) >= 2 {
 			switch delim := vs[1].(type) {
 			case vm.String:
-				frags = strings.Split(string(s), string(delim))
+				frags = strings.SplitN(string(s), string(delim), n)
 			case *vm.Regex:
-				frags = delim.Split(string(s), -1)
+				frags = delim.Split(string(s), n)
 			default:
 				return vm.NIL, fmt.Errorf("split expected String or Regex")
 			}
@@ -2944,7 +2984,7 @@ func installLangNS() {
 			if f < minInt32 || f > maxInt32 {
 				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 			}
-			return vm.MakeInt(int(math.Trunc(f))), nil
+			return vm.MakeInt64(int64(math.Trunc(f))), nil
 		}
 		switch v := vs[0].(type) {
 		case vm.Int:
@@ -2964,7 +3004,7 @@ func installLangNS() {
 			if i < minInt32 || i > maxInt32 {
 				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 			}
-			return vm.MakeInt(int(i)), nil
+			return vm.MakeInt64(int64(i)), nil
 		case *vm.BigDecimal:
 			f, _ := v.Val().Float64()
 			return coerce(f)
@@ -3342,13 +3382,18 @@ func installLangNS() {
 		if len(snap) == 0 {
 			return fn, nil
 		}
-		wrapped, _ := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
-			// Re-establish the captured bindings in a fresh context on every
-			// call, so invocations (possibly on different goroutines) stay
-			// isolated from one another and from the global stack.
-			return vm.NewExecContextFrom(snap).Invoke(fn, args)
-		})
-		return wrapped, nil
+		// Re-establish the captured bindings in a fresh context on every
+		// call, so invocations (possibly on different goroutines) stay
+		// isolated from one another and from the global stack. Only the
+		// binding stack is conveyed: the call runs under the *invoking*
+		// execution's structured-concurrency scope, so work spawned inside a
+		// bound fn stays owned (and cancellable) by whoever called it rather
+		// than silently escaping to the root scope.
+		return vm.NewCtxNativeFn("bound-fn", func(callEC *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+			c := vm.NewExecContextFrom(snap)
+			c.SetScope(callEC.Scope())
+			return c.Invoke(fn, args)
+		}), nil
 	})
 
 	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3663,7 +3708,7 @@ func installLangNS() {
 	uncheckedMath.SetDynamic()
 	uncheckedMath.SetMeta(vm.NewPersistentMap([]vm.Value{
 		vm.Keyword("dynamic"), vm.TRUE,
-		vm.Keyword("doc"), vm.String("Compatibility var for Clojure's unchecked arithmetic mode; accepted but has no code-generation effect."),
+		vm.Keyword("doc"), vm.String("When truthy at compile time, + - * inc dec compile to their wrapping unchecked-* counterparts. Identity arities ((+) (*) (+ x) (* x)) are left alone, (- x) becomes unchecked-negate, and higher arities left-nest. Float arguments keep float arithmetic."),
 	}))
 	warnOnReflection := ns.Def("*warn-on-reflection*", vm.FALSE)
 	warnOnReflection.SetDynamic()
@@ -3834,6 +3879,7 @@ func installLangNS() {
 	ns.Def(">!!", chanput)
 	ns.Def("<!!", changet)
 	ns.Def("scope-open", scopeOpen)
+	ns.Def("scope-cancelled?", scopeCancelled)
 
 	ns.Def("int", intf)
 	ns.Def("byte", intf)
@@ -4678,8 +4724,69 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	doubleNS.Def("MIN_VALUE", vm.Float(4.9e-324))
 	doubleNS.Def("TYPE", vm.FloatType)
 
+	longNS.Def("bitCount", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("bitCount expects 1 arg")
+		}
+		a, ok := vm.ToInt64(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("bitCount expected integer, got %s", vs[0].Type().Name())
+		}
+		return vm.MakeInt(bits.OnesCount64(uint64(int64(a)))), nil
+	}))
+	longNS.Def("reverse", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("reverse expects 1 arg")
+		}
+		a, ok := vm.ToInt64(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("reverse expected integer, got %s", vs[0].Type().Name())
+		}
+		return longCompatValue(int64(bits.Reverse64(uint64(int64(a))))), nil
+	}))
+
 	integerNS := DefNSBare("Integer")
 	integerNS.Def("TYPE", vm.IntType)
+	integerNS.Def("MAX_VALUE", vm.MakeInt(2147483647))
+	integerNS.Def("MIN_VALUE", vm.MakeInt(-2147483648))
+
+	doubleNS.Def("POSITIVE_INFINITY", vm.Float(math.Inf(1)))
+	doubleNS.Def("NEGATIVE_INFINITY", vm.Float(math.Inf(-1)))
+	doubleNS.Def("NaN", vm.Float(math.NaN()))
+	// NaN is not equal to itself, so a predicate is the only usable way to
+	// test for it; shipping Double/NaN without Double/isNaN would be a trap.
+	doubleNS.Def("isNaN", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("isNaN expects 1 arg")
+		}
+		f, ok := vm.ToFloat(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("isNaN expected number, got %s", vs[0].Type().Name())
+		}
+		return vm.Boolean(math.IsNaN(float64(f))), nil
+	}))
+
+	byteNS := DefNSBare("Byte")
+	byteNS.Def("MAX_VALUE", vm.MakeInt(127))
+	byteNS.Def("MIN_VALUE", vm.MakeInt(-128))
+
+	characterNS := DefNSBare("Character")
+	characterNS.Def("isDigit", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("isDigit expects 1 arg")
+		}
+		// JVM overloads isDigit(char) and isDigit(int codePoint); the integer
+		// form is how supplementary-plane digits are classified.
+		if c, ok := vs[0].(vm.Char); ok {
+			return vm.Boolean(unicode.IsDigit(rune(c))), nil
+		}
+		if cp, ok := vm.ToInt(vs[0]); ok {
+			return vm.Boolean(unicode.IsDigit(rune(int64(cp)))), nil
+		}
+		return vm.NIL, fmt.Errorf("isDigit expected character or code point, got %s", vs[0].Type().Name())
+	}))
+
+	installMathStatics()
 
 	booleanNS := DefNSBare("Boolean")
 	booleanNS.Def("TYPE", vm.BooleanType)
@@ -4792,12 +4899,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	installHostStringBuilder(ns)
 }
 
-func longCompatValue(v int64) vm.Value {
-	if strconv.IntSize == 64 {
-		return vm.Int(v)
-	}
-	return vm.NewBigIntFromInt64(v)
-}
+func longCompatValue(v int64) vm.Value { return vm.MakeInt64(v) }
 
 func strValue(v vm.Value) string {
 	if v == vm.NIL {
@@ -5065,15 +5167,7 @@ func CoreUncheckedAdd(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) + int64(b))), nil
+	return vm.NumUncheckedAdd(vs[0], vs[1])
 }
 
 //lg:native
@@ -5082,15 +5176,7 @@ func CoreUncheckedSubtract(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) - int64(b))), nil
+	return vm.NumUncheckedSubtract(vs[0], vs[1])
 }
 
 //lg:native
@@ -5099,15 +5185,7 @@ func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) * int64(b))), nil
+	return vm.NumUncheckedMultiply(vs[0], vs[1])
 }
 
 //lg:native
@@ -5116,12 +5194,17 @@ func CoreUncheckedNegate(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
+	// Only int64 wraps. Anything else goes through the numeric tower so
+	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
+	if _, isInt := vs[0].(vm.Int); !isInt {
+		return vm.NumNeg(vs[0])
+	}
+	a, ok := vm.ToInt64(vs[0])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-negate expected integer, got %s", vs[0].Type().Name())
 	}
 
-	return vm.MakeInt(int(-int64(a))), nil
+	return vm.MakeInt64(-int64(a)), nil
 }
 
 //lg:native
@@ -5130,11 +5213,11 @@ func CoreUncheckedDivideInt(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
+	a, ok := vm.ToInt64(vs[0])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[0].Type().Name())
 	}
-	b, ok := vm.ToInt(vs[1])
+	b, ok := vm.ToInt64(vs[1])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[1].Type().Name())
 	}
@@ -5145,7 +5228,7 @@ func CoreUncheckedDivideInt(vs ...vm.Value) (vm.Value, error) {
 	if int64(a) == math.MinInt64 && int64(b) == -1 {
 		return vm.NIL, fmt.Errorf("integer overflow")
 	}
-	return vm.MakeInt(int(int64(a) / int64(b))), nil
+	return vm.MakeInt64(int64(a) / int64(b)), nil
 }
 
 //lg:native
@@ -5161,9 +5244,9 @@ func CoreUncheckedLong(vs ...vm.Value) (vm.Value, error) {
 
 		mask := new(big.Int).Lsh(big.NewInt(1), 64)
 		lo := new(big.Int).Mod(v.Val(), mask)
-		return vm.MakeInt(int(int64(lo.Uint64()))), nil
+		return vm.MakeInt64(int64(lo.Uint64())), nil
 	case vm.Float:
-		return vm.MakeInt(int(int64(float64(v)))), nil
+		return vm.MakeInt64(int64(float64(v))), nil
 	case vm.Char:
 		// Java widens char to int; Clojure's unchecked-* inherit that.
 		return vm.MakeInt(int(rune(v))), nil
@@ -7875,7 +7958,7 @@ func CoreBitAnd(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-and expected Int")
 	}
-	return vm.MakeInt(int(a) & int(b)), nil
+	return vm.MakeInt64(int64(a) & int64(b)), nil
 }
 
 //lg:native
@@ -7892,7 +7975,7 @@ func CoreBitOr(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-or expected Int")
 	}
-	return vm.MakeInt(int(a) | int(b)), nil
+	return vm.MakeInt64(int64(a) | int64(b)), nil
 }
 
 //lg:native
@@ -7909,7 +7992,7 @@ func CoreBitXor(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-xor expected Int")
 	}
-	return vm.MakeInt(int(a) ^ int(b)), nil
+	return vm.MakeInt64(int64(a) ^ int64(b)), nil
 }
 
 //lg:native
@@ -7922,7 +8005,7 @@ func CoreBitNot(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-not expected Int")
 	}
-	return vm.MakeInt(^int(a)), nil
+	return vm.MakeInt64(^int64(a)), nil
 }
 
 //lg:native
@@ -7939,7 +8022,7 @@ func CoreBitShiftLeft(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
 	}
-	return vm.MakeInt(int(a) << uint(b)), nil
+	return vm.MakeInt64(int64(a) << uint(b)), nil
 }
 
 //lg:native
@@ -7956,7 +8039,7 @@ func CoreBitShiftRight(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
 	}
-	return vm.MakeInt(int(a) >> uint(b)), nil
+	return vm.MakeInt64(int64(a) >> uint(b)), nil
 }
 
 //lg:native
@@ -7973,7 +8056,7 @@ func CoreUnsignedBitShiftRight(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
 	}
-	return vm.MakeInt(int(uint(a) >> uint(b))), nil
+	return vm.MakeInt64(int64(uint64(a) >> uint(b))), nil
 }
 
 //lg:native
@@ -7990,7 +8073,7 @@ func CoreBitTest(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-test expected Int")
 	}
-	return vm.Boolean(int(a)&(1<<uint(b)) != 0), nil
+	return vm.Boolean(int64(a)&(1<<uint(b)) != 0), nil
 }
 
 //lg:native
@@ -8007,7 +8090,7 @@ func CoreBitSet(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-set expected Int")
 	}
-	return vm.MakeInt(int(a) | (1 << uint(b))), nil
+	return vm.MakeInt64(int64(a) | (1 << uint(b))), nil
 }
 
 //lg:native
@@ -8024,7 +8107,7 @@ func CoreBitClear(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-clear expected Int")
 	}
-	return vm.MakeInt(int(a) &^ (1 << uint(b))), nil
+	return vm.MakeInt64(int64(a) &^ (1 << uint(b))), nil
 }
 
 //lg:native
@@ -8041,7 +8124,7 @@ func CoreBitAndNot(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-and-not expected Int")
 	}
-	return vm.MakeInt(int(a) &^ int(b)), nil
+	return vm.MakeInt64(int64(a) &^ int64(b)), nil
 }
 
 //lg:native
@@ -8058,7 +8141,7 @@ func CoreBitFlip(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("bit-flip expected Int")
 	}
-	return vm.MakeInt(int(a) ^ (1 << uint(b))), nil
+	return vm.MakeInt64(int64(a) ^ (1 << uint(b))), nil
 }
 
 //lg:native

@@ -6,12 +6,70 @@
 package cli
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"strings"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/gomod"
 )
+
+func TestResolveGoRootUsesActiveToolchain(t *testing.T) {
+	called := false
+	got, err := resolveGoRoot("", func() ([]byte, error) {
+		called = true
+		return []byte("/active/go\n"), nil
+	})
+	if err != nil {
+		t.Fatalf("resolveGoRoot: %v", err)
+	}
+	if !called {
+		t.Fatal("resolveGoRoot did not query the active Go toolchain")
+	}
+	if got != "/active/go" {
+		t.Errorf("resolveGoRoot = %q, want %q", got, "/active/go")
+	}
+}
+
+func TestResolveGoRootHonorsEnvironment(t *testing.T) {
+	got, err := resolveGoRoot("/configured/go", func() ([]byte, error) {
+		return nil, errors.New("query should not run")
+	})
+	if err != nil {
+		t.Fatalf("resolveGoRoot: %v", err)
+	}
+	if got != "/configured/go" {
+		t.Errorf("resolveGoRoot = %q, want %q", got, "/configured/go")
+	}
+}
+
+func TestReadGoWasmExecJSLayouts(t *testing.T) {
+	for _, rel := range []string{
+		filepath.Join("lib", "wasm", "wasm_exec.js"),
+		filepath.Join("misc", "wasm", "wasm_exec.js"),
+	} {
+		t.Run(rel, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, rel)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			const want = "// active toolchain wasm_exec.js\n"
+			if err := os.WriteFile(path, []byte(want), 0644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readGoWasmExecJS(root)
+			if err != nil {
+				t.Fatalf("readGoWasmExecJS: %v", err)
+			}
+			if string(got) != want {
+				t.Errorf("readGoWasmExecJS = %q, want %q", got, want)
+			}
+		})
+	}
+}
 
 // The version handed to gomod.Generate must describe let-go, not the binary.
 // For a custom lg the ldflags-stamped version is the HOST module's, and using

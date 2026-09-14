@@ -1,5 +1,6 @@
 (ns test.readme-limitations-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 (defn unsupported? [source]
   (try
@@ -33,13 +34,15 @@
     (is (= () (chunk-rest (range 5))))
     (is (nil? (chunk-next (range 5))))))
 
-(deftest custom-tagged-literal-readers-not-implemented
-  (testing "built-in tags work, but custom reader hooks do not"
+(deftest custom-tagged-literal-readers
+  (testing "built-in and dynamically registered tags work"
     (is (uuid? (read-string "#uuid \"550e8400-e29b-41d4-a716-446655440000\"")))
     (is (inst? (read-string "#inst \"2024-01-01T00:00:00Z\"")))
-    (is (unsupported? "*data-readers*"))
+    (binding [*data-readers* {'test/readme (fn [value] [:readme value])}]
+      (is (= [:readme {:x 1}]
+             (read-string "#test/readme {:x 1}"))))
     (is (unsupported? "*default-data-reader-fn*")))
-  (testing "unknown tags do not create tagged literals or call custom readers"
+  (testing "unregistered tags retain legacy payload behavior"
     (is (= {:x 1} (read-string "#test/unknown {:x 1}")))
     (is (not (tagged-literal? (read-string "#test/unknown {:x 1}"))))))
 

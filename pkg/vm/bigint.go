@@ -114,7 +114,7 @@ func ToBigInt(v Value) (*big.Int, bool) {
 // MaybeDowngrade returns an Int if the BigInt fits in int64, otherwise BigInt.
 func MaybeDowngrade(b *big.Int) Value {
 	if b.IsInt64() {
-		return MakeInt(int(b.Int64()))
+		return MakeInt64(b.Int64())
 	}
 	return &BigInt{val: b}
 }

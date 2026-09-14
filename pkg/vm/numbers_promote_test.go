@@ -8,26 +8,26 @@ import (
 
 // --- Primitive overflow checks -----------------------------------------------
 //
-// All cases parameterise on math.MaxInt / math.MinInt so the tests work on
-// both 32-bit and 64-bit targets — the overflow primitives are platform-width.
+// All cases use math.MaxInt64 / math.MinInt64: Int is 64 bits on every
+// target, so the overflow primitives are too.
 
 func TestAddIntChecked(t *testing.T) {
 	cases := []struct {
-		a, b     int
-		want     int
+		a, b     int64
+		want     int64
 		overflow bool
 	}{
 		{1, 2, 3, false},
 		{-1, 1, 0, false},
-		{math.MaxInt, 0, math.MaxInt, false},
-		{math.MinInt, 0, math.MinInt, false},
-		{math.MaxInt, 1, 0, true},
-		{1, math.MaxInt, 0, true},
-		{math.MinInt, -1, 0, true},
-		{-1, math.MinInt, 0, true},
-		{math.MaxInt, math.MaxInt, 0, true},
-		{math.MinInt, math.MinInt, 0, true},
-		{math.MaxInt, math.MinInt, -1, false},
+		{math.MaxInt64, 0, math.MaxInt64, false},
+		{math.MinInt64, 0, math.MinInt64, false},
+		{math.MaxInt64, 1, 0, true},
+		{1, math.MaxInt64, 0, true},
+		{math.MinInt64, -1, 0, true},
+		{-1, math.MinInt64, 0, true},
+		{math.MaxInt64, math.MaxInt64, 0, true},
+		{math.MinInt64, math.MinInt64, 0, true},
+		{math.MaxInt64, math.MinInt64, -1, false},
 	}
 	for _, c := range cases {
 		got, of := addIntChecked(c.a, c.b)
@@ -42,19 +42,19 @@ func TestAddIntChecked(t *testing.T) {
 
 func TestSubIntChecked(t *testing.T) {
 	cases := []struct {
-		a, b     int
-		want     int
+		a, b     int64
+		want     int64
 		overflow bool
 	}{
 		{3, 2, 1, false},
 		{1, 1, 0, false},
-		{math.MinInt, 1, 0, true},
-		{math.MinInt, -1, math.MinInt + 1, false}, // MinInt - -1 = MinInt+1, in range
-		{math.MinInt, math.MaxInt, 0, true},
-		{math.MaxInt, -1, 0, true},
-		{math.MaxInt, math.MinInt, 0, true},
-		{0, math.MinInt, 0, true}, // -(MinInt) overflows
-		{-1, math.MaxInt, math.MinInt, false},
+		{math.MinInt64, 1, 0, true},
+		{math.MinInt64, -1, math.MinInt64 + 1, false}, // MinInt - -1 = MinInt+1, in range
+		{math.MinInt64, math.MaxInt64, 0, true},
+		{math.MaxInt64, -1, 0, true},
+		{math.MaxInt64, math.MinInt64, 0, true},
+		{0, math.MinInt64, 0, true}, // -(MinInt) overflows
+		{-1, math.MaxInt64, math.MinInt64, false},
 	}
 	for _, c := range cases {
 		got, of := subIntChecked(c.a, c.b)
@@ -69,24 +69,24 @@ func TestSubIntChecked(t *testing.T) {
 
 func TestMulIntChecked(t *testing.T) {
 	cases := []struct {
-		a, b     int
-		want     int
+		a, b     int64
+		want     int64
 		overflow bool
 	}{
 		{0, 0, 0, false},
 		{1, 1, 1, false},
 		{-1, -1, 1, false},
-		{math.MinInt, 0, 0, false},
-		{math.MinInt, 1, math.MinInt, false},
-		{math.MinInt, -1, 0, true},
-		{-1, math.MinInt, 0, true},
-		{math.MaxInt, 1, math.MaxInt, false},
-		{math.MaxInt, -1, math.MinInt + 1, false},
-		{math.MaxInt, 2, 0, true},
-		{2, math.MaxInt, 0, true},
-		{math.MaxInt, math.MaxInt, 0, true},
-		{math.MinInt / 2, 3, 0, true},
-		{3, math.MinInt / 2, 0, true},
+		{math.MinInt64, 0, 0, false},
+		{math.MinInt64, 1, math.MinInt64, false},
+		{math.MinInt64, -1, 0, true},
+		{-1, math.MinInt64, 0, true},
+		{math.MaxInt64, 1, math.MaxInt64, false},
+		{math.MaxInt64, -1, math.MinInt64 + 1, false},
+		{math.MaxInt64, 2, 0, true},
+		{2, math.MaxInt64, 0, true},
+		{math.MaxInt64, math.MaxInt64, 0, true},
+		{math.MinInt64 / 2, 3, 0, true},
+		{3, math.MinInt64 / 2, 0, true},
 	}
 	for _, c := range cases {
 		got, of := mulIntChecked(c.a, c.b)
@@ -101,15 +101,15 @@ func TestMulIntChecked(t *testing.T) {
 
 func TestNegIntChecked(t *testing.T) {
 	cases := []struct {
-		a        int
-		want     int
+		a        int64
+		want     int64
 		overflow bool
 	}{
 		{0, 0, false},
 		{1, -1, false},
 		{-1, 1, false},
-		{math.MaxInt, -math.MaxInt, false},
-		{math.MinInt, 0, true},
+		{math.MaxInt64, -math.MaxInt64, false},
+		{math.MinInt64, 0, true},
 	}
 	for _, c := range cases {
 		got, of := negIntChecked(c.a)
@@ -135,21 +135,21 @@ func mustBigIntString(t *testing.T, v Value, want string) {
 	}
 }
 
-func mustInt(t *testing.T, v Value, want int) {
+func mustInt(t *testing.T, v Value, want int64) {
 	t.Helper()
 	i, ok := v.(Int)
 	if !ok {
 		t.Fatalf("expected Int, got %T (%v)", v, v)
 	}
-	if int(i) != want {
-		t.Errorf("Int value = %d, want %d", int(i), want)
+	if int64(i) != want {
+		t.Errorf("Int value = %d, want %d", int64(i), want)
 	}
 }
 
 // bigIntFromInt converts a platform-width int to a *big.Int (without going
-// through int64 first — needed when math.MaxInt + 1 is being represented
+// through int64 first — needed when math.MaxInt64 + 1 is being represented
 // as a big.Int on 64-bit, since the int64 intermediate would overflow).
-func bigIntFromInt(n int) *big.Int {
+func bigIntFromInt(n int64) *big.Int {
 	return new(big.Int).SetInt64(int64(n))
 }
 
@@ -162,19 +162,19 @@ func TestNumAddP_Boundary(t *testing.T) {
 	mustInt(t, r, 3)
 
 	// MaxInt+1 promotes
-	r, err = NumAddP(Int(math.MaxInt), Int(1))
+	r, err = NumAddP(Int(math.MaxInt64), Int(1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := new(big.Int).Add(bigIntFromInt(math.MaxInt), big.NewInt(1))
+	expected := new(big.Int).Add(bigIntFromInt(math.MaxInt64), big.NewInt(1))
 	mustBigIntString(t, r, expected.String())
 
 	// MinInt-1 (via add of -1) promotes
-	r, err = NumAddP(Int(math.MinInt), Int(-1))
+	r, err = NumAddP(Int(math.MinInt64), Int(-1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected = new(big.Int).Add(bigIntFromInt(math.MinInt), big.NewInt(-1))
+	expected = new(big.Int).Add(bigIntFromInt(math.MinInt64), big.NewInt(-1))
 	mustBigIntString(t, r, expected.String())
 }
 
@@ -186,18 +186,18 @@ func TestNumSubP_Boundary(t *testing.T) {
 	}
 	mustInt(t, r, 2)
 
-	r, err = NumSubP(Int(math.MinInt), Int(1))
+	r, err = NumSubP(Int(math.MinInt64), Int(1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := new(big.Int).Sub(bigIntFromInt(math.MinInt), big.NewInt(1))
+	expected := new(big.Int).Sub(bigIntFromInt(math.MinInt64), big.NewInt(1))
 	mustBigIntString(t, r, expected.String())
 
-	r, err = NumSubP(Int(0), Int(math.MinInt))
+	r, err = NumSubP(Int(0), Int(math.MinInt64))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected = new(big.Int).Neg(bigIntFromInt(math.MinInt))
+	expected = new(big.Int).Neg(bigIntFromInt(math.MinInt64))
 	mustBigIntString(t, r, expected.String())
 }
 
@@ -210,36 +210,36 @@ func TestNumMulP_Boundary(t *testing.T) {
 	mustInt(t, r, 42)
 
 	// MaxInt*2 promotes
-	r, err = NumMulP(Int(math.MaxInt), Int(2))
+	r, err = NumMulP(Int(math.MaxInt64), Int(2))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := new(big.Int).Mul(bigIntFromInt(math.MaxInt), big.NewInt(2))
+	expected := new(big.Int).Mul(bigIntFromInt(math.MaxInt64), big.NewInt(2))
 	mustBigIntString(t, r, expected.String())
 
 	// MinInt*-1 promotes
-	r, err = NumMulP(Int(math.MinInt), Int(-1))
+	r, err = NumMulP(Int(math.MinInt64), Int(-1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected = new(big.Int).Neg(bigIntFromInt(math.MinInt))
+	expected = new(big.Int).Neg(bigIntFromInt(math.MinInt64))
 	mustBigIntString(t, r, expected.String())
 
 	// (MinInt/2)*3 promotes
-	r, err = NumMulP(Int(math.MinInt/2), Int(3))
+	r, err = NumMulP(Int(math.MinInt64/2), Int(3))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected = new(big.Int).Mul(bigIntFromInt(math.MinInt/2), big.NewInt(3))
+	expected = new(big.Int).Mul(bigIntFromInt(math.MinInt64/2), big.NewInt(3))
 	mustBigIntString(t, r, expected.String())
 }
 
 func TestNumNegP_MinInt(t *testing.T) {
-	r, err := NumNegP(Int(math.MinInt))
+	r, err := NumNegP(Int(math.MinInt64))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := new(big.Int).Neg(bigIntFromInt(math.MinInt))
+	expected := new(big.Int).Neg(bigIntFromInt(math.MinInt64))
 	mustBigIntString(t, r, expected.String())
 
 	// In-range: stays Int
@@ -281,7 +281,7 @@ func TestNumNegP_BigIntStaysBigInt(t *testing.T) {
 
 func TestNumAddP_Delegation(t *testing.T) {
 	// Int + Float → Float (delegates to NumAdd)
-	r, err := NumAddP(Int(math.MaxInt), Float(1.0))
+	r, err := NumAddP(Int(math.MaxInt64), Float(1.0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestNumAddP_Delegation(t *testing.T) {
 	}
 
 	// Float + Int → Float
-	r, err = NumAddP(Float(1.0), Int(math.MaxInt))
+	r, err = NumAddP(Float(1.0), Int(math.MaxInt64))
 	if err != nil {
 		t.Fatal(err)
 	}

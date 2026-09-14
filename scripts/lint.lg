@@ -1,0 +1,124 @@
+;; lint — flag breadcrumb and devlog comments in let-go and Go source.
+;;
+;;   lg scripts/lint.lg [paths...]        (default: pkg scripts)
+;;
+;; A devlog comment narrates the change instead of describing the code: the
+;; shape the code had earlier, what a reviewer asked for, what a later change
+;; will do to it. It reads as current, goes stale the moment the change lands,
+;; and what it carries belongs in the PR body, a design doc, or the issue
+;; tracking the follow-up. See nooga/let-go#835.
+;;
+;; Report-only. It never edits source, and it always exits 0; the phrase list
+;; is a starting point, not a settled gate.
+
+(require 'clojure.string)
+
+;; The phrase list is deliberately small and literal. Every entry names a thing
+;; that can only be true of the change rather than of the code, which is what
+;; keeps the false-positive rate low enough to read the output. Phrases that
+;; also occur in ordinary description — "previously", "originally", "for now" —
+;; are left out on purpose.
+(def devlog-phrases
+  ["used to be" "used to live" "moved from" "moved into"
+   "renamed from" "an earlier version" "before this change" "now lives"
+   "this pr" "this commit" "in the script"
+   "as you asked" "as requested" "per your review" "you were right"
+   "transitional"])
+
+;; Matching is on whole words. Comment prose is normalized to lowercase letters
+;; separated by single spaces and then padded, so a phrase is only found at word
+;; boundaries. lint:ignore — this block quotes the phrases it describes.
+(defn normalize [text]
+  (str " "
+       (clojure.string/trim
+         (clojure.string/replace (clojure.string/lower-case text) #"[^a-z]+" " "))
+       " "))
+
+;; Comment markers that carry meaning to a tool rather than a reader, plus the
+;; licence header every file opens with. Matching inside these is noise.
+(def skip-markers
+  ["copyright" "spdx" "//go:" "lgbgen:" "nolint" "code generated"
+   ;; the escape hatch, for a comment that has to quote the shapes above
+   "lint:ignore"])
+
+(defn lg-file? [p] (clojure.string/ends-with? p ".lg"))
+(defn go-file? [p] (clojure.string/ends-with? p ".go"))
+
+;; comment-body returns the text of a whole-line comment, or nil when the line
+;; is not one. Trailing comments are not scanned: devlog prose is written in
+;; leading comment blocks, and skipping trailing ones avoids having to track
+;; string literals to know whether a marker is really a comment.
+(defn comment-body [line go?]
+  (let [t (clojure.string/trim line)]
+    (if go?
+      (when (clojure.string/starts-with? t "//")
+        (clojure.string/trim (subs t 2)))
+      (when (clojure.string/starts-with? t ";")
+        (clojure.string/trim (clojure.string/replace t ";" ""))))))
+
+(defn skip? [text]
+  (let [low (clojure.string/lower-case text)]
+    (some (fn [m] (clojure.string/includes? low m)) skip-markers)))
+
+;; Consecutive comment lines are one block, so a phrase that wraps across two
+;; lines is still found. A block reports at the line it starts on. Blocks keep
+;; the raw lines alongside the stripped bodies: a directive marker such as
+;; "//go:" includes the comment introducer, so skip? has to see it unstripped.
+(defn comment-blocks [src go?]
+  (let [lines (clojure.string/split src "\n")
+        out   (atom [])
+        cur   (atom nil)]
+    (doseq [pair (map-indexed vector lines)]
+      (let [n    (inc (first pair))
+            raw  (clojure.string/trim (second pair))
+            body (comment-body (second pair) go?)]
+        (if (nil? body)
+          (do (when @cur (swap! out conj @cur)) (reset! cur nil))
+          (if @cur
+            (reset! cur (assoc (assoc @cur :text (str (:text @cur) " " body))
+                               :raw (str (:raw @cur) " " raw)))
+            (reset! cur {:line n :text body :raw raw})))))
+    (when @cur (swap! out conj @cur))
+    @out))
+
+(defn block-hit [block]
+  (when-not (skip? (:raw block))
+    (let [norm (normalize (:text block))]
+      (some (fn [p] (when (clojure.string/includes? norm (str " " p " ")) p))
+            devlog-phrases))))
+
+(defn scan-file [path]
+  (let [go?    (go-file? path)
+        blocks (comment-blocks (slurp path) go?)]
+    (vec (keep (fn [b]
+                 (when-let [p (block-hit b)]
+                   {:file path :line (:line b) :phrase p :text (:text b)}))
+               blocks))))
+
+(defn source-file? [p] (or (lg-file? p) (go-file? p)))
+
+;; Directory walk. os/ls yields bare names, so each level rebuilds the path.
+(defn collect [path]
+  (let [st (os/stat path)]
+    (cond
+      (nil? st) []
+      (:dir? st) (vec (mapcat (fn [n] (collect (str path "/" n))) (os/ls path)))
+      (source-file? path) [path]
+      :else [])))
+
+(def snippet-max 100)
+
+(defn snippet [text]
+  (if (> (count text) snippet-max)
+    (str (subs text 0 (dec snippet-max)) "…")
+    text))
+
+(let [argv   (vec (drop 2 (seq os/args)))
+      paths  (if (empty? argv) ["pkg" "scripts"] argv)
+      files  (vec (mapcat collect paths))
+      hits   (vec (mapcat scan-file files))]
+  (doseq [h hits]
+    (println (str (:file h) ":" (:line h) "  [devlog-comment] \"" (:phrase h) "\""))
+    (println (str "    " (snippet (:text h)))))
+  (println (str (count hits) " finding(s) across " (count files)
+                " file(s). Report only — no source was changed.")))
