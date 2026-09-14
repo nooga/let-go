@@ -2154,7 +2154,7 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Timeline</h2>
-        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts and the baseline sections below are rendered at build time from one committed machine profile, so the page-wide CPU filter does not reach them; use <code>-cpu</code> to cut them.</p>
+        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts are drawn server-side from the whole timeline, so they pool every CPU tier and the page-wide filter cannot reach them; <code>-cpu</code> cuts them at build time. The baseline sections further down are a different case again: they render one machine profile picked at build time, which neither the filter nor <code>-cpu</code> changes.</p>
       </div>
       {{if .Charts}}
       <div class="chart-grid">
