@@ -111,6 +111,101 @@ originally suspected — it is reachable, just not from scarcity.
 The serialization buys ordered snapshots and pays for them by turning a busy
 day on `main` into a day-long backlog.
 
+## 4. Does per-commit sampling buy resolution?
+
+Section 1 leaves the cadence question open on cost alone. This answers it on
+value, using the 474 snapshots on the `perf-data` branch (2026-06-04 to
+2026-09-13).
+
+The test: track how the median per-benchmark delta grows with the separation
+between two snapshots. Data dominated by run-to-run noise stays flat as
+separation grows. Data carrying real signal rises, because more code changed.
+
+| Profile | lag 1 | lag 2 | lag 5 | lag 10 | lag 20 |
+|---|---:|---:|---:|---:|---:|
+| amd64 EPYC 7763 | 1.11% | 1.28% | 1.56% | 1.83% | 2.25% |
+| amd64 EPYC 9V74 | 1.24% | 1.31% | 1.69% | 1.92% | 2.71% |
+| arm64 Apple M1 | 11.01% | 11.28% | 11.44% | 11.97% | 12.03% |
+
+**The arm64 leg is noise-dominated.** Comparing commits 20 apart tells you 9%
+more than comparing adjacent ones, against 103% on amd64. Its resolution is
+set by run-to-run variance rather than by the code under test, so per-commit
+sampling adds little a weekly cadence would not also give. That leg is the
+most expensive thing the repo runs: 133 minutes per leg, 37% of all runner
+time in the section-1 window, and the sole cause of the queue backlog in
+section 3.
+
+The amd64 lanes carry real signal, but at lag 1 the delta sits on the noise
+floor; separation of 10 to 20 commits is where a change clearly clears it.
+That is an argument for sampling coarsely and backfilling on detection, which
+is the workflow header's own stated design.
+
+Two structural findings came out of the same data.
+
+**The amd64 lane is six CPU models, not one.** Snapshots since 2026-06-04
+split as EPYC 7763 (204), EPYC 9V74 (100), Xeon 8370C (21), Xeon 8573C (11),
+Xeon 6973P-C (8), EPYC 9V45 (2). The ratchet partitions by machine profile, so
+these are six series, not one. Pushing per commit therefore does not produce a
+per-commit series in any comparable lane: roughly 60% of snapshots land in the
+top profile and the rest scatter into series too sparse to read.
+
+**No snapshot has an A/A control.** Across all seven profiles, every snapshot
+carries a distinct `captured_at_sha`: 474 snapshots, 474 distinct commits, zero
+repeats. The timeline therefore cannot separate a regression from noise using
+its own data, since it never measures one commit twice on one profile.
+`perf-pr-repeat.yml` exists for exactly that measurement and skipped every job
+in the section-1 window.
+
+## 5. What runs on every PR push
+
+`go.yml` carries all nine required status checks. Over 465 runs
+(2026-08-15 to 2026-09-14) it cost 9,222 runner-minutes.
+
+**One test step is 31% of that.** Sampled across 54 build jobs, "Expensive
+lowering e2e" is 74% of the `build` job, or about 2,850 minutes a month. It
+also grew 32% when `TestCustomMain` joined it, from 352s to 465s average.
+
+Fire rates over the same 465 runs:
+
+| Job | Failures | Minutes | Required |
+|---|---:|---:|---|
+| build | 43 | 3,841 | yes |
+| gogen-diff | 0 | 1,481 | yes |
+| generated-artifacts | 34 | 1,278 | yes |
+| tinygo-wasi-build | 1 | 1,039 | yes |
+| lint | 4 | 385 | yes |
+| race | 1 | 374 | yes |
+| wasip1-build | 0 | 230 | yes |
+| no-http-build | 0 | 228 | yes |
+| gold-differential | 0 | 152 | no |
+| default-deps | 1 | 78 | no |
+| test-location | 1 | 39 | yes |
+| docs-status | 0 | 50 | no |
+| docs-frontmatter | 1 | 47 | no |
+
+A gate that has not fired is not thereby useless, and two of these are worth
+naming. `gogen-diff` costs 25 runner-hours a month on a clean record, but it
+is a cross-engine differential plus parity ledger, not a duplicate of
+`generated-artifacts` — the class of failure it guards against is rare and
+severe. `tinygo-wasi-build` is 17 runner-hours; its toolchain install is only
+9 seconds, so caching does not help, and the 107-second TinyGo build is the
+cost. For both, path-gating preserves the gate; removal does not.
+
+**Path filtering is worth less than it looks.** `go.yml` has no `paths` filter,
+so a docs-only PR runs the full matrix. Measured, that was 21 of 465 runs and
+428 runner-minutes a month, 4.6% of the workflow. Cheap to add, small payoff.
+
+## Ranked by payoff
+
+1. arm64 timeline cadence: about 37% of all runner time, at close to no loss
+   of information (section 4).
+2. amd64 timeline cadence: most of another 24%, at a real but bounded
+   resolution cost.
+3. The "Expensive lowering e2e" step: 47 runner-hours a month, and the open
+   question is whether it needs to run on every push.
+4. `gogen-diff` path-gating: 25 runner-hours a month, gate preserved.
+5. A docs path filter on `go.yml`: 7 runner-hours a month.
+
 ## What this leaves open
 
 Trade-offs for the team, not conclusions:
