@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -164,6 +165,9 @@ type PageData struct {
 	// ({date, cpu, bench, metric, value} rows) at load time — written as a
 	// separate explorer.json rather than inlined, so the HTML stays small.
 	ExplorerURL string
+	// ViewerURL links the summary to the Timeline explorer. Empty when -viewer-out
+	// was not passed, so the link is not rendered pointing at a page that is absent.
+	ViewerURL string
 }
 
 // explorerDatum is one tidy row: a single metric of one benchmark at one
@@ -314,6 +318,9 @@ func main() {
 		explorerURL    = flag.String("explorer-url", "explorer.json", "URL the page fetches the explorer data from (relative to the page = same-origin; or an absolute https URL, e.g. raw.githubusercontent of the perf-data branch)")
 		logoPath       = flag.String("logo", "meta/logo.svg", "logo SVG to embed")
 		cpuFilter      = flag.String("cpu", "", "keep only timeline snapshots whose machine cpu_model contains this substring (CI runs land on ≥2 CPU tiers whose ratio_to_anchor doesn't normalize across them, so a mixed timeline zig-zags ~2x; filtering to one tier gives a clean series). Empty = all.")
+		viewerOut      = flag.String("viewer-out", "", "also write the Timeline explorer page here (e.g. wasm/static/perf/explore/index.html). Empty = do not emit it.")
+		viewerDataOut  = flag.String("viewer-data-out", "", "path for the explorer's chart data JSON (default: timeline-charts.json next to -viewer-out)")
+		viewerDataURL  = flag.String("viewer-data-url", "timeline-charts.json", "URL the explorer fetches its chart data from, relative to that page")
 		anchorName     = flag.String("anchor", "", "historical baseline to compare against, by file stem (e.g. 'v1.8.0'); empty = newest. Lets the page swap anchors — e.g. a fresh same-machine baseline for the modern suite vs the legacy v1.8.0 (Apple M3, pre-IR) reference.")
 	)
 	flag.Parse()
@@ -336,8 +343,17 @@ func main() {
 		die("load logo: %v", err)
 	}
 
+	if *viewerOut != "" {
+		if err := writeViewer(*viewerOut, *viewerDataOut, *viewerDataURL, *outPath, timeline, logo); err != nil {
+			die("write timeline explorer: %v", err)
+		}
+	}
+
 	page := buildPage(current, reference, referenceName, timeline, logo)
 	page.ExplorerURL = *explorerURL
+	if *viewerOut != "" {
+		page.ViewerURL = relLink(*outPath, *viewerOut)
+	}
 	html, err := renderPage(page)
 	if err != nil {
 		die("render page: %v", err)
@@ -1530,13 +1546,288 @@ func formatBar(value float64) string {
 	return fmt.Sprintf("%.2f", value)
 }
 
-const pageTemplate = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Title}} - let-go perf</title>
-  <style>
+// pageStyle is shared verbatim by every page this command emits, so a second
+// page inherits the design system instead of approximating it.
+// ---------------------------------------------------------------------------
+// Timeline explorer: the same timeline the charts above are baked from, handed
+// to the browser so the reader can slice it per CPU tier.
+//
+// The charts on the main page are server-rendered SVG over the whole timeline,
+// so they pool every tier (#597); re-rendering them client-side is what lets
+// the tier filter reach them.
+//
+// This emits its own payload rather than reusing explorer.json: that file
+// carries every metric for every benchmark because the explorer needs it,
+// while a chart needs one metric across a handful of series. On the
+// 2026-09-13 timeline that is 29 MB against ~270 KB.
+
+// viewerSeries is one plotted line: every point across every CPU tier, with the
+// tier on each point so the browser can filter without a second request.
+type viewerSeries struct {
+	Label  string        `json:"label"`
+	Color  string        `json:"color"`
+	Points []viewerPoint `json:"pts"`
+}
+
+type viewerPoint struct {
+	Date string `json:"d"`
+	CPU  string `json:"cpu"`
+	// Go toolchain that produced the measurement. A bump moves every timing
+	// number — the 1.26.4 to 1.26.5 patch bump alone shifted the geomean 3-4%
+	// per tier — so pooling two toolchains mixes two populations the same way
+	// pooling two CPU tiers does.
+	Go    string  `json:"go"`
+	Value float64 `json:"v"`
+	Low   float64 `json:"lo"`
+	High  float64 `json:"hi"`
+}
+
+type viewerChart struct {
+	Title    string         `json:"title"`
+	Subtitle string         `json:"subtitle"`
+	Unit     string         `json:"unit"`
+	Relative bool           `json:"relative"`
+	Series   []viewerSeries `json:"series"`
+}
+
+type viewerData struct {
+	CPUs   []string      `json:"cpus"`
+	Gos    []string      `json:"gos"`
+	Charts []viewerChart `json:"charts"`
+}
+
+// viewerSeriesSpec names a series by the benchmark keys to try, newest first,
+// mirroring chartSeriesSpec: a renamed benchmark stays one logical line
+// instead of splitting into two half-length ones.
+type viewerSeriesSpec struct {
+	label string
+	color string
+	names []string
+}
+
+// buildViewerData assembles the explorer payload from the timeline.
+func buildViewerData(timeline []Snapshot) viewerData {
+	const (
+		suite = "github.com/nooga/let-go/test.BenchmarkClojureTestSuite"
+		run   = "github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun"
+		ir    = "github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile"
+	)
+	// Variant meanings, from test/zz_bench_test.go:
+	//   bytecode     LG_SUITE_IR unset, untagged     — no IR at all
+	//   ir_bytecode  LG_SUITE_IR=1, untagged         — IR passes run as bytecode
+	//   aot_native   LG_SUITE_IR=1, -tags gogen_ir   — IR passes run as native Go
+	// so aot_native and IRCompile's gogen_ir are the same build, each named for
+	// what it measures.
+	specs := []struct {
+		title, subtitle string
+		unit            string
+		// metric picks the number plotted; sample picks it out of a retained
+		// sample for the min/max band. relative plots % against the window
+		// start, matching the summary page's timing charts; the deterministic
+		// metrics are plotted absolute because a percentage of an allocation
+		// count hides the thing you want to see.
+		metric   func(BenchmarkEntry) float64
+		sample   func(BenchmarkSample) float64
+		relative bool
+		series   []viewerSeriesSpec
+	}{
+		{"End-to-end suite", "Execution wall time. Lower is better.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+		{"Suite, compile + run", "Compile and execution together - what each mode costs end to end.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"total_bytecode", "#8a5a9e", []string{run + " [total_bytecode]"}},
+				{"total_ir_bytecode", "#245c73", []string{run + " [total_ir_bytecode]"}},
+				{"total_aot_native", "#167a48", []string{run + " [total_aot_native]"}},
+			}},
+		{"IR compile", "Compile time through the IR pipeline. Lower is better.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"bytecode", "#245c73", []string{ir + " [bytecode]"}},
+				{"gogen_ir", "#167a48", []string{ir + " [gogen_ir]"}},
+			}},
+		// The deterministic metrics. These do not depend on the host, so a tier
+		// split here would mean something quite different from one on a timing
+		// chart - which is exactly why they are worth having per tier.
+		{"Suite allocations", "Allocations per op. Machine-independent, so tiers should agree.", "allocs/op",
+			func(e BenchmarkEntry) float64 { return float64(e.AllocsPerOp) },
+			func(x BenchmarkSample) float64 { return float64(x.AllocsPerOp) }, false,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+		{"Suite memory", "Heap bytes per op. Machine-independent, so tiers should agree.", "B/op",
+			func(e BenchmarkEntry) float64 { return float64(e.BytesPerOp) },
+			func(x BenchmarkSample) float64 { return float64(x.BytesPerOp) }, false,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+	}
+
+	cpus := map[string]struct{}{}
+	out := viewerData{}
+	if gm, ok := viewerGeomean(timeline); ok {
+		out.Charts = append(out.Charts, gm)
+	}
+	for _, spec := range specs {
+		chart := viewerChart{Title: spec.title, Subtitle: spec.subtitle, Unit: spec.unit, Relative: spec.relative}
+		for _, ss := range spec.series {
+			// Non-nil: an empty slice marshals as [] where a nil marshals as
+			// null, and the page reads .length on it.
+			s := viewerSeries{Label: ss.label, Color: ss.color, Points: []viewerPoint{}}
+			for _, snap := range timeline {
+				entry, ok := lookupEntry(snap.Baseline.Benchmarks, ss.names)
+				if !ok {
+					continue
+				}
+				value := spec.metric(entry)
+				if value <= 0 {
+					continue
+				}
+				lo, hi, hasBand := sampleSpread(entry.Samples, spec.sample)
+				if !hasBand {
+					lo, hi = value, value
+				}
+				cpu := shortCPUModel(snap.Baseline.Machine.CPUModel)
+				cpus[cpu] = struct{}{}
+				s.Points = append(s.Points, viewerPoint{
+					// RFC3339 verbatim: Date.parse only guarantees that format.
+					// formatDate's "2006-01-02 15:04 UTC" is non-standard and
+					// JavaScriptCore rejects it outright, so a display string
+					// here renders an empty page in Safari.
+					Date: snap.Baseline.CapturedAt, CPU: cpu,
+					Go:    snap.Baseline.Machine.GoVersion,
+					Value: value, Low: lo, High: hi,
+				})
+			}
+			// A series with no points draws nothing and only clutters the
+			// legend; a chart with no series at all is worse, because it
+			// renders an empty card for data this timeline does not have.
+			if len(s.Points) > 0 {
+				chart.Series = append(chart.Series, s)
+			}
+		}
+		if len(chart.Series) > 0 {
+			out.Charts = append(out.Charts, chart)
+		}
+	}
+	// Derive the tier list from what is actually plotted, geomean included.
+	// Deriving it from the named specs alone hides a tier that appears only in
+	// the aggregate: it cannot be selected or excluded, and "All (n)" then
+	// plots more tiers than it counts.
+	gos := map[string]struct{}{}
+	for _, ch := range out.Charts {
+		for _, ser := range ch.Series {
+			for _, pt := range ser.Points {
+				cpus[pt.CPU] = struct{}{}
+				if pt.Go != "" {
+					gos[pt.Go] = struct{}{}
+				}
+			}
+		}
+	}
+	for g := range gos {
+		out.Gos = append(out.Gos, g)
+	}
+	sort.Strings(out.Gos)
+	for c := range cpus {
+		out.CPUs = append(out.CPUs, c)
+	}
+	sort.Strings(out.CPUs)
+	return out
+}
+
+// viewerGeomean builds one aggregate line from a FIXED basket of benchmarks.
+//
+// Geometric mean, because these are anchor-relative ratios: an arithmetic mean
+// of ratios is dominated by whichever benchmark carries the largest number and
+// is not invariant to which way up the ratio is written. The basket is fixed to
+// benchmarks present in EVERY snapshot, because a geomean over a growing set
+// moves when the set moves, which would read as a performance change that never
+// happened.
+func viewerGeomean(timeline []Snapshot) (viewerChart, bool) {
+	if len(timeline) == 0 {
+		return viewerChart{}, false
+	}
+	var basket map[string]struct{}
+	for _, snap := range timeline {
+		present := map[string]struct{}{}
+		for name, e := range snap.Baseline.Benchmarks {
+			if e.RatioToAnchor > 0 {
+				present[name] = struct{}{}
+			}
+		}
+		if len(present) == 0 {
+			return viewerChart{}, false
+		}
+		if basket == nil {
+			basket = present
+			continue
+		}
+		for name := range basket {
+			if _, ok := present[name]; !ok {
+				delete(basket, name)
+			}
+		}
+	}
+	if len(basket) < 2 {
+		return viewerChart{}, false
+	}
+	s := viewerSeries{Label: "geomean", Color: "#8a5a9e", Points: []viewerPoint{}}
+	for _, snap := range timeline {
+		sum := 0.0
+		for name := range basket {
+			sum += math.Log(snap.Baseline.Benchmarks[name].RatioToAnchor)
+		}
+		g := math.Exp(sum / float64(len(basket)))
+		s.Points = append(s.Points, viewerPoint{
+			// RFC3339 verbatim, as above: Date.parse only guarantees that.
+			Date:  snap.Baseline.CapturedAt,
+			CPU:   shortCPUModel(snap.Baseline.Machine.CPUModel),
+			Go:    snap.Baseline.Machine.GoVersion,
+			Value: g, Low: g, High: g,
+		})
+	}
+	return viewerChart{
+		Title:    fmt.Sprintf("Overall (geomean of %d benchmarks)", len(basket)),
+		Subtitle: "One line for the whole suite, over benchmarks present in every snapshot.",
+		Unit:     "ratio",
+		Relative: true,
+		Series:   []viewerSeries{s},
+	}, true
+}
+
+// shortCPUModel collapses a CPU model string to a short tag. Mirrors
+// PERF.shortCPU in the page script so server and browser agree on tier names.
+func shortCPUModel(s string) string {
+	if s == "" {
+		return "(unknown)"
+	}
+	t := cpuNoiseRe.ReplaceAllString(s, " ")
+	if m := cpuFamilyRe.FindStringSubmatch(t); m != nil {
+		t = m[1]
+	}
+	return strings.TrimSpace(spaceRunRe.ReplaceAllString(t, " "))
+}
+
+var (
+	cpuNoiseRe  = regexp.MustCompile(`(?i)\(R\)|\(TM\)|Processor|Platinum|\d+-Core|Core|CPU.*$`)
+	cpuFamilyRe = regexp.MustCompile(`(?i)(EPYC\s+\w+|Xeon[\s\w]*?\d{3,}\w*|Apple\s+M\w+|Ryzen\s+\w+)`)
+	spaceRunRe  = regexp.MustCompile(`\s+`)
+)
+
+const pageStyle = `
     :root {
       color-scheme: light;
       --bg: #f7f7f4;
@@ -2000,7 +2291,369 @@ const pageTemplate = `<!doctype html>
     .spark-tip .tip-r span:nth-of-type(1) { margin-left: auto; }
     .spark-tip .tip-r .good { color: #7fdca4; }
     .spark-tip .tip-r .bad { color: #f3a3a3; }
-    .spark-tip .tip-r.muted { opacity: 0.6; }
+    .spark-tip .tip-r.muted { opacity: 0.6; }`
+
+// viewerStyle is the only CSS the explorer adds on top of pageStyle: controls
+// the summary page has no equivalent for.
+// relLink builds the href from one emitted page to another. Both are local
+// paths at build time and the pages are served from the same tree, so a path
+// relative to the linking page is what the browser needs.
+//
+// It links to the file, not the directory. Assuming an index.html and emitting
+// a bare "dir/" breaks every layout except the nested one the Makefile happens
+// to use — `-out summary.html -viewer-out timeline.html` would link to "./".
+// A server that serves index.html for a directory still resolves the explicit
+// filename, so naming it costs nothing and is right in both layouts.
+func relLink(fromPage, toPage string) string {
+	rel, err := filepath.Rel(filepath.Dir(fromPage), toPage)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+// writeViewer renders the Timeline explorer page and its chart payload.
+func writeViewer(outPath, dataPath, dataURL, summaryPath string, timeline []Snapshot, logo string) error {
+	if dataPath == "" {
+		dataPath = filepath.Join(filepath.Dir(outPath), "timeline-charts.json")
+	}
+	data := buildViewerData(timeline)
+	blob, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal chart data: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dataPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(dataPath, blob, 0o644); err != nil {
+		return err
+	}
+
+	tpl, err := template.New("viewer").Parse(viewerTemplate)
+	if err != nil {
+		return fmt.Errorf("parse viewer template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, struct {
+		LogoDataURI   template.URL
+		ViewerDataURL string
+		SummaryURL    string
+		SnapshotCount int
+	}{template.URL(logo), dataURL, relLink(outPath, summaryPath), len(timeline)}); err != nil {
+		return fmt.Errorf("render viewer: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s (%d charts, %d CPU tiers)\n", outPath, len(data.Charts), len(data.CPUs))
+	fmt.Fprintf(os.Stderr, "  explorer chart data -> %s (%d KB)\n", dataPath, len(blob)/1024)
+	return nil
+}
+
+const viewerStyle = `
+    .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: 0.9rem; }
+    .controls > span, .controls > label { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; }
+    .chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+    .chips button, .legend button {
+      font: inherit; font-size: 0.78rem; color: inherit; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.6rem; cursor: pointer;
+    }
+    .chips button:hover, .legend button:hover { border-color: var(--ink); }
+    .chips button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .chips button.all { font-weight: 600; }
+    .legend button { display: inline-flex; align-items: center; gap: 0.3rem; border-color: transparent; }
+    .legend button[aria-pressed="false"] { opacity: 0.45; text-decoration: line-through; }
+    .legend button[aria-pressed="false"] .swatch { background: var(--muted); }
+    .count { font-size: 0.78rem; color: var(--muted); }
+    /* Hold the chart's box when nothing is drawn, so the legend buttons do not
+       jump out from under the pointer that just hid the last series. */
+    .chart .empty { aspect-ratio: 520 / 210; display: grid; place-items: center; color: var(--muted); font-style: italic; }
+`
+
+const viewerTemplate = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timeline explorer - let-go perf</title>
+  <style>` + pageStyle + viewerStyle + `
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <div class="topline">
+        <div class="brand">
+          {{if .LogoDataURI}}<img alt="" src="{{.LogoDataURI}}">{{end}}
+          <span>let-go perf</span>
+        </div>
+        <nav class="links" aria-label="Links">
+          <a href="{{.SummaryURL}}">Summary</a>
+          <a href="https://github.com/nooga/let-go">GitHub</a>
+          <a href="https://github.com/nooga/let-go/blob/main/docs/perf/ratchet.md">Ratchet docs</a>
+        </nav>
+      </div>
+      <h1>Timeline explorer</h1>
+      <p class="lede">The summary page's timeline charts, redrawn in the browser so they can be cut to one CPU tier,
+        plus the compile+run totals it does not plot. {{.SnapshotCount}} snapshots. <code>ratio_to_anchor</code> only normalizes within a CPU model,
+        so a chart pooling tiers shows runner assignment as much as code: select tiers below to read a real trend.</p>
+      <div class="controls">
+        <span>CPU <span id="cpu" class="chips"></span></span>
+        <span id="gowrap">Go <span id="go" class="chips"></span></span>
+        <label title="Keep the y-axis fixed to all series, so toggling one does not move the scale."><input type="checkbox" id="lock"> Lock scale</label>
+        <span class="count" id="count"></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <div class="chart-grid" id="charts">
+        <div class="empty">Loading timeline data…</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <p>Rendered by <code>cmd/perf-page</code> from the <code>perf-data</code> timeline.
+      The <a href="{{.SummaryURL}}">summary page</a> carries the ratchet baseline and release comparison.</p>
+  </footer>
+
+<script>
+const VIEWER_URL = {{.ViewerDataURL}};
+const W=520,H=210,L=46,R=502,T=22,B=176;
+let DATA=null, lockScale=false, urlCPUs=[], urlGos=[];
+// Selected tiers. Every tier selected is the default and writes no ?cpu=, so a
+// tier added to the data later shows up rather than being excluded by an old link.
+const sel=new Set();
+// Selected Go toolchains, same contract as sel: all selected is the default and
+// writes no ?go=.
+const selGo=new Set();
+// Hidden series, keyed "<chart title>::<series label>" — series labels repeat
+// across charts, so a global key would toggle two unrelated lines at once.
+const hidden=new Set();
+const allSelected=()=>DATA&&sel.size===DATA.cpus.length;
+const allGoSelected=()=>DATA&&(!DATA.gos.length||selGo.size===DATA.gos.length);
+const visible=p=>(allSelected()||sel.has(p.cpu))&&(allGoSelected()||selGo.has(p.go));
+
+function readURL(){
+  const q=new URLSearchParams(location.search);
+  urlCPUs=(q.get("cpu")||"").split(",").map(x=>x.trim()).filter(Boolean);
+  urlGos=(q.get("go")||"").split(",").map(x=>x.trim()).filter(Boolean);
+  lockScale=q.get("lock")==="1";
+  (q.get("hide")||"").split(",").filter(Boolean).forEach(k=>hidden.add(k));
+}
+// Every control lives in the query string, so a view is a link rather than a
+// description: "only on 9V74, and only once you drop gogen_ir" becomes a URL.
+function syncURL(){
+  const u=new URL(location.href), q=u.searchParams;
+  allSelected()?q.delete("cpu"):q.set("cpu",[...sel].join(","));
+  allGoSelected()?q.delete("go"):q.set("go",[...selGo].join(","));
+  lockScale?q.set("lock","1"):q.delete("lock");
+  hidden.size?q.set("hide",[...hidden].join(",")):q.delete("hide");
+  history.replaceState(null,"",u);
+}
+
+fetch(VIEWER_URL).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+  .then(d=>{DATA=d;readURL();initControls();draw();})
+  .catch(e=>{document.getElementById("charts").innerHTML=
+    '<div class="empty">Could not load timeline data ('+e+').</div>';});
+
+function initControls(){
+  // Tiers named in ?cpu= that this payload does not carry are dropped; if that
+  // leaves nothing, fall back to every tier rather than an empty page.
+  const known=urlCPUs.filter(c=>DATA.cpus.includes(c));
+  (known.length?known:DATA.cpus).forEach(c=>sel.add(c));
+  const knownGo=urlGos.filter(g=>DATA.gos.includes(g));
+  (knownGo.length?knownGo:DATA.gos).forEach(g=>selGo.add(g));
+  renderCPU(); renderGo();
+  const lock=document.getElementById("lock");
+  lock.checked=lockScale;
+  lock.onchange=e=>{lockScale=e.target.checked;syncURL();draw();};
+}
+
+function renderCPU(){
+  const host=document.getElementById("cpu");
+  host.innerHTML="";
+  const all=document.createElement("button");
+  all.type="button"; all.className="all"; all.textContent="All ("+DATA.cpus.length+")";
+  all.setAttribute("aria-pressed",String(allSelected()));
+  all.onclick=()=>{DATA.cpus.forEach(c=>sel.add(c));renderCPU();syncURL();draw();};
+  host.append(all);
+  DATA.cpus.forEach(c=>{
+    const b=document.createElement("button");
+    b.type="button"; b.textContent=c;
+    b.setAttribute("aria-pressed",String(sel.has(c)));
+    b.title="Click to toggle this tier. Alt-click to show only this tier.";
+    b.onclick=e=>{
+      if(e.altKey){ sel.clear(); sel.add(c); }
+      else { sel.has(c)?sel.delete(c):sel.add(c); }
+      renderCPU(); syncURL(); draw();
+    };
+    host.append(b);
+  });
+}
+
+function renderGo(){
+  const wrap=document.getElementById("gowrap"), host=document.getElementById("go");
+  // One toolchain is nothing to choose between; the row would be noise.
+  if(!DATA.gos||DATA.gos.length<2){ wrap.hidden=true; return; }
+  wrap.hidden=false; host.innerHTML="";
+  const all=document.createElement("button");
+  all.type="button"; all.className="all"; all.textContent="All ("+DATA.gos.length+")";
+  all.setAttribute("aria-pressed",String(allGoSelected()));
+  all.onclick=()=>{DATA.gos.forEach(g=>selGo.add(g));renderGo();syncURL();draw();};
+  host.append(all);
+  DATA.gos.forEach(g=>{
+    const b=document.createElement("button");
+    b.type="button"; b.textContent=g.replace(/^go/,"");
+    b.setAttribute("aria-pressed",String(selGo.has(g)));
+    b.title="Click to toggle "+g+". Alt-click to show only it. A toolchain bump moves every timing number, so pooling two mixes two populations.";
+    b.onclick=e=>{
+      if(e.altKey){ selGo.clear(); selGo.add(g); }
+      else { selGo.has(g)?selGo.delete(g):selGo.add(g); }
+      renderGo(); syncURL(); draw();
+    };
+    host.append(b);
+  });
+}
+
+// % change against the first point in the visible window, matching the
+// relative charts on the summary page. Recomputed per filter: the window start
+// moves when the tier selection moves, and that is the intent.
+// Relative charts plot % against the window start, matching the summary page.
+// Absolute charts (allocs, bytes) plot the raw number: a percentage of an
+// allocation count hides the very thing you are looking at.
+function project(pts,rel){
+  if(!pts.length) return [];
+  if(!rel) return pts.map(p=>({...p, r:p.v, rlo:p.lo, rhi:p.hi}));
+  const base=pts[0].v;
+  if(!base) return pts.map(p=>({...p, r:0, rlo:0, rhi:0}));
+  return pts.map(p=>({...p, r:(p.v-base)/base*100, rlo:(p.lo-base)/base*100, rhi:(p.hi-base)/base*100}));
+}
+const fmtVal=(v,rel)=> rel ? v.toFixed(1)+"%"
+  : Math.abs(v)>=1000 ? Math.round(v).toLocaleString() : (+v.toFixed(2)).toString();
+
+function draw(){
+  const host=document.getElementById("charts");
+  host.innerHTML="";
+  let shown=0,total=0;
+  DATA.charts.forEach(ch=>{
+    const series=ch.series.map(s=>{
+      const off=hidden.has(ch.title+"::"+s.label);
+      // A payload written by an older build can carry pts:null.
+      const src=s.pts||[];
+      const pts=(allSelected()&&allGoSelected())?src:src.filter(visible);
+      if(!off){ total+=src.length; shown+=pts.length; }
+      return {...s, off, pts:project(pts,ch.relative)};
+    });
+    host.append(chartEl(ch,series));
+  });
+  const n=sel.size;
+  const label = n===0 ? "no tiers selected" : allSelected() ? "all "+n+" tiers"
+              : n===1 ? [...sel][0] : n+" tiers";
+  const goLabel = allGoSelected() ? "" : " · go"+[...selGo].map(g=>g.replace(/^go/,"")).join("/");
+  document.getElementById("count").textContent =
+    (allSelected()&&allGoSelected())
+      ? total.toLocaleString()+" points across "+label
+      : shown.toLocaleString()+" of "+total.toLocaleString()+" points — "+label+goLabel;
+}
+
+const day=t=>String(t).slice(0,10);
+function chartEl(ch,series){
+  const art=document.createElement("article"); art.className="chart";
+  const head='<div class="chart-head"><h3>'+esc(ch.title)+'</h3></div><p>'+esc(ch.subtitle)+
+    (lockScale?" <b>Scale locked</b> to all series.":"")+'</p>';
+  const vis=series.filter(s=>!s.off);
+  // Unlocked: extent from the visible series, so hiding a noisy line makes the
+  // rest readable. Locked: extent from all of them, so the frame holds still
+  // while you toggle. Either way it is taken under the current tier selection —
+  // locking across tiers would squash one tier into the pooled spread that the
+  // filter exists to remove.
+  const extent=(lockScale?series:vis).flatMap(s=>s.pts);
+  const visPts=vis.flatMap(s=>s.pts);
+  if(!visPts.length||!extent.length){
+    art.innerHTML=head+'<div class="empty">'+
+      (series.some(s=>s.off)?"All series hidden — re-enable one below."
+                           :"No points for the selected tiers.")+'</div>'+
+      legendEl(ch.title,series,"click a series to hide it",ch.relative);
+    return art;
+  }
+  const lo=Math.min(...extent.map(p=>p.rlo)), hi=Math.max(...extent.map(p=>p.rhi));
+  const pad=(hi-lo)*0.08||1, yMin=lo-pad, yMax=hi+pad;
+  const times=visPts.map(p=>+new Date(p.d));
+  const tMin=Math.min(...times), tMax=Math.max(...times);
+  const x=t=>L+((+new Date(t)-tMin)/((tMax-tMin)||1))*(R-L);
+  const y=v=>B-((v-yMin)/((yMax-yMin)||1))*(B-T);
+
+  let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(ch.title)+' trend chart">';
+  // The 0% guide only means something on a relative chart.
+  if(ch.relative && yMin<=0 && yMax>=0){
+    svg+='<line class="ref-line" x1="'+L+'" y1="'+y(0).toFixed(2)+'" x2="'+R+'" y2="'+y(0).toFixed(2)+'"></line>';
+  }
+  svg+='<line class="axis" x1="'+L+'" y1="'+T+'" x2="'+L+'" y2="'+B+'"></line>';
+  svg+='<line class="axis" x1="'+L+'" y1="'+B+'" x2="'+R+'" y2="'+B+'"></line>';
+  svg+='<text class="axis-label" x="42" y="26" text-anchor="end">'+fmtVal(yMax,ch.relative)+'</text>';
+  svg+='<text class="axis-label" x="42" y="173" text-anchor="end">'+fmtVal(yMin,ch.relative)+'</text>';
+  for(let i=0;i<5;i++){
+    const t=tMin+(tMax-tMin)*i/4, px=x(new Date(t));
+    svg+='<line class="tick" x1="'+px.toFixed(2)+'" y1="'+B+'" x2="'+px.toFixed(2)+'" y2="'+(B+3)+'"></line>';
+    svg+='<text class="tick-label" x="'+px.toFixed(2)+'" y="188" text-anchor="middle">'+
+         new Date(t).toISOString().slice(5,10)+'</text>';
+  }
+  vis.forEach(s=>{
+    if(!s.pts.length) return;
+    const up=s.pts.map(p=>x(p.d).toFixed(2)+","+y(p.rhi).toFixed(2));
+    const dn=s.pts.slice().reverse().map(p=>x(p.d).toFixed(2)+","+y(p.rlo).toFixed(2));
+    svg+='<path class="chart-band" fill="'+s.color+'" d="M'+up.concat(dn).join("L")+'Z"></path>';
+    svg+='<path class="chart-line" stroke="'+s.color+'" d="M'+
+         s.pts.map(p=>x(p.d).toFixed(2)+","+y(p.r).toFixed(2)).join("L")+'"></path>';
+    s.pts.forEach(p=>{
+      svg+='<circle class="point" fill="'+s.color+'" cx="'+x(p.d).toFixed(2)+'" cy="'+y(p.r).toFixed(2)+
+           '" r="2.4"><title>'+esc(day(p.d)+" · "+p.cpu+(p.go?" · "+p.go:"")+"\n"+s.label+": "+fmtVal(p.r,ch.relative))+'</title></circle>';
+    });
+  });
+  svg+='</svg>';
+  const span=visPts.length?(day(visPts[0].d)+" to "+day(visPts[visPts.length-1].d)):"";
+  art.innerHTML=head+svg+legendEl(ch.title,series,
+    (ch.relative?"% vs window start":ch.unit)+" · "+span+" · click a series to hide it", ch.relative);
+  return art;
+}
+
+// The legend doubles as the series toggle: it is already the key, and a
+// separate row of checkboxes would say the same thing twice.
+function legendEl(title,series,meta,rel){
+  return '<div class="chart-foot"><p class="chart-meta">'+esc(meta||"")+'</p><div class="legend">'+
+    series.map(s=>'<button type="button" data-key="'+esc(title+"::"+s.label)+
+      '" aria-pressed="'+(!s.off)+'"><i class="swatch" style="--series: '+s.color+'"></i>'+
+      esc(s.label)+" ("+s.pts.length+")</button>").join("")+
+    (rel?'<span><i class="swatch dash"></i>window start = 0%</span>':"")+'</div></div>';
+}
+
+document.addEventListener("click",e=>{
+  const b=e.target.closest(".legend button"); if(!b) return;
+  const k=b.dataset.key;
+  hidden.has(k)?hidden.delete(k):hidden.add(k);
+  syncURL(); draw();
+});
+
+function esc(s){ return String(s).replace(/[&<>"']/g,c=>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+</script>
+</body>
+</html>
+`
+
+const pageTemplate = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} - let-go perf</title>
+  <style>` + pageStyle + `
   </style>
 </head>
 <body>
@@ -2013,7 +2666,8 @@ const pageTemplate = `<!doctype html>
         </div>
         <nav class="links" aria-label="Links">
           <a href="../">WASM repl</a>
-          <a href="https://github.com/nooga/let-go">GitHub</a>
+          {{if .ViewerURL}}<a href="{{.ViewerURL}}">Timeline explorer</a>
+          {{end}}<a href="https://github.com/nooga/let-go">GitHub</a>
           <a href="https://github.com/nooga/let-go/blob/main/docs/perf/ratchet.md">Ratchet docs</a>
         </nav>
       </div>
