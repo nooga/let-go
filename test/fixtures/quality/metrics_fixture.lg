@@ -1,0 +1,20 @@
+(ns fixture.metrics)
+
+;; cc = 1
+(defn linear [a b] (+ a b))
+
+;; cc = 1 + if(1) + and(2 extra operands) + cond(3 clauses beyond first) + case(1 beyond first) = 8
+(defn branchy [x]
+  (if (and (pos? x) (< x 10) (odd? x))
+    (cond (= x 1) :one
+          (= x 3) :three
+          (= x 5) :five
+          :else :other)
+    (case x 0 :zero :neg)))
+
+;; cc = 1 + loop(1) + when(1) + catch(1) = 4
+(defn loopy [xs]
+  (loop [xs xs acc 0]
+    (when (seq xs)
+      (let [x (try (first xs) (catch Throwable e acc))]
+        (recur (rest xs) (+ acc x))))))

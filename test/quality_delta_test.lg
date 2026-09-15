@@ -1,0 +1,226 @@
+(ns test.quality-delta-test
+  (:require
+   [clojure.string :as str]
+   [quality :as q]
+   [quality.diff :as diff]
+   [quality.report :as report]
+   [quality.touched :as touched]
+   [test :refer :all]))
+
+;; PR mode's pure half: two measured results in, the delta surface out.
+;; A delta is signed and POSITIVE MEANS WORSE, since every term is
+;; lower-is-better.
+
+(defn- result [debt terms files]
+  {:debt debt :terms terms :files files})
+
+(def ^:private base
+  (result 0.300 {:erosion 0.40 :uncovered 0.50 :verbosity 0.10 :dead 0.0
+                 :defects 0.20 :testing 0.10 :efficiency 0.30}
+          [{:path "a.lg" :debt 0.20 :definitions [{:name 'big :cc 9}]}
+           {:path "b.lg" :debt 0.40 :definitions [{:name 'calm :cc 3}]}]))
+
+(def ^:private head-worse
+  (result 0.340 {:erosion 0.55 :uncovered 0.50 :verbosity 0.10 :dead 0.0
+                 :defects 0.20 :testing 0.10 :efficiency 0.30}
+          [{:path "a.lg" :debt 0.45 :definitions [{:name 'big :cc 14}]}
+           {:path "b.lg" :debt 0.39 :definitions [{:name 'calm :cc 3}]}]))
+
+(deftest a-regression-reports-a-positive-composite-delta
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")]
+    (is (> (:debt-delta d) 0))
+    (is (< 0.039 (:debt-delta d) 0.041))
+    ;; the term that moved is named, and only it
+    (let [moved (filter (fn [t] (and (:delta t) (> (abs (:delta t)) 0.0001))) (:terms d))]
+      (is (= [:erosion] (map :term moved)))
+      (is (< 0.149 (:delta (first moved)) 0.151)))))
+
+(deftest the-responsible-file-is-first
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")]
+    (is (= "a.lg" (:path (first (:files d)))))
+    (is (> (:delta (first (:files d))) 0))
+    ;; the file that improved is last, with a negative delta
+    (is (= "b.lg" (:path (last (:files d)))))
+    (is (< (:delta (last (:files d))) 0))))
+
+(deftest added-and-removed-files-are-not-fabricated-zeroes
+  (let [d (q/compare-results
+           (result 0.3 {} [{:path "gone.lg" :debt 0.5 :definitions []}])
+           (result 0.3 {} [{:path "new.lg" :debt 0.1 :definitions []}])
+           "BASE" "HEAD")
+        by-path (into {} (map (fn [f] [(:path f) f]) (:files d)))]
+    (is (= :removed (:status (get by-path "gone.lg"))))
+    (is (nil? (:head (get by-path "gone.lg"))))
+    (is (= :added (:status (get by-path "new.lg"))))
+    (is (nil? (:base (get by-path "new.lg"))))
+    ;; a missing side has no delta rather than a made-up one
+    (is (nil? (:delta (get by-path "new.lg"))))))
+
+(deftest definitions-crossing-the-complexity-threshold-are-reported
+  ;; Crossings are what actually move erosion, so they are the actionable
+  ;; half of a delta: `big` went from 9 to 14, i.e. across 10.
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")
+        c (first (:crossings d))]
+    (is (= 1 (count (:crossings d))))
+    (is (= 'big (:name c)))
+    (is (= :rose (:direction c)))
+    (is (= 14 (:cc c)))
+    (is (= 9 (:was c)))))
+
+(deftest delta-text-states-its-direction-and-signs-every-number
+  (let [out (report/delta-text (q/compare-results base head-worse "BASE" "HEAD"))]
+    (is (str/includes? out "positive delta means WORSE"))
+    (is (str/includes? out "base BASE"))
+    (is (str/includes? out "head HEAD"))
+    ;; signed, so the direction is never ambiguous
+    (is (str/includes? out "+0.040"))
+    (is (str/includes? out "+0.150"))
+    (is (str/includes? out "rose to 14 from 9"))))
+
+(deftest touched-forms-are-a-separate-unscored-report-view
+  (let [corpus (q/compare-results base head-worse "BASE" "HEAD")
+        touched [{:entry-type :form :status :modified
+                  :old-path "a.lg" :new-path "a.lg"
+                  :identity 'sample/changed :kind :defn :pairing :paired
+                  :old-span {:start 2 :end 4} :new-span {:start 2 :end 5}
+                  :old-metrics {:cc 2 :sloc 3} :new-metrics {:cc 3 :sloc 4}
+                  :delta {:cc 1 :sloc 1}}
+                 {:entry-type :form :status :added
+                  :new-path "b.lg" :identity 'sample/new :pairing :unpaired
+                  :new-metrics {:cc 2 :sloc 3}}
+                 {:entry-type :path-only :status :renamed
+                  :old-path "README.old" :new-path "README.md"}]
+        out (report/delta-text (assoc corpus :touched touched :working-tree? true))]
+    (is (< 0.039 (:debt-delta corpus) 0.041))
+    (is (not (contains? corpus :touched)))
+    (is (str/includes? out "whole corpus"))
+    (is (str/includes? out "touched forms"))
+    (is (str/includes? out "cc +1"))
+    (is (str/includes? out "sloc +1"))
+    (is (str/includes? out "unpaired"))
+    (is (str/includes? out "README.old"))
+    (is (str/includes? out "untracked files omitted"))
+    (is (= 1 (count (re-seq #"cc \+1" out))))))
+
+(deftest plain-git-form-replacement-reports-unpaired-side-metrics
+  (let [dir (str (os/temp-dir) "/quality-unpaired-report-" (System/nanoTime))
+        git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (str/trim (:out r))))
+        commit (fn [message]
+                 (git "-c" "user.name=Quality Test"
+                      "-c" "user.email=quality@example.invalid"
+                      "commit" "-qm" message))]
+    (try
+      (is (zero? (:exit (os/sh "mkdir" "-p" dir))))
+      (git "init" "-q")
+      (spit (str dir "/forms.lg")
+            "(ns fixture.forms)\n(defn old-form [x]\n  (if x 1 2))\n")
+      (git "add" "forms.lg")
+      (commit "base")
+      (let [base-sha (git "rev-parse" "HEAD")]
+        (spit (str dir "/forms.lg")
+              "(ns fixture.forms)\n(defn new-form [x]\n  (if x 3 4))\n")
+        (git "add" "forms.lg")
+        (commit "head")
+        (let [head-sha (git "rev-parse" "HEAD")
+              entries (touched/build (diff/git-changes base-sha head-sha dir))
+              out (report/delta-text
+                    (assoc (q/compare-results base head-worse base-sha head-sha)
+                           :touched entries))
+              lines (str/split out #"\n")
+              old-entry (first (filter #(= 'fixture.forms/old-form (:identity %)) entries))
+              new-entry (first (filter #(= 'fixture.forms/new-form (:identity %)) entries))
+              old-line (first (filter #(str/includes? % "fixture.forms/old-form") lines))
+              new-line (first (filter #(str/includes? % "fixture.forms/new-form") lines))]
+          (is (= [:form :form] (map :entry-type entries)))
+          (is (= [:unpaired :unpaired] (map :pairing entries)))
+          (is (str/includes? out "touched entries 2"))
+          (is (str/includes? old-line "old="))
+          (is (str/includes? old-line
+                             (str "cc=" (get-in old-entry [:old-metrics :cc]))))
+          (is (str/includes? old-line
+                             (str "sloc=" (get-in old-entry [:old-metrics :sloc]))))
+          (is (str/includes? old-line "new=-"))
+          (is (str/includes? new-line "old=-"))
+          (is (str/includes? new-line "new="))
+          (is (str/includes? new-line
+                             (str "cc=" (get-in new-entry [:new-metrics :cc]))))
+          (is (str/includes? new-line
+                             (str "sloc=" (get-in new-entry [:new-metrics :sloc]))))
+          (is (not (contains? old-entry :delta)))
+          (is (not (contains? new-entry :delta)))
+          (is (not (str/includes? old-line "cc +")))
+          (is (not (str/includes? new-line "cc +")))
+          (is (not (str/includes? old-line " cc ")))
+          (is (not (str/includes? new-line " cc ")))))
+      (finally (os/delete-tree dir)))))
+
+(deftest touched-text-distinguishes-method-dispatch-and-explains-parse-fallback
+  (let [old "(ns demo)\n(defmethod paint :red [x] (inc x))\n(defmethod paint :blue [x] (dec x))\n"
+        new "(ns demo)\n(defmethod paint :red [x] (+ x 2))\n(defmethod paint :blue [x] (- x 2))\n"
+        methods (touched/build [{:status :modified :old-path "methods.lg"
+                                 :new-path "methods.lg" :old-text old :new-text new
+                                 :old-spans [{:start 2 :count 2}]
+                                 :new-spans [{:start 2 :count 2}]}])
+        fallback (first (touched/build [{:status :modified :old-path "broken.lg"
+                                         :new-path "broken.lg"
+                                         :old-text "(ns demo)\n(defn f [] 1)\n"
+                                         :new-text "(ns demo)\n(defn f [] 1\n"
+                                         :old-spans [{:start 2 :count 1}]
+                                         :new-spans [{:start 2 :count 1}]}]))
+        out (report/delta-text
+              (assoc (q/compare-results base head-worse "BASE" "HEAD")
+                     :touched (conj methods fallback)))
+        method-lines (filter #(str/includes? % "demo/paint") (str/split out #"\n"))
+        fallback-line (first (filter #(str/includes? % "broken.lg") (str/split out #"\n")))]
+    (is (= #{":red" ":blue"} (set (map :dispatch methods))))
+    (is (= 2 (count method-lines)))
+    (is (some #(str/includes? % "dispatch :red") method-lines))
+    (is (some #(str/includes? % "dispatch :blue") method-lines))
+    (is (= :file-fallback (:entry-type fallback)))
+    (is (= :invalid-source (:reason fallback)))
+    (is (str/includes? fallback-line "could not parse source"))
+    (is (str/includes? fallback-line (:message fallback)))))
+
+(deftest explicit-and-working-tree-deltas-share-corpus-and-diff-endpoints
+  (let [sha (str/trim (:out (os/sh "git" "rev-parse" "HEAD")))
+        opts {:base "HEAD" :top 5 :paths ["fixtures/quality"]
+              :source-roots ["fixtures/quality"]}
+        explicit (q/delta (assoc opts :head "HEAD"))
+        working (q/delta opts)]
+    (is (= sha (get-in explicit [:base :rev])))
+    (is (= sha (get-in explicit [:head :rev])))
+    (is (= sha (get-in explicit [:touched-range :base])))
+    (is (= sha (get-in explicit [:touched-range :head])))
+    (is (vector? (:touched explicit)))
+    (is (number? (:debt-delta explicit)))
+    (is (= sha (get-in working [:base :rev])))
+    (is (= sha (get-in working [:touched-range :base])))
+    (is (nil? (get-in working [:touched-range :head])))
+    (is (= "working tree" (get-in working [:head :rev])))
+    (is (str/includes? (report/delta-text working) "head working tree"))))
+
+(deftest invalid-head-releases-the-acquired-base-checkout
+  (let [checkout (q/checkout-root)
+        base-rev (if (os/stat (str checkout "/.jj")) "@-" "HEAD")
+        sha (q/resolve-rev base-rev)
+        dir (q/revision-dir checkout sha)]
+    (is (thrown? Throwable
+                 (q/delta {:base base-rev :head "definitely-not-a-revision"})))
+    (is (not (os/stat dir)))
+    (when-not (os/stat (str checkout "/.jj"))
+      (is (not (os/stat (str dir ".tar")))))))
+
+(deftest measurement-error-releases-the-acquired-base-checkout
+  (let [checkout (q/checkout-root)
+        base-rev (if (os/stat (str checkout "/.jj")) "@-" "HEAD")
+        sha (q/resolve-rev base-rev)
+        dir (q/revision-dir checkout sha)]
+    (is (thrown? Throwable
+                 (q/delta {:base base-rev :paths ["no-such-source-file.lg"]})))
+    (is (not (os/stat dir)))
+    (when-not (os/stat (str checkout "/.jj"))
+      (is (not (os/stat (str dir ".tar")))))))
