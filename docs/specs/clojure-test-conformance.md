@@ -297,12 +297,13 @@ A trace is a vector of `Frame`, innermost first.
 **The trace is the unwound error chain.** No capture happens at the throw site and no live frame stack is walked. A `throw` returns `ThrownError{value}` as a Go `error`; every call site the error passes through on the way out wraps it in an `ExecutionError` carrying that site's function name and `SourceInfo`, which is what the bytecode VM does today at `OP_INVOKE`. The chain that arrives at a `catch` therefore already lists every frame between the throw and the catch, innermost first. The design adds three things: the lowered-Go backend wraps the same way (Section 4.10), the catch keeps the chain instead of discarding it, and `ex-trace` renders it.
 
 ```
-RECORD ExInfo:                          -- existing pointer struct, two fields added
+RECORD ExInfo:                          -- existing pointer struct, one field added
     message : String
     data    : Map
     cause   : Error | None              -- a Go error: ThrownError, ExecutionError chain, or a host error
     meta    : Value
-    chain   : Error | None              -- set once at first catch; never overwritten (CAS)
+    class   : ExceptionClass            -- existing; ExceptionInfo for ex-info, Exception for a boxed runtime error
+    chain   : Error | None              -- added: set once at first catch; never overwritten (CAS)
 
 FUNCTION catch_bind(err : Error) -> Value:
     -- The single seam both backends use (vm.ErrorToValue today).
@@ -1456,7 +1457,9 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 
 **Why rely on `catch Throwable` instead of adding a new catch-all rule?** The typed-catch dispatch from #476 already makes `Throwable` the bottom of the class hierarchy, matching every thrown value including strings, while keeping `Exception` typed. `try-expr` using `catch Throwable` is therefore both Clojure-exact and sufficient for "every `is` yields exactly one report event". Widening `Exception` as well would have changed the meaning of 36 existing typed-catch sites for no gain.
 
-**Why capture trace triples rather than frame pointers or resolved positions?** Frames are pooled and reused after unwind, so pointers go stale; resolving positions eagerly pays a source lookup on every throw, including the caught-and-discarded ones. Immutable `(chunk, ip, fn)` triples are cheap to record and resolve correctly whenever they are read.
+**Why is the trace the unwound error chain instead of a captured frame stack?** A frame carrier has to capture live frames at the throw site and thread them across every Go boundary: interpreter frames, native calls, callbacks into let-go, and lowered Go, which has no VM frames at all. The chain needs none of that. The bytecode VM already wraps every error leaving a call site in an `ExecutionError` carrying `calling <fn>` and that site's `SourceInfo` (`wrapCallSite` and `wrapCallErr` in `pkg/vm/vm.go`, reached only on the error path), and a callback's error returns through the same path, so the chain crosses the Go boundary with no frame stack. What loses it today is one seam: `errorToValue` returns a thrown value and discards the chain around it. Keeping that chain on the caught `ExInfo` (Section 3.5) is the whole capture mechanism. `ExInfo` is an existing pointer struct and `WithMeta` copies it whole, so nothing changes in `ArrayVector`, `PersistentMap`, `vm.Var`, or the exported `pkg/vm` surface. The guarantee covers exception values only; a thrown scalar has no field to hold a chain (Appendix A).
+
+The costs are on the error path and in generated code, not the happy path. The lowered core (`pkg/rt/core_go_lowered`, about 4.7 MB of Go) has about 19,000 error-return blocks and no wraps; Section 4.10 adds one wrap call inside each existing `if err != nil` branch, which grows the generated source and the `-tags gogen_ir` compile but not the bytecode binary. Natives that rewrap with `%v` flatten the chain; each becomes `%w`. The bench ratchet should not move, since no happy-path instruction changes; Slice 1 records a before/after `make bench-ratchet` on the same base, and the generated-size and `go build` time of the lowered core before and after the emitter change.
 
 **Why bridge the Go harness through `report` instead of parsing printed output or reading counters?** Parsing output is brittle and loses the var boundary. Counters give a total but no attribution. `report` is the sole seam every event flows through, it is what `clojure.test.tap` itself uses, and binding it from Go needs no let-go change. The summary-based Step One exists only so the migration lands in two reviewable pieces.
 
@@ -1697,82 +1700,7 @@ Prose-only cases that remain:
 
 ## 17. Executable Evidence
 
-The Definition of Done in Section 16 is prose. Nothing runs it, so a wrong expectation (the trailing-empty split rule in the first draft) is caught only by a reviewer who happens to check. This section makes the document's own assertions executable, in the document, against any Clojure engine, with the expected output inline so no oracle pass is needed to validate a run.
-
-### 17.1 Shape
-
-The spec is literate. A provable statement carries a marker, `[R-<slug>]`, and its evidence is a fenced block or a table tagged with the same slug, placed beside it:
-
-````
-```clj-repl @R-tap-diagnostic-split
-(print-tap-diagnostic "a\n")
-;; out: "# a\n"
-;=> nil
-```
-````
-
-Pairing is checked both ways: a marker without evidence and evidence without a marker are both lint errors. The fence grammar is the one `rfc-tangle` already reads (` ```<type> @R-<slug> `, tables preceded by `<!-- evidence: @R-<slug> -->`), so the block is extracted verbatim into `<spec>.<slug>.<type>` by a tool that never interprets content.
-
-### 17.2 Vocabularies Are Data, Runners Are Generated
-
-An evidence *type* is a **vocabulary file**: rule lines mapping a statement pattern to a Clojure template, plus a `boot` preamble. No per-type program interprets the block. One generic generator reads the vocabulary, walks the tangled block statement by statement, instantiates the matching template, and writes a runner `.cljc`. The runner is then executed by whichever engine is selected. This is a literate untangle with generated code around the vocabulary's own harness, and it mirrors the shell `rfc-flow` runner with Clojure forms in the templates instead of commands.
-
-```
-# clj-repl.vocab — top-level forms with inline expectations
-boot #?(:clj (import 'clojure.lang.ExceptionInfo))
-boot (require '[clojure.test :refer :all] '[clojure.string :as str])
-boot <spec-evidence preamble: case, expect-value, expect-out, expect-throws, report, exit>
-{form*}                  => (case! {id} (fn [] {form*}))
-;=> {v*}                 => (expect-value! {id} '{v*})
-;; out: {s*}             => (expect-out! {id} {s*})
-;; throws: {c} {m*}      => (expect-throws! {id} {c} {m*})
-```
-
-| Type | Statement shapes | Verdict |
-|---|---|---|
-| `clj-repl` | A top-level form, then any of `;=> <edn>` (value, compared with `=` after reading), `;; out: "<string>"` (captured `*out*` and `*test-out*`, compared byte-exact), `;; throws: <Class> "<message>"` (class by `instance?`, message by `=`). A form with no expectation must evaluate without throwing. | All cases hold. |
-| `clj-table` | Markdown rows `\| form \| value \| out \|`. Each row compiles to the same three statements as `clj-repl`, which is the SLIM shape: a table is an instruction list. Empty cell means no expectation for that column. | All rows hold. |
-| `clj-test` | Ordinary `deftest` forms. The runner wraps them in a namespace and calls `run-tests`. | `successful?` |
-
-Template variables: `{id}` is the 1-based case number within the block, `{form*}` the rest of the line (multi-line forms are joined until the reader has a complete form). Everything in a block is plain Clojure plus `clojure.test` and `clojure.string`. Dialect setup, such as an import a JVM needs, lives in the vocabulary's `boot` lines under reader conditionals, never in evidence.
-
-### 17.3 Engines
-
-The generated runner is portable Clojure. The only engine-specific fact is the launch command, taken from `CLJ_ENGINE` and defaulting to `./lg`:
-
-| Engine | Command | Role |
-|---|---|---|
-| let-go | `./lg <runner.cljc>` | The gate. Runs in `TestSpecEvidence` under `go test ./test/...`, so it rides the pre-push hook and CI. |
-| Clojure 1.12.5 | `clojure -M <runner.cljc>` | Validates the expectations themselves. `make spec-oracle`; needs a JDK, so it is a separate CI job. |
-| Others (babashka, jank) | their launcher | Same file, no changes. |
-
-The runner prints one line per case, `ok <id>` or `FAIL <id> want <edn> got <edn>`, and exits 1 if any case failed. Cases tagged `oracle=none` in the fence info string are let-go extensions with no JVM behavior (Appendix A); they run under every engine but only the let-go verdict counts.
-
-### 17.4 Promotion
-
-A mismatch is not only a red run. `spec-evidence --accept <spec.md>` reruns the runner, parses the `FAIL` lines, and rewrites the `;=>`, `;; out:`, or `;; throws:` line (or the table cell) for each failed case with the engine's actual result, then sets `last-verified` in the masthead to today. The result is a diff on the spec, reviewed in git like any other change. Two engines separate the two kinds of mismatch:
-
-| JVM run | let-go run | Meaning | Action |
-|---|---|---|---|
-| fails | any | The document's expectation is wrong | `--accept` from the JVM run |
-| passes | fails | A conformance gap in let-go | Fix the runtime; promote nothing |
-| passes | passes | Conformant | none |
-
-Promotion from the let-go run alone is permitted only for `oracle=none` cases.
-
-### 17.5 Tooling and Wiring
-
-- `scripts/spec-evidence.lg`: tangle, generate, run, and `--accept`. Written in `.lg`, so the reader that parses evidence forms is the engine under test; the JVM pass is the independent check on that reader.
-- `scripts/spec-vocabs/clj-repl.vocab`, `clj-table.vocab`, `clj-test.vocab`: the three vocabularies, reviewed as evidence machinery.
-- `test/spec_evidence_test.go`: `TestSpecEvidence` runs every `docs/specs/*.md` containing tagged evidence under `./lg`; one Go subtest per block.
-- `make spec-oracle`: the same under `CLJ_ENGINE="clojure -M"`.
-- `make spec-lint`: marker and evidence pairing, fence grammar, and that every `clj-*` block tangles and generates without running.
-
-### 17.6 Coverage Rule
-
-A Definition of Done line that can be stated as a form and an expected result must be a fence, and Section 16 cites the slug instead of restating the case. Lines that remain prose are those with no in-process oracle: the bridge deadlock and cancellation cases, the `go test -run` transcripts, and ratchet results. A prose line is visibly unverified, which is the point.
-
-The first three fences convert cases that were verified by hand during review: the split contract (Section 4.9), the TAP diagnostic rules (Section 11.1), and the integration smoke test (Section 16.13).
+Making a specification's assertions executable in the document is proposed separately, in `docs/specs/executable-evidence.md` (#861): the fence grammar, vocabularies, engines, promotion, tooling, and the coverage rule. This specification does not depend on it. Section 16 is the Definition of Done as written; once #861 lands, a Section 16 case that can be stated as a form and an expected result can become an evidence block without changing its meaning.
 
 ---
 
