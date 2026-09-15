@@ -94,6 +94,9 @@ type Chart struct {
 	// e.g. "how much faster aot_native is than ir_bytecode" at each point.
 	Deltas       []ChartDelta
 	DeltaCaption string // footer caption, e.g. "Δ aot_native vs ir_bytecode"
+
+	PointR float64 // dot radius, sized to the room each snapshot gets
+	Dense  bool    // dots close enough that the ring around each one obscures its neighbours
 }
 
 type ChartXTick struct {
@@ -718,6 +721,7 @@ func buildCharts(timeline []Snapshot, reference Baseline, referenceName string, 
 		chart := buildChart(timeline, spec.title, spec.subtitle, unit,
 			spec.metric, spec.sample, spec.format, spec.series, refVal, refLabel, budget, spec.relative)
 		if len(chart.Series) > 0 {
+			sizeChartPoints(&chart)
 			charts = append(charts, chart)
 		}
 	}
@@ -1363,6 +1367,36 @@ func median(values []float64) float64 {
 	return (values[mid-1] + values[mid]) / 2
 }
 
+// sizeChartPoints scales the snapshot dots to the room each one has, so a long
+// timeline does not draw every dot several deep into its neighbours.
+func sizeChartPoints(chart *Chart) {
+	// x runs 46..502 inside the chart's viewBox of 0 0 520 210.
+	const plotWidth = 456.0
+	most := 0
+	for _, s := range chart.Series {
+		if len(s.Points) > most {
+			most = len(s.Points)
+		}
+	}
+	if most == 0 {
+		chart.PointR = 3.2
+		return
+	}
+	spacing := plotWidth / float64(most)
+	r := spacing * 0.45
+	if r > 3.2 {
+		r = 3.2
+	}
+	// A dot inside the 2.5-wide line is neither visible nor hoverable, and these
+	// carry the date/SHA/value tooltip, so they clear the line's half-width.
+	if r < 1.76 {
+		r = 1.76
+	}
+	chart.PointR = r
+	// Below a dot's width there is no gap left for a ring to sit in.
+	chart.Dense = spacing < 6.4
+}
+
 func barWidth(ratio, maxRatio float64) float64 {
 	if maxRatio <= 0 || ratio <= 0 {
 		return 0
@@ -1773,6 +1807,16 @@ const pageTemplate = `<!doctype html>
       stroke: var(--paper);
       stroke-width: 1.6;
     }
+    /* Packed together the ring erases more than it separates, so the dots drop
+       it and go translucent instead; the thinner line lets them read as beads
+       on it rather than sinking into it. */
+    .point.dense {
+      stroke-width: 0;
+      fill-opacity: 0.75;
+    }
+    .chart-line.dense {
+      stroke-width: 1.5;
+    }
     .chart-band {
       opacity: 0.16;
       stroke: none;
@@ -1803,6 +1847,12 @@ const pageTemplate = `<!doctype html>
       font-weight: 700;
       text-anchor: middle;
       font-variant-numeric: tabular-nums;
+      /* These sit on top of the series, so they need to carry their own
+         background: stroke first, then fill, gives the glyphs a paper halo. */
+      paint-order: stroke;
+      stroke: var(--paper);
+      stroke-width: 2.6px;
+      stroke-linejoin: round;
     }
     .chart-head {
       display: flex;
@@ -2049,6 +2099,7 @@ const pageTemplate = `<!doctype html>
       {{if .Charts}}
       <div class="chart-grid">
         {{range .Charts}}
+        {{$chart := .}}
         <article class="chart">
           <div class="chart-head">
             <h3>{{.Title}}</h3>
@@ -2069,9 +2120,9 @@ const pageTemplate = `<!doctype html>
             {{range .Series}}
             {{$color := .Color}}
             {{if .BandPath}}<path class="chart-band" fill="{{$color}}" d="{{.BandPath}}"></path>{{end}}
-            <path class="chart-line" stroke="{{$color}}" d="{{.Path}}"></path>
+            <path class="chart-line{{if $chart.Dense}} dense{{end}}" stroke="{{$color}}" d="{{.Path}}"></path>
             {{range .Points}}
-            <circle class="point" fill="{{$color}}" cx="{{printf "%.2f" .X}}" cy="{{printf "%.2f" .Y}}" r="3.2">
+            <circle class="point{{if $chart.Dense}} dense{{end}}" fill="{{$color}}" cx="{{printf "%.2f" .X}}" cy="{{printf "%.2f" .Y}}" r="{{printf "%.2f" $chart.PointR}}">
               <title>{{.Date}} @ {{.SHA}}: {{.Text}}{{if .HasBand}} ({{.Spread}}){{end}}</title>
             </circle>
             {{end}}
