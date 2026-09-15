@@ -9,10 +9,9 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// asBytes backs the binary file/stream sinks (spit, write!). The byte-array case
-// is the one that needs it: without the coercion, a byte-array handed to
-// spit/write! stringifies to its #byte-array[…] repr, so bytes >127 never reach
-// the sink.
+// asBytes converts a String or a byte-kind TypedArray to raw bytes and rejects
+// everything else. High bytes survive both conversions; the callers that accept
+// binary input (spit, write!, the hash primitives) rely on that.
 func TestAsBytes(t *testing.T) {
 	// String → its bytes verbatim, including a high byte.
 	if b, ok := asBytes(vm.String("hi\xff")); !ok || string(b) != "hi\xff" {

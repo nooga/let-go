@@ -45,8 +45,7 @@ type CoreLoadOptions struct {
 // a caller can read its const pool or chunk map.
 //
 // It is the one implementation behind compiler.loadPrecompiledBundle,
-// rt.LoadCore, and rt.BootCore (#506). Two invariants hold here for every
-// caller:
+// rt.LoadCore, and rt.BootCore. Two invariants hold here for every caller:
 //
 //   - *ns* is saved before the replay and restored after. Each chunk runs its
 //     (ns …) form under a frame with no ExecContext, so in-ns falls through to
