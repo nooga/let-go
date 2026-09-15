@@ -17,8 +17,8 @@ import (
 // so root-context var reads scale across goroutines. That is what the Parallel
 // variants measure: a Deref that reached for a process-wide lock — even only to
 // check that no dynamic binding was active — would serialize every root-context
-// Deref, and a single-goroutine benchmark would not show it. Reads through a
-// child ExecContext resolve in ExecContext.deref and are not measured here.
+// Deref, and a single-goroutine benchmark would not show it. The child-context
+// path (ExecContext.deref) is measured separately by BenchmarkVarDerefChildContext.
 
 // derefSink defeats dead-code elimination: without a package-level sink the
 // compiler may elide the Deref call entirely, producing impossible sub-ns
