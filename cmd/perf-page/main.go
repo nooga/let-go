@@ -1607,22 +1607,19 @@ func formatBar(value float64) string {
 }
 
 // pageStyle is shared verbatim by every page this command emits, so a second
-// page inherits the design system instead of approximating it. Kept as its own
-// const rather than duplicated: two copies of a stylesheet drift, and the
-// drift shows up as two pages that look almost the same.
+// page inherits the design system instead of approximating it.
 // ---------------------------------------------------------------------------
 // Timeline explorer: the same timeline the charts above are baked from, handed
 // to the browser so the reader can slice it per CPU tier.
 //
-// The charts on the main page are server-rendered SVG built from the whole
-// timeline, so they pool every tier — and ratio_to_anchor does not normalize
-// across tiers, which is the bimodal band #597 describes. Re-rendering them
-// client-side is what lets the tier filter reach them.
+// The charts on the main page are server-rendered SVG over the whole timeline,
+// so they pool every tier (#597); re-rendering them client-side is what lets
+// the tier filter reach them.
 //
 // This emits its own payload rather than reusing explorer.json: that file
-// carries every metric for every benchmark (~29 MB) because the explorer needs
-// it, while a chart needs one metric across a handful of series. Measured on
-// the 2026-09-13 timeline, the difference is 29 MB against ~270 KB.
+// carries every metric for every benchmark because the explorer needs it,
+// while a chart needs one metric across a handful of series. On the
+// 2026-09-13 timeline that is 29 MB against ~270 KB.
 
 // viewerSeries is one plotted line: every point across every CPU tier, with the
 // tier on each point so the browser can filter without a second request.
@@ -2397,8 +2394,7 @@ const pageStyle = `
     .spark-tip .tip-r.muted { opacity: 0.6; }`
 
 // viewerStyle is the only CSS the explorer adds on top of pageStyle: controls
-// the summary page has no equivalent for. Everything else — type, colour,
-// cards, chart internals — comes from the shared stylesheet.
+// the summary page has no equivalent for.
 // relLink builds the href from one emitted page to another. Both are local
 // paths at build time and the pages are served from the same tree, so a path
 // relative to the linking page is what the browser needs.
