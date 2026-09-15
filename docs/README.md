@@ -48,6 +48,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Docs frontmatter convention + maintenance hook | `frontmatter-hook.md` |
 | Docs judgement-layer report (stale/supersession/index) | `docs-status.md` |
 | Build, test, lint, regenerate, and the CI gate map | `contributor-workflow.md` |
+| Where CI runner time goes (measurement + `scripts/ci-usage.sh`) | `ci-actions-usage.md` |
 | Regenerating generated artifacts after `.lg` edits | `regenerating-generated-artifacts.md` |
 | Perf ratchet, regression checkpoints, historical baselines | `perf/ratchet.md` |
 | Running the perf A/B on a PR (the `perf` label) | `perf/ratchet.md` (§ Running the check on a PR) |
