@@ -233,12 +233,33 @@
     (if (and (contains? fieldset form) (not (contains? bound form)))
       (list '. this-sym form)
       form)
+    ;; Rewriting can make distinct source forms equal (a bare field and its
+    ;; explicit accessor), and rebuilding a host map or set would keep only one
+    ;; of them, dropping an evaluation. An unchanged literal stays a literal; a
+    ;; changed one becomes a constructor call that keeps every slot. Exactly
+    ;; what core.lg's -dt-rewrite does, so both backends see the same shape.
+    ;;
+    ;; This runs BEFORE expand-all macroexpands the body, so it must not
+    ;; introduce compiler-only nodes here: a macro that inspects its argument
+    ;; with map?/set? would see a SetForm/MapForm record instead of the source
+    ;; literal and take the wrong branch (native returned [:other :other] where
+    ;; bytecode returned [:map :set]). expand-all substitutes the slot-
+    ;; preserving forms afterwards, once macros have consumed their arguments.
     (map? form)
-    (into {} (map (fn [e] [(dt-rewrite-field fieldset this-sym bound (nth e 0))
-                           (dt-rewrite-field fieldset this-sym bound (nth e 1))])
-                  (seq form)))
+    (let [original (vec (map (fn [e] [(nth e 0) (nth e 1)]) (seq form)))
+          entries  (vec (map (fn [e] [(dt-rewrite-field fieldset this-sym bound (nth e 0))
+                                      (dt-rewrite-field fieldset this-sym bound (nth e 1))])
+                             original))]
+      (if (= entries original)
+        form
+        (apply list 'clojure.core/hash-map
+               (reduce (fn [acc e] (conj (conj acc (nth e 0)) (nth e 1))) [] entries))))
     (set? form)
-    (into #{} (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) (seq form)))
+    (let [original (vec (seq form))
+          elements (vec (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) original))]
+      (if (= elements original)
+        form
+        (apply list 'clojure.core/hash-set elements)))
     (vector? form)
     (vec (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) form))
     (not (seq? form)) form
@@ -391,6 +412,20 @@
       ;; guard the seq branch reconstructs it as (nil), which the IR builder
       ;; then lowers as a call to a nil head.
       (and (seq? form) (empty? form))
+      form
+
+      ;; Quoted data is data, not code: macroexpansion must not descend into
+      ;; it. `quote` is a known head, so without this guard the seq branch
+      ;; below rebuilds it as (quote <expand-all datum>) and rewrites the
+      ;; datum's own collections — a quoted map or set came back out as a
+      ;; MapForm/SetForm record, which is a compiler-internal node with no
+      ;; constant representation, so the fn failed to lower entirely
+      ;; (":other | unsupported function body shape"). The guard at the
+      ;; `expand-fully` result below only covers quotes macros PRODUCE; this
+      ;; one covers quotes the source WRITES. Returning the form whole also
+      ;; fixes the older quiet corruption where a quoted '#{1 2} expanded to
+      ;; the list (hash-set 1 2) and silently stopped being a set.
+      (and (seq? form) (= 'quote (first form)))
       form
 
       (seq? form)

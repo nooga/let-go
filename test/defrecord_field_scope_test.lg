@@ -71,3 +71,28 @@
     (is (= {:k [1 #{2}]} (in-nested (->CollR 1 2)))))
   (testing "map literal KEYS are rewritten, not just values"
     (is (= {1 :v} (in-map-key (->CollR 1 2))))))
+
+;; --- evaluation multiplicity through field rewriting ----------------------
+;; Rewriting turns a bare field `x` and an explicit `(.x this)` into the same
+;; form. A set or map literal must still evaluate every source slot; rebuilding
+;; it as a host set or map after rewriting drops one side-effecting element.
+;; JVM Clojure evaluates both, so the counter reaches 2.
+
+(defprotocol AliasP
+  (alias-set [t c])
+  (alias-map [t c]))
+
+(deftype AliasT [x]
+  AliasP
+  (alias-set [this c] (count #{(swap! c + x) (swap! c + (.x this))}))
+  (alias-map [this c] (count {(swap! c + x) :a (swap! c + (.x this)) :b})))
+
+(deftest aliasing-field-slots-each-evaluate
+  (testing "set literal: a bare field and its accessor both run"
+    (let [c (atom 0)]
+      (alias-set (->AliasT 1) c)
+      (is (= 2 @c))))
+  (testing "map literal: a bare field key and its accessor key both run"
+    (let [c (atom 0)]
+      (alias-map (->AliasT 1) c)
+      (is (= 2 @c)))))

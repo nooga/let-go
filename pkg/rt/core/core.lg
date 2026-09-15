@@ -2209,12 +2209,25 @@
     (if (and (contains? fields form) (not (contains? bound form)))
       (emit recv form)
       form)
+    ;; Rewriting can make distinct source forms equal (a bare field `x` and an
+    ;; explicit `(.x this)`), and rebuilding a host map or set would keep only
+    ;; one of them, dropping an evaluation. An unchanged literal stays a
+    ;; literal; a changed one becomes a constructor call that keeps every slot.
     (map? form)
-    (into {} (map (fn [e] [(-dt-rewrite emit recv fields muts bound (nth e 0))
-                           (-dt-rewrite emit recv fields muts bound (nth e 1))])
-                  (seq form)))
+    (let [original (vec (map (fn [e] [(nth e 0) (nth e 1)]) (seq form)))
+          entries (vec (map (fn [e] [(-dt-rewrite emit recv fields muts bound (nth e 0))
+                                     (-dt-rewrite emit recv fields muts bound (nth e 1))])
+                            original))]
+      (if (= entries original)
+        form
+        (apply list 'clojure.core/hash-map
+               (reduce (fn [acc e] (conj (conj acc (nth e 0)) (nth e 1))) [] entries))))
     (set? form)
-    (into #{} (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) (seq form)))
+    (let [original (vec (seq form))
+          elements (vec (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) original))]
+      (if (= elements original)
+        form
+        (apply list 'clojure.core/hash-set elements)))
     (vector? form)
     (vec (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) form))
     (not (seq? form)) form

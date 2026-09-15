@@ -257,8 +257,10 @@ func TestDataReaderFollowsClojureDataSemantics(t *testing.T) {
 	_, err = ReadAllDataString(`{"a" "b"} {`)
 	assert.Error(t, err, "EOF mid-form is an error")
 
-	// Code reading is unchanged.
+	// Code reading returns a set too: a set literal is a set in both modes,
+	// as in Clojure, where `(set? '#{1 2})` and a macro's view of `#{1 2}`
+	// are both true.
 	code, err := ReadString(`#{1 2}`)
 	assert.NoError(t, err)
-	assert.Equal(t, vm.Symbol("hash-set"), code.(*vm.List).First())
+	assert.Equal(t, vm.SetType, code.Type())
 }
