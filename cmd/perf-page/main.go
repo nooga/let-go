@@ -1683,11 +1683,15 @@ const pageTemplate = `<!doctype html>
     }
     .section-head {
       display: flex;
-      align-items: end;
+      align-items: start;
       justify-content: space-between;
       gap: 20px;
       margin-bottom: 12px;
     }
+    /* Without a floor, a long description squeezes the heading to a ~115px
+       column; 150px holds the natural two-to-three line wrap. */
+    .section-head h2 { min-width: 150px; }
+    .section-head p .provenance { display: block; margin-top: 4px; }
     h2 {
       margin: 0;
       font-size: 24px;
@@ -1966,6 +1970,18 @@ const pageTemplate = `<!doctype html>
     .spark-count { font-size: 0.78rem; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
     .explorer-chart { width: 100%; overflow-x: auto; }
     .explorer-chart figure { margin: 0; }
+    .table-wrap { max-height: 620px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    /* An explicit width opts these scrollers out of the macOS overlay scrollbar,
+       which stays hidden until you already know the region scrolls. No
+       scrollbar-width/scrollbar-color alongside: setting either makes Chrome
+       ignore these rules entirely. */
+    .table-wrap::-webkit-scrollbar, .spark-table-wrap::-webkit-scrollbar { width: 14px; height: 14px; }
+    .table-wrap::-webkit-scrollbar-track, .spark-table-wrap::-webkit-scrollbar-track { background: rgba(0,0,0,0.04); border-radius: 8px; }
+    .table-wrap::-webkit-scrollbar-thumb, .spark-table-wrap::-webkit-scrollbar-thumb { background: rgba(36,92,115,0.42); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+    .table-wrap::-webkit-scrollbar-thumb:hover, .spark-table-wrap::-webkit-scrollbar-thumb:hover { background: rgba(36,92,115,0.65); background-clip: content-box; }
+
+    .table-wrap table { border: 0; border-radius: 0; }
+    .table-wrap thead th { position: sticky; top: 0; z-index: 1; }
     .spark-table-wrap { max-height: 620px; overflow: auto; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; background: var(--paper); }
     table.spark-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
     table.spark-table th { position: sticky; top: 0; background: var(--paper); text-align: left; padding: 0.5rem 0.75rem; color: var(--muted); font-weight: 640; border-bottom: 1px solid rgba(0,0,0,0.1); z-index: 1; white-space: nowrap; }
@@ -2106,7 +2122,7 @@ const pageTemplate = `<!doctype html>
 
     <section>
       <div class="section-head">
-        <h2>Trend sparklines (first → last)</h2>
+        <h2>Trend sparklines</h2>
         <p>One row per benchmark × CPU. Benchmarks that differ only by a scaling factor (…/10, /100, /1000) are merged into a single row: their lines are overlaid and each is indexed to its own first value (% change from a shared 0% baseline) so you can compare how each scale moved — darker line = larger scale — with the per-scale Δ shown at right. Un-scaled benchmarks show one absolute sparkline (every sample a faint dot; hollow ring = first snapshot, filled = last) plus first/last/Δ. Slope reads direction; green = improvement, red = regression. Sorted by the largest endpoint change — click Δ to flip; use the filters to hide single-point or unchanged series.</p>
       </div>
       <div id="perf-sparklines" style="width:100%"></div>
@@ -2175,8 +2191,9 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Current baseline</h2>
-        <p>Sorted by package and benchmark. Lower anchor ratio is faster.</p>
+        <p>Sorted by package and benchmark. Lower anchor ratio is faster; Scale plots that ratio on a log scale against the slowest row here.<span class="provenance">Captured {{date .Current.CapturedAt}} at {{shortSHA .Current.CapturedAtSHA}} on {{.Current.Machine.CPUModel}} / {{.Current.Machine.GoVersion}} — one machine profile, picked at build time. Rows absent from {{.ReferenceName}} read &ldquo;new&rdquo;.</span></p>
       </div>
+      <div class="table-wrap">
       <table>
         <thead>
           <tr>
@@ -2185,7 +2202,7 @@ const pageTemplate = `<!doctype html>
             <th>Wall</th>
             <th>Alloc</th>
             <th>Bytes</th>
-            <th>Delta</th>
+            <th>vs {{.ReferenceName}}</th>
             <th>Scale</th>
           </tr>
         </thead>
@@ -2203,6 +2220,7 @@ const pageTemplate = `<!doctype html>
           {{end}}
         </tbody>
       </table>
+      </div>
     </section>
   </main>
 
