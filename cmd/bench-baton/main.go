@@ -1,4 +1,4 @@
-//go:build unix
+//go:build linux || darwin || freebsd || openbsd || netbsd || dragonfly || illumos
 
 // Command bench-baton is a machine-quiescence lease for benchmarks, with a
 // concurrent lane for builds and tests.
@@ -13,8 +13,8 @@
 //	                    Holds the pool alone: no other exclusive run and no
 //	                    shared run overlaps it.
 //	build  (shared)     builds, test suites, regeneration, lint. Runs
-//	                    concurrently with other shared work up to
-//	                    --max-shared slots, but never while an exclusive run
+//	                    concurrently with other shared work up to the pool's
+//	                    max_shared slots, but never while an exclusive run
 //	                    holds or is waiting for the pool.
 //
 // A waiting exclusive closes the gate, so a stream of builds cannot starve
@@ -23,6 +23,11 @@
 // Every lease is an OS file lock (flock), so a holder that dies releases
 // the pool without cleanup; the JSON state file is bookkeeping only, and
 // `reap` tidies records whose process is gone.
+//
+// The wrapped command runs in its own process group. A timeout, a signal to
+// the baton, or the command exiting while processes it started live on all
+// stop the whole group before the lease is released, so no workload outlives
+// its lease.
 //
 // Usage:
 //
@@ -50,6 +55,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -63,7 +69,8 @@ const (
 	defaultPool      = "letgo"
 	defaultMaxShared = 4
 	pollInterval     = 250 * time.Millisecond
-	logHeaderLines   = 5 // the "# mode/intent/cwd/cmd" preamble plus its blank line
+	stopGrace        = 2 * time.Second // SIGTERM to SIGKILL for a stopped process group
+	logHeaderLines   = 5               // the "# mode/intent/cwd/cmd" preamble plus its blank line
 )
 
 // token is one holder or waiter. Field names match the JSON the Python
@@ -83,6 +90,9 @@ type token struct {
 type state struct {
 	Holders []token `json:"holders"`
 	Waiters []token `json:"waiters"`
+	// MaxShared is the pool's shared-lane capacity, recorded by the first
+	// lease of an idle pool. Zero means not yet recorded.
+	MaxShared int `json:"max_shared,omitempty"`
 }
 
 // statusView is token plus liveness, as `status` prints it.
@@ -190,10 +200,44 @@ func readState(pool string) state {
 	return st
 }
 
+// capacity is the pool's shared-lane capacity: the recorded value, or the
+// default for a pool that has not recorded one.
+func capacity(st state) int {
+	if st.MaxShared > 0 {
+		return st.MaxShared
+	}
+	return defaultMaxShared
+}
+
+// settleCapacity fixes the shared-lane capacity a new lease uses. The slot
+// count is a property of the pool, not of one invocation: a worker asking for
+// a different --max-shared must not silently widen or narrow the lane under
+// another worker's lease. An idle pool records the requested value (or the
+// default); a pool with holders or waiters keeps its recorded value, and an
+// explicit different request is refused. requested <= 0 means "use the pool's".
+func settleCapacity(st *state, requested int) (int, error) {
+	busy := len(st.Holders) > 0 || len(st.Waiters) > 0
+	switch {
+	case requested <= 0:
+		if st.MaxShared == 0 {
+			st.MaxShared = defaultMaxShared
+		}
+		return st.MaxShared, nil
+	case st.MaxShared == requested:
+		return requested, nil
+	case st.MaxShared == 0 || !busy:
+		st.MaxShared = requested
+		return requested, nil
+	default:
+		return 0, fmt.Errorf("pool max_shared is %d while the pool is in use; requested %d (omit --max-shared, or run `reap` if its holders are gone)",
+			st.MaxShared, requested)
+	}
+}
+
 func status(pool string) statusReport {
 	st := readState(pool)
 	t := now()
-	rep := statusReport{Pool: pool, MaxShared: defaultMaxShared, Dir: poolDir(pool),
+	rep := statusReport{Pool: pool, MaxShared: capacity(st), Dir: poolDir(pool),
 		Holders: []statusView{}, Waiters: []statusView{}}
 	for _, h := range st.Holders {
 		rep.Holders = append(rep.Holders, statusView{token: h, Alive: alive(h.PID), HeldS: round1(t - h.Granted)})
@@ -248,14 +292,11 @@ type lease struct {
 // Exclusive: take the gate exclusively (so new shared work queues behind
 // us), then the lease exclusively (so current shared holders drain).
 // Shared: take the gate shared (blocked only while an exclusive holds or
-// waits for it), drop it, take the lease shared, then one of maxShared
-// slots.
+// waits for it), drop it, take the lease shared, then one of the pool's
+// max_shared slots. maxShared <= 0 uses the pool's recorded capacity.
 func acquire(intent, mode, pool, owner string, timeout time.Duration, maxShared int, verbose bool) (*lease, error) {
 	if mode != modeExclusive && mode != modeShared {
 		return nil, fmt.Errorf("mode must be %q or %q", modeExclusive, modeShared)
-	}
-	if maxShared <= 0 {
-		maxShared = defaultMaxShared
 	}
 	if owner == "" {
 		owner = os.Getenv("BENCH_BATON_OWNER")
@@ -268,8 +309,22 @@ func acquire(intent, mode, pool, owner string, timeout time.Duration, maxShared 
 	if timeout > 0 {
 		deadline = time.Now().Add(timeout)
 	}
-	if err := mutateState(pool, func(st *state) { st.Waiters = append(st.Waiters, tok) }); err != nil {
+	// Settle the capacity and join the queue under one state lock, so two
+	// idle-pool leases cannot each record a different capacity.
+	var capErr error
+	if err := mutateState(pool, func(st *state) {
+		c, err := settleCapacity(st, maxShared)
+		if err != nil {
+			capErr = err
+			return
+		}
+		maxShared = c
+		st.Waiters = append(st.Waiters, tok)
+	}); err != nil {
 		return nil, err
+	}
+	if capErr != nil {
+		return nil, capErr
 	}
 	if verbose {
 		s := status(pool)
@@ -393,6 +448,41 @@ func newID() string {
 	return fmt.Sprintf("%x", b)
 }
 
+// groupAlive reports whether any process in process group pgid still exists.
+func groupAlive(pgid int) bool {
+	err := syscall.Kill(-pgid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// waitGroupGone polls until process group pgid is empty or d elapses, and
+// reports whether it emptied.
+func waitGroupGone(pgid int, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for groupAlive(pgid) {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
+}
+
+// stopGroup ends every process in process group pgid and waits until the
+// group is empty: SIGTERM, a grace period, then SIGKILL. Killing only the
+// direct child would leave anything it started running after the lease is
+// released.
+func stopGroup(pgid int) {
+	if !groupAlive(pgid) {
+		return
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	if waitGroupGone(pgid, stopGrace) {
+		return
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	waitGroupGone(pgid, stopGrace)
+}
+
 // runResult is one ledger row; JSON names match the Python ledger.
 type runResult struct {
 	TS       string   `json:"ts"`
@@ -417,9 +507,13 @@ type runOptions struct {
 	owner        string
 	timeout      time.Duration // wrapped command; zero = none
 	leaseTimeout time.Duration // waiting for the pool; zero = block
-	maxShared    int
+	maxShared    int           // zero = the pool's recorded capacity
 	tailLines    int
 	verbose      bool
+	// stop delivers a signal sent to the baton itself. Receiving one stops the
+	// wrapped command's process group before the lease is released. Nil means
+	// the run is never interrupted.
+	stop <-chan os.Signal
 }
 
 // run executes argv in the requested lane. Full output goes to a log under
@@ -456,26 +550,46 @@ func run(o runOptions) (runResult, error) {
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	cmd.Env = os.Environ()
+	// Its own process group, so stopGroup reaches everything the command
+	// starts, not only the direct child.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	t0 := time.Now()
 	runErr := cmd.Start()
 	rc := 0
+	var interrupted syscall.Signal
 	if runErr == nil {
+		pgid := cmd.Process.Pid
 		done := make(chan error, 1)
 		go func() { done <- cmd.Wait() }()
+		var timedOut <-chan time.Time
 		if o.timeout > 0 {
-			select {
-			case runErr = <-done:
-			case <-time.After(o.timeout):
-				_ = cmd.Process.Kill()
-				runErr = fmt.Errorf("timed out after %s", o.timeout)
-				<-done
-			}
-		} else {
-			runErr = <-done
+			timer := time.NewTimer(o.timeout)
+			defer timer.Stop()
+			timedOut = timer.C
 		}
+		select {
+		case runErr = <-done:
+		case <-timedOut:
+			runErr = fmt.Errorf("timed out after %s", o.timeout)
+			stopGroup(pgid)
+			<-done
+		case sig := <-o.stop:
+			if s, ok := sig.(syscall.Signal); ok {
+				interrupted = s
+			}
+			runErr = fmt.Errorf("interrupted by %v", sig)
+			stopGroup(pgid)
+			<-done
+		}
+		// The direct child can exit while processes it started keep running;
+		// none of them may outlive the lease.
+		stopGroup(pgid)
 	}
 	var exitErr *exec.ExitError
 	switch {
+	case interrupted != 0:
+		rc = 128 + int(interrupted)
+		fmt.Fprintf(logf, "\n# bench-baton: %v\n", runErr)
 	case runErr == nil:
 	case errors.As(runErr, &exitErr):
 		rc = exitErr.ExitCode()
@@ -577,9 +691,9 @@ func mainWithArgs(args []string) int {
 		owner := fs.String("owner", "", "stable worker name for status/ledger")
 		cwd := fs.String("cwd", ".", "working directory for CMD")
 		intent := fs.String("intent", "", "what this run is for (default: the command)")
-		timeout := fs.Float64("timeout", 0, "kill CMD after this many seconds")
+		timeout := fs.Float64("timeout", 0, "stop CMD and its process group after this many seconds")
 		leaseTimeout := fs.Float64("lease-timeout", 0, "give up waiting for the pool after this many seconds")
-		maxShared := fs.Int("max-shared", defaultMaxShared, "shared-lane capacity")
+		maxShared := fs.Int("max-shared", 0, fmt.Sprintf("shared-lane capacity for an idle pool (default: the pool's recorded value, or %d)", defaultMaxShared))
 		// Split at "--": flags before it, CMD after.
 		var cmdArgs []string
 		for i, a := range rest {
@@ -597,10 +711,13 @@ func mainWithArgs(args []string) int {
 			fmt.Fprintln(os.Stderr, "bench-baton: no command given after --")
 			return 2
 		}
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		defer signal.Stop(stop)
 		res, err := run(runOptions{
 			argv: cmdArgs, cwd: *cwd, intent: *intent, mode: mode, pool: pool, owner: *owner,
 			timeout: secs(*timeout), leaseTimeout: secs(*leaseTimeout), maxShared: *maxShared,
-			verbose: true,
+			verbose: true, stop: stop,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bench-baton: %v\n", err)
