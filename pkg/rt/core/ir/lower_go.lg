@@ -97,7 +97,7 @@
 (defn- go-type-spec [t]
   (cond
     (dtype-go-type-spec t)                         (dtype-go-type-spec t)
-    (or (= t :int) (= t [:const :int 0]))        "int"
+    (or (= t :int) (= t [:const :int 0]))        "int64"
     (or (= t :float) (= t [:const :float 0.0]))  "float64"
     (or (= t :bool) (= t :true) (= t :false))    "bool"
     (= t :string)                                "string"
@@ -255,7 +255,7 @@
       (nil? expr)         nil
       (= spec "vm.Value") expr
       (= spec "bool")     (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [expr])
-      (= spec "int")      (vm-call "Int" [expr])
+      (= spec "int64")    (vm-call "Int" [expr])
       (= spec "float64")  (vm-call "Float" [expr])
       (= spec "string")   (vm-call "String" [expr])
       ;; vm.Char is a thin rune type that already implements vm.Value, so a
@@ -278,7 +278,7 @@
     (and (string? spec) (pos? (count spec)) (= \* (nth spec 0)))
     (gogen/type-assert raw (gogen/type spec))
     (= spec "bool")     (gogen/call (vm-sel "IsTruthy") [raw])
-    (= spec "int")      (gogen/call (gogen/ident "int")     [(gogen/type-assert raw (gogen/type "vm.Int"))])
+    (= spec "int64")    (gogen/call (gogen/ident "int64")   [(gogen/type-assert raw (gogen/type "vm.Int"))])
     (= spec "float64")  (gogen/call (gogen/ident "float64") [(gogen/type-assert raw (gogen/type "vm.Float"))])
     (= spec "string")   (gogen/call (gogen/ident "string")  [(gogen/type-assert raw (gogen/type "vm.String"))])
     ;; vm.Char already implements vm.Value, so the slot type is vm.Char — a
@@ -959,27 +959,28 @@
             ;; runtime truncating division across the numeric tower.
             ;; quot and div both render Go `/` but route differently (dispatch
             ;; on the op-kw, NOT op-str): quot is native only for int/int (Go
-            ;; int `/` truncates toward zero like quot); div is native only for
+            ;; int64 `/` truncates toward zero like quot); div is native only for
             ;; float/float (Go float `/` matches clojure.core// on floats).
             ;; Every other operand mix uses the runtime helper — native `/`
             ;; would be wrong (no truncation for quot; Ratio dropped for div) or
             ;; invalid Go (mixed int/float). rt.QuotValue / rt.DivValue compute
             ;; the exact numeric-tower result.
             quot-rt?     (and (= op :quot)
-                              (not (and (= "int" s0) (= "int" s1))))
+                              (not (and (= "int64" s0) (= "int64" s1))))
             div-rt?      (and (= op :div)
                               (not (and (= "float64" s0) (= "float64" s1))))
             bitwise-rt?  (and bitwise-op?
-                              (or (not (= "int" s0))
-                                  (not (= "int" s1))))
-            ;; unchecked-*: native Go + - * for int/int (Go int arithmetic
+                              (or (not (= "int64" s0))
+                                  (not (= "int64" s1))))
+            ;; unchecked-*: native Go + - * for int/int (Go int64 arithmetic
             ;; already wraps, which IS the unchecked contract); anything else
-            ;; goes through rt.Unchecked<Op>Value, which coerces through
-            ;; vm.ToInt and wraps exactly like the core fn (#64).
+            ;; goes through rt.Unchecked<Op>Value, which wraps exactly like
+            ;; the core fn (#64): vm.numUnchecked wraps only an Int/Int pair
+            ;; and leaves every other numeric type its own arithmetic.
             unchecked-op? (contains? #{:unchecked-add :unchecked-sub :unchecked-mul} op)
             unchecked-rt? (and unchecked-op?
-                               (or (not (= "int" s0))
-                                   (not (= "int" s1))))
+                               (or (not (= "int64" s0))
+                                   (not (= "int64" s1))))
             ;; Cross-type `=`: two concrete but DIFFERENT numeric types (int vs
             ;; float64) must route to rt.EqValue, not native ==. Clojure `=` is
             ;; category-sensitive across the numeric tower — (= 1 1.0) is false —
@@ -1063,14 +1064,14 @@
           ;; widen since (< 1 0.5) == (< 1.0 0.5). quot is native for int/int
           ;; only, div for float/float only, bitwise/shift for int/int only, and
           ;; cross-type `=` routes to rt.EqValue (see eq-cross-type? above). (#534)
-          (let [l (if (and (= "int" s0) (= "float64" s1)) (float64-cast lhs-expr) lhs-expr)
-                r (if (and (= "float64" s0) (= "int" s1)) (float64-cast rhs-expr) rhs-expr)
+          (let [l (if (and (= "int64" s0) (= "float64" s1)) (float64-cast lhs-expr) lhs-expr)
+                r (if (and (= "float64" s0) (= "int64" s1)) (float64-cast rhs-expr) rhs-expr)
                 raw-binary (cond
                              (= op :unsigned-bit-shift-right)
-                             (gogen/call (gogen/ident "int")
+                             (gogen/call (gogen/ident "int64")
                                [(gogen/binary ">>"
-                                  (gogen/call (gogen/ident "uint") [l])
-                                  (gogen/call (gogen/ident "uint") [r]))])
+                                  (gogen/call (gogen/ident "uint64") [l])
+                                  (gogen/call (gogen/ident "uint64") [r]))])
                              :else
                              (gogen/binary op-str l r))]
             (if (and (comparison-op? op-str) (= "vm.Value" result-spec))
@@ -1874,7 +1875,7 @@
         assign     (gogen/multi-assign "=" [assign-target err-id] [invoke-expr])
         zero-expr  (case (function-return-spec f)
                      "bool"    (gogen/ident "false")
-                     "int"     (gogen/int-lit 0)
+                     "int64"   (gogen/int-lit 0)
                      "float64" (gogen/float-lit 0.0)
                      "string"  (gogen/string-lit "")
                      (gogen/ident "nil"))
@@ -1936,7 +1937,7 @@
             assign (gogen/multi-assign "=" [res-id err-id] [raw-call])
             zero-expr (case (function-return-spec f)
                         "bool"    (gogen/ident "false")
-                        "int"     (gogen/int-lit 0)
+                        "int64"   (gogen/int-lit 0)
                         "float64" (gogen/float-lit 0.0)
                         "string"  (gogen/string-lit "")
                         (gogen/ident "nil"))
@@ -2437,7 +2438,7 @@
         empty-args (gogen/composite-lit (gogen/type "[]vm.Value") [])
         zero-expr  (case (function-return-spec f)
                      "bool"    (gogen/ident "false")
-                     "int"     (gogen/int-lit 0)
+                     "int64"   (gogen/int-lit 0)
                      "float64" (gogen/float-lit 0.0)
                      "string"  (gogen/string-lit "")
                      (gogen/ident "nil"))
@@ -3511,7 +3512,7 @@
 
 (defn- function-return-spec [f]
   ;; What Go type does this function return? Mirrors result-node's logic.
-  ;; Returns "vm.Value" / "bool" / "int" / "float64" / "string", or nil.
+  ;; Returns "vm.Value" / "bool" / "int64" / "float64" / "string", or nil.
   (let [ret-ids (return-ref-ids f)]
     (when (and ret-ids (pos? (count ret-ids)))
       (let [specs (map (fn [nid] (go-type-spec (ir/type-of nid f))) ret-ids)]
@@ -3531,7 +3532,7 @@
               results)))))))
 
 (defn- function-param-specs [f]
-  ;; Go type-spec string ("vm.Value"/"int"/"bool"/…) for each fixed
+  ;; Go type-spec string ("vm.Value"/"int64"/"bool"/…) for each fixed
   ;; (non-variadic) param, mirroring params-for's type resolution.
   (let [arity       (ir/fn-arity f)
         variadic?   (ir/fn-variadic? f)
@@ -3560,7 +3561,7 @@
   ;; Return specs the override wrapper can lift back to vm.Value with a single
   ;; constructor. Deliberately mirrors box-as-value's type set — anything it
   ;; can't box must stay off the override path.
-  #{"bool" "int" "float64" "string" "vm.Char"})
+  #{"bool" "int64" "float64" "string" "vm.Char"})
 
 (defn- override-boxable-return? [f]
   ;; True iff a TYPED RETURN is the only thing keeping this fn off the override
