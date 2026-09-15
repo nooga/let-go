@@ -616,6 +616,21 @@ func buildPage(current, reference Baseline, referenceName string, timeline []Sna
 		}
 		return recent[i].FullName < recent[j].FullName
 	})
+	// One date shared by every row is the same degeneracy with the field
+	// populated: nothing is more recent, so the name tiebreak decides again.
+	if len(recent) > 1 {
+		first := recentAt[recent[0].FullName]
+		same := true
+		for _, row := range recent[1:] {
+			if !recentAt[row.FullName].Equal(first) {
+				same = false
+				break
+			}
+		}
+		if same {
+			recent = nil
+		}
+	}
 	if len(recent) > 8 {
 		recent = recent[:8]
 	}

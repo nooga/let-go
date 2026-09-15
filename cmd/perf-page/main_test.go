@@ -220,3 +220,20 @@ func TestRecentlyTightenedOrdersByBarDate(t *testing.T) {
 		t.Fatalf("first row = %q, want BenchmarkZz (newer bar date)", page.RecentlyTightened[0].Name)
 	}
 }
+
+func TestRecentlyTightenedDropsATotalTie(t *testing.T) {
+	// A timeline snapshot stamps the same captured_at on every entry, so a
+	// baseline seeded from one carries a date on every row and no ordering.
+	const stamp = "2026-09-07T05:34:02Z"
+	current := Baseline{Benchmarks: map[string]BenchmarkEntry{
+		"pkg/vm.BenchmarkAa": {RatioToAnchor: 10, BestSinceAt: stamp},
+		"pkg/vm.BenchmarkBb": {RatioToAnchor: 20, BestSinceAt: stamp},
+		"pkg/vm.BenchmarkZz": {RatioToAnchor: 30, BestSinceAt: stamp},
+	}}
+
+	page := buildPage(current, Baseline{}, "v1.0.0", nil, "")
+
+	if len(page.RecentlyTightened) != 0 {
+		t.Fatalf("got %d rows, want none: every row shares %s, so the order is name order", len(page.RecentlyTightened), stamp)
+	}
+}
