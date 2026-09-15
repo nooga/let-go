@@ -151,7 +151,7 @@ that is the only name a thing has may stay: `the native adapters #438 Def'd at
 init` names something with no other handle, while `(#506)` trailing a list of
 three functions names nothing the sentence has not already said.
 
-This is scoped to the block you already have open. It is not a licence to sweep
+This is scoped to the block you already have open. It is not a license to sweep
 every ID in the tree — that question, and the phrase list generally, is open on
 nooga/let-go#835, and the split above is the current lean rather than a settled
 position.
