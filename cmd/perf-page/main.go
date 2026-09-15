@@ -2329,7 +2329,7 @@ const pageStyle = `
       th, td { padding: 9px; }
     }
     .explorer-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
-    .cpu-filter { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
+    .cpu-filter { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
     .cpu-filter .cpu-label { font-size: 0.8rem; color: var(--muted); }
     .cpu-filter .chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
     .cpu-filter .chips button {
@@ -2809,7 +2809,7 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Timeline</h2>
-        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts are drawn server-side from the whole timeline, so they pool every CPU tier and the CPU chips below cannot reach them; <code>-cpu</code> cuts them at build time. The baseline sections further down are a different case again: they render one machine profile picked at build time, which neither the filter nor <code>-cpu</code> changes.</p>
+        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts are drawn server-side from the whole timeline, so they pool every CPU tier and the CPU chips further down cannot reach them; <code>-cpu</code> cuts them at build time. The baseline sections further down are a different case again: they render one machine profile picked at build time, which neither the filter nor <code>-cpu</code> changes.</p>
       </div>
       {{if .Charts}}
       <div class="chart-grid">
@@ -2862,18 +2862,10 @@ const pageTemplate = `<!doctype html>
       {{end}}
     </section>
 
-    <!-- The filter sits here, not in the header, because here is where its
-         effect starts. Everything above is rendered at build time from one
-         committed profile and cannot react to it; a control that appears to do
-         nothing where it sits reads as broken. Mounted by the first timeline
-         view that loads, and hidden when the timeline carries fewer than two
-         tiers. -->
-    <div class="cpu-filter" id="perf-cpu-filter" hidden></div>
-
     <section>
       <div class="section-head">
         <h2>Explore metrics over time</h2>
-        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them — use the CPU chips just above to cut this chart and the sparklines below to one tier.</p>
+        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them — use the CPU chips in the controls to cut this chart and the sparklines below to one tier.</p>
       </div>
       <div id="perf-explorer" style="width:100%;min-height:420px"></div>
     </section>
@@ -3061,8 +3053,13 @@ const pageTemplate = `<!doctype html>
             history.replaceState(null, "", u);
           }
 
-          function mount() {
-            const host = document.getElementById("perf-cpu-filter");
+          // Every registered row re-renders on a change, so rows cannot
+          // disagree.
+          const hosts = [];
+
+          function mountAll() { hosts.forEach(mountOne); }
+
+          function mountOne(host) {
             if (!host) return;
             // One tier is nothing to choose between.
             if (cpus.length < 2) { host.hidden = true; return; }
@@ -3079,7 +3076,7 @@ const pageTemplate = `<!doctype html>
             all.className = "all";
             all.textContent = "All (" + cpus.length + ")";
             all.setAttribute("aria-pressed", String(allSelected()));
-            all.onclick = function () { cpus.forEach(function (c) { sel.add(c); }); mount(); sync(); notify(); };
+            all.onclick = function () { cpus.forEach(function (c) { sel.add(c); }); mountAll(); sync(); notify(); };
             chips.append(all);
             cpus.forEach(function (c) {
               const b = document.createElement("button");
@@ -3091,14 +3088,14 @@ const pageTemplate = `<!doctype html>
                 if (e.altKey) { sel.clear(); sel.add(c); }
                 else if (sel.has(c)) { sel.delete(c); }
                 else { sel.add(c); }
-                mount(); sync(); notify();
+                mountAll(); sync(); notify();
               };
               chips.append(b);
             });
             host.append(chips);
             const scope = document.createElement("span");
             scope.className = "scope";
-            scope.textContent = "applies to this chart and the sparklines below";
+            scope.textContent = host.dataset.cpuScope || "";
             host.append(scope);
           }
 
@@ -3117,7 +3114,13 @@ const pageTemplate = `<!doctype html>
               } else {
                 cpus.forEach(function (c) { if (!wanted.length) { sel.add(c); } });
               }
-              mount();
+              mountAll();
+            },
+            mountInto: function (el, scope) {
+              el.className = "cpu-filter";
+              el.dataset.cpuScope = scope || "";
+              if (hosts.indexOf(el) < 0) { hosts.push(el); }
+              mountOne(el);
             },
             onChange: function (fn) { subs.push(fn); },
             // Rows carry the full CPU model; chips show the short tag.
@@ -3142,6 +3145,7 @@ const pageTemplate = `<!doctype html>
             .attr("value", function (d) { return d; }).text(opts.metricText)
             .property("selected", function (d) { return d === opts.metric(); });
           mSel.on("change", function () { opts.setMetric(this.value); opts.onChange(); });
+          if (opts.cpuScope) { PERF.cpu.mountInto(bar.append("span").node(), opts.cpuScope); }
         }
       };
     })();
@@ -3178,6 +3182,7 @@ const pageTemplate = `<!doctype html>
           bench: function () { return curBench; }, setBench: function (v) { curBench = v; },
           metric: function () { return curMetric; }, setMetric: function (v) { curMetric = v; },
           metricText: function (m) { return PERF.metricLabel(meta, m); },
+          cpuScope: "also filters the sparklines below",
           onChange: draw
         });
         const chart = d3.select(host).append("div").attr("class", "explorer-chart");
