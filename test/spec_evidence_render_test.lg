@@ -1,18 +1,22 @@
 ;; test/spec_evidence_render_test.lg
-;; Test cwd is test/, so fixtures/vocab paths are ../scripts/... and the
-;; freshly built engine is ../lg (same rule the run tests use).
+;; Test cwd is test/, so fixtures/vocab paths are ../scripts/... The engine is
+;; the lg binary the harness built (CLJ_ENGINE), falling back to ../lg.
 (ns test.spec-evidence-render-test
   (:require
    [clojure.string :as str]
    [spec-evidence :as se]
    [test :refer :all]))
 
+(def ^:private engine
+  (let [e (os/getenv "CLJ_ENGINE")]
+    (if (str/blank? e) "../lg" e)))
+
 (deftest render-leaves-passing-slim-rows-unannotated
   (let [dir (str (os/temp-dir) "/" (name (gensym "spec-render-ok-")))
         out (str dir "/rendered.md")]
     (mkdir dir)
     (let [code (atom nil)]
-      (with-out-str (reset! code (se/main ["render" "fixtures/spec-evidence/slim.md" out "--engine" "../lg"])))
+      (with-out-str (reset! code (se/main ["render" "fixtures/spec-evidence/slim.md" out "--engine" engine])))
       (is (= 0 @code))
       (let [text (slurp out)]
         (is (str/includes? text "|! catalog | (= 14 14) | (pos? 9) |"))
@@ -28,7 +32,7 @@
                     "| table | check | check |\n|---|---|---|\n"
                     "|! catalog | (= 14 15) | (pos? 9) |\n"))
     (let [code (atom nil)]
-      (with-out-str (reset! code (se/main ["render" spec out "--engine" "../lg"])))
+      (with-out-str (reset! code (se/main ["render" spec out "--engine" engine])))
       (is (= 0 @code))
       (let [text (slurp out)]
         ;; failing cell gains the actual; its passing neighbour is untouched
@@ -37,6 +41,6 @@
 
 (deftest render-prints-to-stdout-without-an-output-path
   (let [code (atom nil)
-        printed (with-out-str (reset! code (se/main ["render" "fixtures/spec-evidence/slim.md" "--engine" "../lg"])))]
+        printed (with-out-str (reset! code (se/main ["render" "fixtures/spec-evidence/slim.md" "--engine" engine])))]
     (is (= 0 @code))
     (is (str/includes? printed "|! catalog | (= 14 14) | (pos? 9) |"))))

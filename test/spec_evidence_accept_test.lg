@@ -5,13 +5,19 @@
    [spec-evidence :as se]
    [test :refer :all]))
 
+;; The engine is the lg binary the test harness built (CLJ_ENGINE, set by
+;; TestMain); run by hand from test/, it falls back to "../lg".
+(def ^:private engine
+  (let [e (os/getenv "CLJ_ENGINE")]
+    (if (str/blank? e) "../lg" e)))
+
 (deftest accept-rewrites-the-failing-expectation-in-place
   (let [dir (str (os/temp-dir) "/" (name (gensym "spec-accept-")))
         spec (str dir "/x.md")]
     (mkdir dir)
     (spit spec (str "---\nstatus: draft\nlast-verified: 2000-01-01\n---\n\nTwo. [R-two]\n\n```clj-repl @R-two oracle=none\n(+ 1 1)\n;=> 3\n(str \"a\")\n;; out: \"zzz\"\n;=> \"a\"\n```\n"))
     (let [code (atom nil)
-          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" engine])))]
       (is (= 0 @code))
       (is (str/includes? out "accepted two#1 value"))
       (is (str/includes? out "accepted two#2 out"))
@@ -20,7 +26,7 @@
         (is (str/includes? t "(str \"a\")\n;; out: \"\"\n;=> \"a\"\n"))
         (is (not (str/includes? t "last-verified: 2000-01-01")))))
     ;; A second run is clean.
-    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
+    (is (= 0 (se/main ["run" spec "--engine" engine])))))
 
 (deftest accept-promotes-an-unexpected-pass-by-dropping-the-mark
   (let [dir (str (os/temp-dir) "/" (name (gensym "spec-xpass-accept-")))
@@ -28,11 +34,11 @@
     (mkdir dir)
     (spit spec "P. [R-p]\n\n```clj-repl @R-p oracle=none\n(+ 1 1)\n;=> 2\n;; expect: fail\n```\n")
     (let [code (atom nil)
-          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" engine])))]
       (is (= 0 @code))
       (is (str/includes? out "accepted p#1 xpass"))
       (is (not (str/includes? (slurp spec) ";; expect: fail")))
-      (is (= 0 (se/main ["run" spec "--engine" "../lg"]))))))
+      (is (= 0 (se/main ["run" spec "--engine" engine]))))))
 
 ;; Fix round 1, finding 1: table-promotion's row->file-line arithmetic was
 ;; off by one (rewrote the `|---|` separator instead of the data row).
@@ -49,7 +55,7 @@
                     "| `(+ 1 1)` | `2` | `\"zzz\"` |\n"
                     "| `(str \"a\")` | `\"b\"` | `\"\"` |\n"))
     (let [code (atom nil)
-          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" engine])))]
       (is (= 0 @code))
       (is (str/includes? out "accepted t#1 out"))
       (is (str/includes? out "accepted t#2 value"))
@@ -59,7 +65,7 @@
         (is (str/includes? t "| `(+ 1 1)` | `2` | `\"\"` |"))
         (is (str/includes? t "| `(str \"a\")` | `\"a\"` | `\"\"` |"))))
     ;; A second run is clean.
-    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
+    (is (= 0 (se/main ["run" spec "--engine" engine])))))
 
 ;; Fix round 1, finding 2: an unexpected throw's FAIL line must carry the
 ;; exception's class so `accept` can write a `;; throws: {c} {m*}`-shaped
@@ -70,13 +76,13 @@
     (mkdir dir)
     (spit spec "Th. [R-th]\n\n```clj-repl @R-th oracle=none\n(throw (ex-info \"boom\" {}))\n```\n")
     (let [code (atom nil)
-          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" engine])))]
       (is (= 0 @code))
       (is (str/includes? out "accepted th#1 threw"))
       (is (str/includes? (slurp spec)
-                          "(throw (ex-info \"boom\" {}))\n;; throws: ExceptionInfo \"boom\"\n")))
+            "(throw (ex-info \"boom\" {}))\n;; throws: ExceptionInfo \"boom\"\n")))
     ;; A second run is clean.
-    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
+    (is (= 0 (se/main ["run" spec "--engine" engine])))))
 
 ;; Final review wave, C2: on a throws MISMATCH the vocab used to report the
 ;; raw `(type e)`, so `accept` wrote `;; throws: let-go.lang.ExceptionInfo
@@ -90,11 +96,11 @@
     (spit spec (str "Th. [R-tm]\n\n```clj-repl @R-tm oracle=none\n"
                     "(throw (ex-info \"boom\" {}))\n;; throws: ExceptionInfo \"wrong\"\n```\n"))
     (let [code (atom nil)
-          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" engine])))]
       (is (= 0 @code))
       (is (str/includes? out "accepted tm#1 throws"))
       (let [t (slurp spec)]
         (is (str/includes? t ";; throws: ExceptionInfo \"boom\""))
         (is (not (str/includes? t "let-go.lang.ExceptionInfo")))))
     ;; The promoted class name resolves, so a second run is clean.
-    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
+    (is (= 0 (se/main ["run" spec "--engine" engine])))))
