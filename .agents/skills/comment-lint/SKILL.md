@@ -135,6 +135,28 @@ rename to `root` and `rootBind`, and re-tensing it would have preserved the
 wrong names. **Read the code before rewriting; do not paraphrase the old
 comment.**
 
+## Writing the replacement
+
+The rewrite is not free space. Every clause you add is a claim you now own and
+that someone has to maintain, so the bar for adding one is the bar for any new
+comment: not "is it true" but "does a reader of *this* file need it here."
+
+**Prefer removal to replacement.** Most flagged blocks are a good comment with a
+clause welded on. Cutting the clause is finished work. Replacing the block
+invites you to restate things that are already written somewhere better.
+
+**Before adding a fact, find where it already lives.** If the claim belongs to
+another file's code, that file is its home; a copy here is the `wasm.go` defect,
+and it rots independently of the original.
+
+**Stop when the sentence is checkable against the code in front of you.** Not
+when it is complete, not when it explains the design — when a reader with this
+file open can verify it without opening another.
+
+**Naming a symbol buys precision and a rename hazard.** Name one when it is the
+only handle a reader has, and prefer a symbol a rename would have to touch over
+a file path or a line number, which nothing keeps honest.
+
 ## Two smaller rules
 
 **Do not rank what the code does not rank.** "The byte-array case is the one
