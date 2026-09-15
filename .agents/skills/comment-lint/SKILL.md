@@ -51,13 +51,13 @@ This is the honest content of most regression-test and benchmark comments, and
 it is frequently the right rewrite:
 
 ```go
-// asBytes backs the binary file/stream sinks (spit, write!). The byte-array
-// case is the one that needs it: without the coercion, a byte-array handed to
-// spit/write! stringifies to its #byte-array[…] repr, so bytes >127 never
-// reach the sink.
+// derefSink defeats dead-code elimination: without a package-level sink the
+// compiler may elide the Deref call entirely, producing impossible sub-ns
+// numbers that say nothing about the real cost.
 ```
 
-A reader can check that against the code in front of them.
+A reader can check that against the code in front of them, and nothing in it
+needs a previous version of the file to parse.
 
 **Historical contrast — rewrite.** The previous design, re-tensed. The giveaway
 words are `rather than`, `instead`, `not X but Y`, `alone could do without`,
@@ -79,6 +79,30 @@ ask where it already lives before keeping it here.
 **Removing the flagged phrase without removing the history is the failure mode
 this skill exists to prevent.** It passes the linter and changes nothing for
 the reader.
+
+## A counterfactual is not automatically correct
+
+Passing the test above does not make a sentence true. A rewrite that keeps the
+old comment's shape keeps its claims, and the claims are the part most likely to
+have gone stale:
+
+```go
+// asBytes backs the binary file/stream sinks (spit, write!). The byte-array
+// case is the one that needs it: without the coercion, a byte-array handed to
+// spit/write! stringifies to its #byte-array[…] repr, so bytes >127 never
+// reach the sink.
+```
+
+Two defects, neither of them visible to the linter. The stringify claim is true
+of `write!` — `iort.go` falls back to `vs[1].String()` — and false of `spit`,
+which returns `spit expected String or byte-array` rather than writing anything.
+One sentence asserts one behavior for two callers that do different things. And
+where the claim does hold, `iort.go` already states it on the code itself, so
+repeating it on a test is the second-copy defect from the `wasm.go` case above.
+
+Rewrite from the function instead: it converts a `String` or a byte-kind
+`TypedArray` and rejects everything else. That is checkable in one place and
+stays true whatever the callers do next.
 
 ## Rewrite or delete
 
@@ -110,6 +134,27 @@ cannot see: a benchmark comment naming the fields `root` and `curr` survived a
 rename to `root` and `rootBind`, and re-tensing it would have preserved the
 wrong names. **Read the code before rewriting; do not paraphrase the old
 comment.**
+
+## Two smaller rules
+
+**Do not rank what the code does not rank.** "The byte-array case is the one
+that needs it" elevates one of the three cases `TestAsBytes` covers. That
+emphasis is the author's view of which case was interesting — a fact about the
+change, not about the code — and it is often the re-tensed ghost of a
+superlative like "the one that used to be impossible". Describe the cases and
+let the reader decide which one they came for.
+
+**Do not carry a bare issue or PR number into a block you are rewriting.** A
+number that only records where a change was discussed is provenance; git blame
+and the PR already hold it, and in a comment it rots silently. An identifier
+that is the only name a thing has may stay: `the native adapters #438 Def'd at
+init` names something with no other handle, while `(#506)` trailing a list of
+three functions names nothing the sentence has not already said.
+
+This is scoped to the block you already have open. It is not a licence to sweep
+every ID in the tree — that question, and the phrase list generally, is open on
+nooga/let-go#835, and the split above is the current lean rather than a settled
+position.
 
 ## The one hard rule
 
