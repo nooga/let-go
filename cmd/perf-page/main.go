@@ -2380,13 +2380,8 @@ const pageTemplate = `<!doctype html>
           if (a >= 10) return v.toFixed(1);
           return v.toPrecision(3);
         },
-        // Page-wide CPU selection, shared by every timeline-driven view.
-        //
-        // ratio_to_anchor only normalizes WITHIN a CPU model, so a mixed
-        // timeline overplots tiers that cannot be compared to each other. The
-        // -cpu build flag already solves that, but globally and only by
-        // rebuilding; this is the same cut made in the page, so one page can
-        // be re-sliced per tier while reading it.
+        // Page-wide CPU selection, shared by every timeline-driven view. The
+        // tiers are not comparable to each other; see filterTimelineByCPU.
         //
         // Views register independently (they fetch the same payload but do not
         // know about each other), so the control mounts on first registration
