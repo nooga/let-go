@@ -1974,9 +1974,15 @@ const pageTemplate = `<!doctype html>
     table.spark-table th.num, table.spark-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
     table.spark-table td.num { color: var(--muted); }
     table.spark-table tr:hover td { background: rgba(36,92,115,0.045); }
-    table.spark-table .bench { color: var(--ink); max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+    /* The name is the column worth reading in full; the trend cell is a
+       fixed 160px canvas, so it should not absorb the slack. */
+    table.spark-table .bench { color: var(--ink); max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+    table.spark-table td.spark, table.spark-table th.spark { width: 176px; }
     table.spark-table .delta { min-width: 0; }
     table.spark-table td.scales { white-space: normal; text-align: right; }
+    /* A collapsed family summarises several scales; the underline marks the
+       cells whose detail is on hover. */
+    table.spark-table td.scaled { text-decoration: underline dotted rgba(0,0,0,0.28); text-underline-offset: 3px; cursor: help; }
     .scalepill { display: inline-flex; gap: 0.25rem; align-items: baseline; margin-left: 0.4rem; font-size: 0.72rem; padding: 1px 5px; border-radius: 5px; font-variant-numeric: tabular-nums; }
     .scalepill b { font-weight: 700; opacity: 0.65; }
     .scalepill.good { color: var(--green); background: var(--green-bg); }
@@ -1987,8 +1993,10 @@ const pageTemplate = `<!doctype html>
     .spark-tip .tip-r { display: flex; gap: 10px; align-items: baseline; font-variant-numeric: tabular-nums; }
     .spark-tip .tip-r b { min-width: 26px; opacity: 0.65; font-weight: 700; }
     .spark-tip .tip-r span:nth-of-type(1) { margin-left: auto; }
-    .spark-tip .tip-r .good { color: #7fdca4; }
-    .spark-tip .tip-r .bad { color: #f3a3a3; }
+    /* The generic .good/.bad carry a light pill background for the table; on
+       the dark tip that leaves pale text on a pale block. Colour only here. */
+    .spark-tip .tip-r .good { color: #7fdca4; background: none; }
+    .spark-tip .tip-r .bad { color: #f3a3a3; background: none; }
     .spark-tip .tip-r.muted { opacity: 0.6; }
   </style>
 </head>
@@ -2247,6 +2255,11 @@ const pageTemplate = `<!doctype html>
         fmt: function (v) {
           if (v == null || isNaN(v)) return "—";
           const a = Math.abs(v);
+          // Three significant figures past 10k: full digits are compared by
+          // counting commas, not read.
+          if (a >= 1e9) return (v / 1e9).toFixed(2) + "B";
+          if (a >= 1e6) return (v / 1e6).toFixed(2) + "M";
+          if (a >= 1e4) return (v / 1e3).toFixed(1) + "k";
           if (a >= 1000) return Math.round(v).toLocaleString();
           if (a >= 10) return v.toFixed(1);
           return v.toPrecision(3);
@@ -2418,6 +2431,24 @@ const pageTemplate = `<!doctype html>
           tip.style("left", lx + "px").style("top", ly + "px");
         }
 
+        // The per-scale detail behind a collapsed family row. Not a native
+        // title: that waits out a hover delay and never appears at all while
+        // the pointer is moving across a dense table.
+        function showScaleTip(ev, d) {
+          const lib = (meta[curMetric] || {}).lower_is_better;
+          let html = '<div class="tip-h">' + esc(d.base) + '</div><div class="tip-sub">' + esc(d.cpu) + ' · ' + d.series.length + ' scales</div>';
+          d.series.forEach(function (se) {
+            const cls = se.deltaPct === 0 ? "" : ((lib ? se.deltaPct < 0 : se.deltaPct > 0) ? "good" : "bad");
+            html += '<div class="tip-r"><b>' + fmtScale(se.scale) + '</b><span>' + PERF.fmt(se.first) + " \u2192 " + PERF.fmt(se.last) + '</span><span class="' + cls + '">' + deltaStr(se.deltaPct) + '</span></div>';
+          });
+          tip.html(html).style("opacity", 1);
+          const tw = tip.node().offsetWidth, th = tip.node().offsetHeight, gap = 14;
+          let lx = ev.clientX + gap, ly = ev.clientY + gap;
+          if (lx + tw > window.innerWidth - 8) lx = ev.clientX - tw - gap;
+          if (ly + th > window.innerHeight - 8) ly = ev.clientY - th - gap;
+          tip.style("left", lx + "px").style("top", ly + "px");
+        }
+
         // Split a benchmark name into its base and scaling factor: a trailing
         // /<digits> size (before any [mode] suffix). MapAssoc/HAMT-Assoc/01000
         // [bytecode] → base "MapAssoc/HAMT-Assoc [bytecode]", scale 1000.
@@ -2430,13 +2461,38 @@ const pageTemplate = `<!doctype html>
           if (sm) { return { base: sm[1] + mode, scale: +sm[2] }; }
           return { base: bench, scale: null };
         }
+        // Range across a family's scales; a single value when they agree once
+        // formatted, which is the common case.
+        function fmtRange(series, key) {
+          const vs = series.map(function (se) { return se[key]; }).filter(function (v) { return v != null && !isNaN(v); });
+          if (!vs.length) { return "—"; }
+          const lo = PERF.fmt(Math.min.apply(null, vs)), hi = PERF.fmt(Math.max.apply(null, vs));
+          return lo === hi ? lo : lo + "–" + hi;
+        }
+
+        function geoDelta(series) {
+          let sum = 0, n = 0;
+          series.forEach(function (se) {
+            const m = 1 + se.deltaPct / 100;
+            if (m > 0) { sum += Math.log(m); n++; }
+          });
+          if (!n) { return 0; }
+          return (Math.exp(sum / n) - 1) * 100;
+        }
+
         function fmtScale(n) {
           if (n == null) return "";
           if (n >= 1000000) return (n / 1000000) + "M";
           if (n >= 1000) return (n / 1000) + "k";
           return "" + n;
         }
-        function deltaStr(p) { return (p >= 0 ? "+" : "") + p.toFixed(1) + "%"; }
+        // Percent holds while the change is the same order as the value; past
+        // a doubling the multiple is what gets compared (+1012.3% is 11.1x).
+        function deltaStr(p) {
+          if (p >= 100) { return (1 + p / 100).toFixed(1) + "\u00d7"; }
+          if (p <= -50) { return "1/" + (1 / (1 + p / 100)).toFixed(1) + "\u00d7"; }
+          return (p >= 0 ? "+" : "") + p.toFixed(1) + "%";
+        }
 
         function draw() {
           const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
@@ -2482,7 +2538,7 @@ const pageTemplate = `<!doctype html>
           const htr = table.append("thead").append("tr");
           htr.append("th").text("Benchmark");
           htr.append("th").text("CPU");
-          htr.append("th").text("Trend (scale variants overlaid, indexed to % change)");
+          htr.append("th").attr("class", "spark").text("Trend");
           htr.append("th").attr("class", "num").text("First");
           htr.append("th").attr("class", "num").text("Last");
           htr.append("th").attr("class", "num").style("cursor", "pointer").text("Δ " + (sortDesc ? "▼" : "▲"))
@@ -2495,12 +2551,20 @@ const pageTemplate = `<!doctype html>
             row.append("td").text(d.cpu);
             row.append("td").attr("class", "spark").each(function () { drawSpark(this, d); });
             if (d.grouped) {
-              // Scale family: per-scale Δ pills span the First/Last/Δ columns.
-              const cell = row.append("td").attr("colspan", 3).attr("class", "scales");
-              d.series.forEach(function (se) {
-                const pill = cell.append("span").attr("class", "scalepill " + (se.good ? "good" : "bad"));
-                pill.append("b").text(fmtScale(se.scale));
-                pill.append("span").text(deltaStr(se.deltaPct));
+              // Scale family: one summary per column, individuals on hover.
+              // Geometric, because these are multipliers: an arithmetic mean of
+              // ratios follows whichever scale carries the largest one.
+              const geo = geoDelta(d.series);
+              const cells = [
+                row.append("td").attr("class", "num scaled").text(fmtRange(d.series, "first")),
+                row.append("td").attr("class", "num scaled").text(fmtRange(d.series, "last")),
+                row.append("td").attr("class", "num scaled delta " + (d.series[0].good ? "good" : "bad"))
+                  .text(deltaStr(geo) + " \u00b7 " + d.series.length)
+              ];
+              cells.forEach(function (c) {
+                c.on("mouseenter", function (ev) { showScaleTip(ev, d); })
+                  .on("mousemove", function (ev) { showScaleTip(ev, d); })
+                  .on("mouseleave", hideTip);
               });
             } else {
               const se = d.series[0];
