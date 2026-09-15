@@ -596,15 +596,41 @@ func buildPage(current, reference Baseline, referenceName string, timeline []Sna
 	summary.BenchmarkCount = len(rows)
 	summary.PackageCount = len(packageSet)
 
-	recent := append([]BenchmarkRow(nil), rows...)
+	// Parsing an empty best_since_at yields the zero time, so rows without a
+	// bar date all compare equal and drop the sort through to its name
+	// tiebreak. Skip them rather than order them alphabetically.
+	recent := make([]BenchmarkRow, 0, len(rows))
+	recentAt := make(map[string]time.Time, len(rows))
+	for _, row := range rows {
+		at, err := time.Parse(time.RFC3339, row.BestSinceAt)
+		if err != nil {
+			continue
+		}
+		recent = append(recent, row)
+		recentAt[row.FullName] = at
+	}
 	sort.Slice(recent, func(i, j int) bool {
-		ti, _ := time.Parse(time.RFC3339, recent[i].BestSinceAt)
-		tj, _ := time.Parse(time.RFC3339, recent[j].BestSinceAt)
+		ti, tj := recentAt[recent[i].FullName], recentAt[recent[j].FullName]
 		if !ti.Equal(tj) {
 			return ti.After(tj)
 		}
 		return recent[i].FullName < recent[j].FullName
 	})
+	// One date shared by every row is the same degeneracy with the field
+	// populated: nothing is more recent, so the name tiebreak decides again.
+	if len(recent) > 1 {
+		first := recentAt[recent[0].FullName]
+		same := true
+		for _, row := range recent[1:] {
+			if !recentAt[row.FullName].Equal(first) {
+				same = false
+				break
+			}
+		}
+		if same {
+			recent = nil
+		}
+	}
 	if len(recent) > 8 {
 		recent = recent[:8]
 	}
@@ -2155,6 +2181,7 @@ const pageTemplate = `<!doctype html>
         <h2>Recently tightened</h2>
         <p>Most recently lowered ratchet bars. × anchor normalizes wall time across machines; the last column is the change vs {{.ReferenceName}}.</p>
       </div>
+      {{if .RecentlyTightened}}
       <table>
         <thead><tr><th>Benchmark</th><th>Bar set</th><th>× anchor</th><th>Wall</th><th>Allocs</th><th>vs {{.ReferenceName}}</th></tr></thead>
         <tbody>
@@ -2170,6 +2197,7 @@ const pageTemplate = `<!doctype html>
           {{end}}
         </tbody>
       </table>
+      {{else}}<div class="empty">This machine profile carries no bar-set dates, so there is nothing to order by recency.</div>{{end}}
     </section>
 
     <section>

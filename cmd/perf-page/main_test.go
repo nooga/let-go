@@ -179,3 +179,61 @@ func TestFormatRatioCompactsLargeValues(t *testing.T) {
 		}
 	}
 }
+
+func TestRecentlyTightenedSkipsRowsWithoutBarDate(t *testing.T) {
+	// "Zz" is last in name order, so a name-order fallthrough would not put it
+	// first.
+	current := Baseline{Benchmarks: map[string]BenchmarkEntry{
+		"pkg/vm.BenchmarkAa": {RatioToAnchor: 10},
+		"pkg/vm.BenchmarkBb": {RatioToAnchor: 20},
+		"pkg/vm.BenchmarkZz": {RatioToAnchor: 30, BestSinceAt: "2026-09-01T00:00:00Z", BestSinceSHA: "abc123def456"},
+	}}
+
+	page := buildPage(current, Baseline{}, "v1.0.0", nil, "")
+
+	if len(page.RecentlyTightened) != 1 {
+		names := make([]string, 0, len(page.RecentlyTightened))
+		for _, r := range page.RecentlyTightened {
+			names = append(names, r.FullName)
+		}
+		t.Fatalf("RecentlyTightened = %v, want only the row carrying best_since_at", names)
+	}
+	if got := page.RecentlyTightened[0].Name; got != "BenchmarkZz" {
+		t.Fatalf("RecentlyTightened[0] = %q, want BenchmarkZz", got)
+	}
+}
+
+func TestRecentlyTightenedOrdersByBarDate(t *testing.T) {
+	// The newer date is on the name-last row, so date order and name order
+	// disagree.
+	current := Baseline{Benchmarks: map[string]BenchmarkEntry{
+		"pkg/vm.BenchmarkAa": {RatioToAnchor: 10, BestSinceAt: "2026-09-01T00:00:00Z"},
+		"pkg/vm.BenchmarkZz": {RatioToAnchor: 30, BestSinceAt: "2026-09-02T00:00:00Z"},
+	}}
+
+	page := buildPage(current, Baseline{}, "v1.0.0", nil, "")
+
+	if len(page.RecentlyTightened) != 2 {
+		t.Fatalf("got %d rows, want 2", len(page.RecentlyTightened))
+	}
+	if page.RecentlyTightened[0].Name != "BenchmarkZz" {
+		t.Fatalf("first row = %q, want BenchmarkZz (newer bar date)", page.RecentlyTightened[0].Name)
+	}
+}
+
+func TestRecentlyTightenedDropsATotalTie(t *testing.T) {
+	// A timeline snapshot stamps the same captured_at on every entry, so a
+	// baseline seeded from one carries a date on every row and no ordering.
+	const stamp = "2026-09-07T05:34:02Z"
+	current := Baseline{Benchmarks: map[string]BenchmarkEntry{
+		"pkg/vm.BenchmarkAa": {RatioToAnchor: 10, BestSinceAt: stamp},
+		"pkg/vm.BenchmarkBb": {RatioToAnchor: 20, BestSinceAt: stamp},
+		"pkg/vm.BenchmarkZz": {RatioToAnchor: 30, BestSinceAt: stamp},
+	}}
+
+	page := buildPage(current, Baseline{}, "v1.0.0", nil, "")
+
+	if len(page.RecentlyTightened) != 0 {
+		t.Fatalf("got %d rows, want none: every row shares %s, so the order is name order", len(page.RecentlyTightened), stamp)
+	}
+}
