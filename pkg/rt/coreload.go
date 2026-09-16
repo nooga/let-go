@@ -45,15 +45,15 @@ type CoreLoadOptions struct {
 // a caller can read its const pool or chunk map.
 //
 // It is the one implementation behind compiler.loadPrecompiledBundle,
-// rt.LoadCore, and rt.BootCore. Two invariants hold here for every caller:
+// rt.LoadCore, and rt.BootCore. Two invariants hold here:
 //
-//   - *ns* is saved before the replay and restored after. Each chunk runs its
-//     (ns …) form under a frame with no ExecContext, so in-ns falls through to
-//     CurrentNS.SetRoot and mutates the global root; unrestored, a caller that
-//     returns straight to user code (BootCore) would deref a *ns* left pointing
-//     at whichever chunk ran last.
-//   - the eager hybrid loop iterates unit.NSOrder (dependency order), not the
-//     NSChunks map, so replay order is deterministic, and calls
+//   - for every caller, *ns* is saved before the replay and restored after.
+//     Each chunk runs its (ns …) form under a frame with no ExecContext, so
+//     in-ns falls through to CurrentNS.SetRoot and mutates the global root;
+//     unrestored, a caller that returns straight to user code (BootCore) would
+//     deref a *ns* left pointing at whichever chunk ran last.
+//   - under EagerHybrids, the hybrid loop iterates unit.NSOrder (dependency
+//     order), not the NSChunks map, so replay order is deterministic, and calls
 //     ReapplyGeneratedPrimitives after each chunk — the chunk's bootstrap defs
 //     overwrite the native adapters #438 Def'd at init, so without the reapply
 //     a bundle that eager-re-Defs one would strand its callers on the
