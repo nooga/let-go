@@ -159,7 +159,7 @@
            (doseq [t (get *registered-tests* *ns* [])]
              (set! *report-counters* (update *report-counters* :test inc))
              (test-var* t))
-           (in-ns (symbol (name old-ns)))))
+           (in-ns (ns-name old-ns))))
        ;; Run every registered ns's tests IN that ns, so runtime name
        ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
        ;; the test was defined in — not whatever ns run-tests was called from.
