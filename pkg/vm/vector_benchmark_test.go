@@ -79,13 +79,18 @@ func BenchmarkVectorAccess(b *testing.B) {
 func BenchmarkVectorConj(b *testing.B) {
 	benchSizes := []int{10, 100, 1000}
 
+	// Conj never mutates its receiver, so one empty base serves every
+	// iteration. Building it inside the loop under StopTimer/StartTimer
+	// cost a stop-the-world ReadMemStats per iteration: tens of
+	// microseconds of wall time around a few microseconds of measured work.
+	// b.Loop keeps the setup above out of the timed region (the timer is
+	// already running when this function is entered) and keeps the loop
+	// body's results alive.
 	for _, size := range benchSizes {
 		b.Run("ArrayVector/"+strconv.Itoa(size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				vec := NewArrayVector([]Value{}).(Collection)
-				b.StartTimer()
-
+			base := NewArrayVector([]Value{}).(Collection)
+			for b.Loop() {
+				vec := base
 				// Add elements one by one
 				for j := range size {
 					vec = vec.Conj(Int(j))
@@ -94,11 +99,9 @@ func BenchmarkVectorConj(b *testing.B) {
 		})
 
 		b.Run("PersistentVector/"+strconv.Itoa(size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				vec := NewPersistentVector([]Value{}).(Collection)
-				b.StartTimer()
-
+			base := NewPersistentVector([]Value{}).(Collection)
+			for b.Loop() {
+				vec := base
 				// Add elements one by one
 				for j := range size {
 					vec = vec.Conj(Int(j))
@@ -119,12 +122,13 @@ func BenchmarkVectorAssoc(b *testing.B) {
 			values[i] = Int(i)
 		}
 
+		// Assoc copies on write for both vector kinds, so the base built
+		// once here is what every iteration used to rebuild under StopTimer.
 		b.Run("ArrayVector/"+strconv.Itoa(size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				vec := NewArrayVector(values).(Associative)
-				b.StartTimer()
-
+			vec := NewArrayVector(values).(Associative)
+			i := 0
+			for b.Loop() {
+				i++
 				// Update elements at different positions
 				vec.Assoc(Int(0), Int(i))      // First
 				vec.Assoc(Int(size/2), Int(i)) // Middle
@@ -133,11 +137,10 @@ func BenchmarkVectorAssoc(b *testing.B) {
 		})
 
 		b.Run("PersistentVector/"+strconv.Itoa(size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				vec := NewPersistentVector(values).(Associative)
-				b.StartTimer()
-
+			vec := NewPersistentVector(values).(Associative)
+			i := 0
+			for b.Loop() {
+				i++
 				// Update elements at different positions
 				vec.Assoc(Int(0), Int(i))      // First
 				vec.Assoc(Int(size/2), Int(i)) // Middle
@@ -161,30 +164,25 @@ func BenchmarkVectorSeq(b *testing.B) {
 		arrayVec := NewArrayVector(values).(Sequable)
 		persistentVec := NewPersistentVector(values).(Sequable)
 
+		// Seqs are immutable (Next returns a fresh node), so one head built
+		// here is walked from the start on every iteration, and the timed
+		// region still covers exactly the walk, as it did under StopTimer.
 		b.Run("ArrayVector/"+strconv.Itoa(size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				seq := arrayVec.Seq()
-				b.StartTimer()
-
+			head := arrayVec.Seq()
+			for b.Loop() {
 				// Iterate through the entire sequence
-				for seq != nil {
+				for seq := head; seq != nil; seq = seq.Next() {
 					seq.First()
-					seq = seq.Next()
 				}
 			}
 		})
 
 		b.Run("PersistentVector/"+strconv.Itoa(size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				seq := persistentVec.Seq()
-				b.StartTimer()
-
+			head := persistentVec.Seq()
+			for b.Loop() {
 				// Iterate through the entire sequence
-				for seq != nil {
+				for seq := head; seq != nil; seq = seq.Next() {
 					seq.First()
-					seq = seq.Next()
 				}
 			}
 		})
