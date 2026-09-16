@@ -75,6 +75,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Parallel IR lowering + determinism | `design/parallel-lowering-and-type-cache.md` |
 | Runtime I/O, host decoupling | `design/runtime-io-host-decoupling.md` |
 | Terminal resize wake contract | `design/terminal-resize-wake.md` |
+| Graphics backend contract / host-capability seam | `design/glplat-backend-contract.md` |
 | Off-goroutine execution context threading | `design/exec-context-threading.md` |
 
 ## Reading order if starting cold

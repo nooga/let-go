@@ -113,7 +113,7 @@ The I/O seams shipped in the order this doc laid out:
 
 1. **Input** (`KeySource` / `HostReader`): the output dual, and the harder half (§5.2, §5.3). **Shipped 2026-06-17 (#244).**
 2. **Emit** (`HostEmitter`): the `_lgEmit` bridge promoted to a typed host capability, the same shape as the writer. **Shipped 2026-06-17 (#241).**
-3. **Peer capabilities**: graphics (sixel/canvas rides `*out*` or a sibling seam), audio, controller input. Each is a guest-named capability bound by the host; none is special once the I/O seams set the pattern. **Now scoped in nooga/let-go#255**, with the client-owned shell (`-w-shell none`, #245) already landed as the surface they bind.
+3. **Peer capabilities**: graphics (sixel/canvas rides `*out*` or a sibling seam), audio, controller input. Each is a guest-named capability bound by the host; none is special once the I/O seams set the pattern. **Now scoped in nooga/let-go#255**, with the client-owned shell (`-w-shell none`, #245) already landed as the surface they bind. The graphics half is worked out in [`glplat-backend-contract.md`](glplat-backend-contract.md).
 
 The endgame is mostly realized: the runtime boots, runs bytecode, and talks to its host through a handful of bound seams, with the `lg -w` generator wiring those seams (including `-w-shell none` for client shells) instead of installing shims. The I/O half is done; peer capabilities are the remaining work, in #255.
 

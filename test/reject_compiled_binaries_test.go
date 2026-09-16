@@ -14,6 +14,7 @@ func binaryGuardGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = binaryGuardNoRefEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
@@ -31,7 +32,8 @@ func binaryGuardCommit(t *testing.T, dir, message string) string {
 func binaryGuardNoRefEnv() []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "PRE_COMMIT_FROM_REF=") &&
+		if !strings.HasPrefix(entry, "GIT_") &&
+			!strings.HasPrefix(entry, "PRE_COMMIT_FROM_REF=") &&
 			!strings.HasPrefix(entry, "PRE_COMMIT_TO_REF=") {
 			env = append(env, entry)
 		}
@@ -48,6 +50,29 @@ func binaryGuardEnv(fromRef, toRef string) []string {
 
 func binaryGuardToOnlyEnv(toRef string) []string {
 	return append(binaryGuardNoRefEnv(), "PRE_COMMIT_TO_REF="+toRef)
+}
+
+func TestBinaryGuardGitUsesFixtureRepositoryUnderHookEnvironment(t *testing.T) {
+	hookRepo := t.TempDir()
+	fixtureRepo := t.TempDir()
+	binaryGuardGit(t, hookRepo, "init", "-q")
+	t.Setenv("GIT_DIR", filepath.Join(hookRepo, ".git"))
+	t.Setenv("GIT_WORK_TREE", hookRepo)
+
+	binaryGuardGit(t, fixtureRepo, "init", "-q")
+	if _, err := os.Stat(filepath.Join(fixtureRepo, ".git")); err != nil {
+		t.Fatalf("fixture repository was not initialized: %v", err)
+	}
+}
+
+func TestBinaryGuardScriptEnvExcludesHookRepository(t *testing.T) {
+	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), ".git"))
+	t.Setenv("GIT_WORK_TREE", t.TempDir())
+	for _, entry := range binaryGuardNoRefEnv() {
+		if strings.HasPrefix(entry, "GIT_") {
+			t.Fatalf("fixture command inherited Git hook environment: %s", strings.SplitN(entry, "=", 2)[0])
+		}
+	}
 }
 
 func TestRejectCompiledBinariesChecksIntermediatePushBlobs(t *testing.T) {
