@@ -11,6 +11,11 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+      # CI plumbing is the same case: a workflow or template edit leaves the
+      # measured code byte-identical. The exception is an edit to the
+      # measuring workflow itself, which can move the numbers — dispatch a
+      # backfill for that commit rather than widening this list.
+      - '.github/**'
   # Manual backfill: dispatch once per historical commit to fill the timeline
   # gap. Snapshot identity is derived from the checked-out HEAD (name, sha,
   # commit time), so the rest of the job is already commit-agnostic.
