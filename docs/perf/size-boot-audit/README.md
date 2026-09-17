@@ -1,10 +1,16 @@
-# let-go — binary size & boot-time audit (v1.7.4 → main)
+---
+status: active
+last-verified: 2026-07-17
+human-verified:
+---
+
+# let-go — binary size & boot-time audit (v1.7.4 → main @ ed4ecc2)
 
 An independent, controlled re-measurement of the size and startup deltas
 between `v1.7.4` and `main` (`ed4ecc2`), prompted by a casual comparison
 table that reported a "+40% startup / +24% binary" regression.
 
-**Measured on** darwin/arm64, go1.26.3, single machine. Absolute figures are
+**Measured 2026-07-17** on darwin/arm64, go1.26.3, single machine. Absolute figures are
 machine-specific — **trust the ratios**, not the raw ms/MB. Every number here
 is reproducible with the scripts in `scripts/` (see [Reproduce](#reproduce)).
 Raw data in `data/`.
