@@ -66,7 +66,7 @@ func UpperCase(v vm.Value) (string, error) {
 //
 //lg:native
 //lg:name subs
-func Subs(s string, start int) (string, error) {
+func Subs(s string, start int64) (string, error) {
 	if start < 0 {
 		return "", fmt.Errorf("string index out of range")
 	}
@@ -77,7 +77,8 @@ func Subs(s string, start int) (string, error) {
 	// is hot in parsers, and the full conversion dominated allocation.
 	str := string(s)
 	byteStart := -1
-	ri, bo := 0, 0
+	var ri int64
+	bo := 0
 	for {
 		if ri == start {
 			byteStart = bo
@@ -101,7 +102,7 @@ func Subs(s string, start int) (string, error) {
 //
 //lg:native
 //lg:name subs
-func Subs3(s string, start, end int) (string, error) {
+func Subs3(s string, start, end int64) (string, error) {
 	if start < 0 {
 		return "", fmt.Errorf("string index out of range")
 	}
@@ -116,7 +117,8 @@ func Subs3(s string, start, end int) (string, error) {
 	// Stop as soon as both offsets are known (i.e. at max(start, end) runes).
 	str := string(s)
 	byteStart, byteEnd := -1, -1
-	ri, bo := 0, 0
+	var ri int64
+	bo := 0
 	for {
 		if ri == start {
 			byteStart = bo
@@ -150,7 +152,7 @@ func Subs3(s string, start, end int) (string, error) {
 //
 //lg:native
 //lg:name nth
-func Nth(coll vm.Value, i int) (vm.Value, error) {
+func Nth(coll vm.Value, i int64) (vm.Value, error) {
 	if coll == vm.NIL {
 		return vm.NIL, nil
 	}
@@ -160,20 +162,22 @@ func Nth(coll vm.Value, i int) (vm.Value, error) {
 	// This path is the only correct route for positional-but-not-seqable
 	// types (transient vectors, chunks): the seq walk would return nil.
 	if ix, ok := coll.(vm.Indexed); ok {
-		if i < 0 || i >= ix.RawCount() {
+		if i < 0 || i >= int64(ix.RawCount()) {
 			return vm.NIL, fmt.Errorf("nth index out of bounds")
 		}
-		return ix.Nth(i), nil
+		return ix.Nth(int(i)), nil
 	}
-	// Seq path: linear walk
-	if i < 0 {
+	// Seq path: linear walk. The MaxInt guard matters only where int is
+	// narrower than the index: no in-memory seq has that many elements, so
+	// the index is out of bounds rather than something to truncate into range.
+	if i < 0 || i > math.MaxInt {
 		return vm.NIL, fmt.Errorf("nth index out of bounds")
 	}
 	s, err := seqOf(coll)
 	if err != nil {
 		return vm.NIL, err
 	}
-	if v, ok := nthInSeq(forceSeq(s), i); ok {
+	if v, ok := nthInSeq(forceSeq(s), int(i)); ok {
 		return v, nil
 	}
 	return vm.NIL, fmt.Errorf("nth index out of bounds")
@@ -186,7 +190,7 @@ func Nth(coll vm.Value, i int) (vm.Value, error) {
 //
 //lg:native
 //lg:name nth
-func Nth3(coll vm.Value, i int, notFound vm.Value) (vm.Value, error) {
+func Nth3(coll vm.Value, i int64, notFound vm.Value) (vm.Value, error) {
 	if coll == vm.NIL {
 		return notFound, nil
 	}
@@ -196,20 +200,20 @@ func Nth3(coll vm.Value, i int, notFound vm.Value) (vm.Value, error) {
 	// This path is the only correct route for positional-but-not-seqable
 	// types (transient vectors, chunks): the seq walk would return nil.
 	if ix, ok := coll.(vm.Indexed); ok {
-		if i < 0 || i >= ix.RawCount() {
+		if i < 0 || i >= int64(ix.RawCount()) {
 			return notFound, nil
 		}
-		return ix.Nth(i), nil
+		return ix.Nth(int(i)), nil
 	}
-	// Seq path: linear walk
-	if i < 0 {
+	// Seq path: linear walk. See Nth for why MaxInt is an out-of-bounds index.
+	if i < 0 || i > math.MaxInt {
 		return notFound, nil
 	}
 	s, err := seqOf(coll)
 	if err != nil {
 		return notFound, nil
 	}
-	if v, ok := nthInSeq(forceSeq(s), i); ok {
+	if v, ok := nthInSeq(forceSeq(s), int(i)); ok {
 		return v, nil
 	}
 	return notFound, nil
@@ -234,12 +238,12 @@ func Deref(ref vm.Value) (vm.Value, error) {
 //
 //lg:native
 //lg:name deref
-func Deref3(bref vm.Value, ms int, timeoutVal vm.Value) (vm.Value, error) {
+func Deref3(bref vm.Value, ms int64, timeoutVal vm.Value) (vm.Value, error) {
 	b, ok := bref.(vm.BlockingDeref)
 	if !ok {
 		return vm.NIL, fmt.Errorf("deref with timeout expects a blocking ref (promise or future)")
 	}
-	return b.DerefTimeout(int64(ms), timeoutVal), nil
+	return b.DerefTimeout(ms, timeoutVal), nil
 }
 
 // Str concatenates the string representation of its arguments.

@@ -245,7 +245,8 @@ clojure-compat-report: $(GO)
 # All three are anchor-normalized — see cmd/bench-ratchet/main.go
 # and docs/perf/ratchet.md.
 perf-page: $(GO)
-	go run ./cmd/perf-page -out docs/perf/index.html
+	go run ./cmd/perf-page -out docs/perf/index.html \
+		-viewer-out docs/perf/explore/index.html
 
 perf-snapshot: lowered $(GO)
 	mkdir -p $(PERF-TIMELINE-DIR)
