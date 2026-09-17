@@ -1,0 +1,13 @@
+;; Native lowering must evaluate every map key/value source slot before deduplication.
+(ns examples.map-macroexpansion-eval)
+
+(defn run ^Object []
+  (let [calls (atom 0)
+        values {(-> (swap! calls inc)) (swap! calls inc)
+                (swap! calls inc)      (swap! calls inc)}]
+    [@calls
+     (count values)
+     (get values 1)
+     (get values 3)
+     (contains? values 1)
+     (contains? values 3)]))

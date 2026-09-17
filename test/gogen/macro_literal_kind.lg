@@ -1,0 +1,29 @@
+;; A macro that inspects its argument with map?/set? must see the SOURCE
+;; literal types, even inside a deftype method body.
+;;
+;; Field rewriting (dt-rewrite-field) runs over the method body BEFORE
+;; expand-all macroexpands it, so anything it substitutes is what the macro
+;; receives. Replacing every map and set literal with a compiler-only
+;; MapForm/SetForm record made this fixture return [:other :other] natively
+;; while bytecode still returned [:map :set]. The rewriter now leaves an
+;; unchanged literal alone and only emits a constructor call when a field was
+;; actually rewritten, so both backends agree; expand-all still substitutes the
+;; slot-preserving forms afterwards, once macros have consumed their arguments.
+(ns examples.macro-literal-kind)
+
+(defmacro literal-kind [form]
+  (cond
+    (map? form) :map
+    (set? form) :set
+    :else       :other))
+
+(defprotocol P (probe [this]))
+
+(deftype T []
+  P
+  (probe [this]
+    [(literal-kind {:a 1})
+     (literal-kind #{1})]))
+
+(defn run ^Object []
+  (probe (->T)))

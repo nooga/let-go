@@ -824,11 +824,18 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 }
 
 func readSet(r *LispReader, _ rune) (vm.Value, error) {
-	startLine := r.line
-	startCol := max(
-		// -2 because '#' and '{' were consumed
-		r.column-2, 0)
-	ret := vm.EmptyList
+	// A set literal reads as a set VALUE, the way map and vector literals read
+	// as maps and vectors. It used to read as the form `(hash-set …)`, which
+	// compiled correctly but made read-string return a constructor call instead
+	// of data:
+	//
+	//	(read-string "#{1}")   ;=> (hash-set 1)   ; before
+	//	(read-string "#{1}")   ;=> #{1}           ; now, and what Clojure returns
+	//
+	// Evaluation is unchanged: compileForm's vm.SetType case emits the same
+	// hash-set invocation and compiles each element, so `#{x (f y)}` still
+	// evaluates its elements.
+	var forms []vm.Value
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -845,28 +852,19 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		if form.Type() != vm.VoidType {
-			ret = ret.Conj(form).(*vm.List)
-		}
+		// Collection readers share appendNonVoid so #?@ elements are spliced
+		// and the reader's one-shot splicing state cannot leak to the enclosing
+		// collection. Duplicate detection must run after that expansion.
+		forms = appendNonVoid(r, forms, form)
 	}
-	if r.data {
-		vals := make([]vm.Value, 0)
-		for s := ret.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-			vals = append(vals, s.First())
+
+	result := vm.EmptyPersistentSet
+	for _, form := range forms {
+		if result.Contains(form) == vm.TRUE {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("Duplicate key: %s", form))
 		}
-		for i := range vals {
-			for j := i + 1; j < len(vals); j++ {
-				if vm.ValueEquals != nil && vm.ValueEquals(vals[i], vals[j]) {
-					return vm.NIL, NewReaderError(r, "duplicate element in set literal: "+vals[i].String())
-				}
-			}
-		}
-		return vm.NewSet(vals), nil
+		result = result.Conj(form).(*vm.PersistentSet)
 	}
-	result := ret.Cons(vm.Symbol("hash-set"))
-	vm.FormSource.Set(result, vm.SourceInfo{
-		File: r.inputName, Line: startLine, Column: startCol,
-	})
 	return result, nil
 }
 
@@ -997,6 +995,21 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
 		}
 		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-map"), vv})
+	// Sets reach syntaxQuote as real set values since set literals read as
+	// data. Without this arm they fell to the default quote branch, so
+	// `#{~x} yielded #{(unquote x)} — unquote, gensym and namespace
+	// qualification were all skipped inside a syntax-quoted set.
+	case form.Type() == vm.SetType:
+		lform := flattenSet(form)
+		uq, err := expandUnquotes(r, lform, env)
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "expanding unquotes for set")
+		}
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat*"), uq})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing unquoted set form")
+		}
+		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-set"), vv})
 	case form.Type() == vm.ListType:
 		uq, err := expandUnquotes(r, form, env)
 		if err != nil {
@@ -1028,6 +1041,21 @@ func flattenMap(form vm.Value) vm.Value {
 			continue
 		}
 		ret = append(ret, k, v)
+	}
+	return ret
+}
+
+// flattenSet is flattenMap's counterpart for sets: a set contributes its
+// elements directly, where a map contributes alternating k, v. Needed so
+// syntaxQuote can expand unquotes inside `#{...}.
+func flattenSet(form vm.Value) vm.Value {
+	sq, ok := form.(vm.Sequable)
+	if !ok {
+		return vm.ArrayVector{}
+	}
+	ret := vm.ArrayVector{}
+	for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+		ret = append(ret, s.First())
 	}
 	return ret
 }
