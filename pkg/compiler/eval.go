@@ -190,16 +190,15 @@ func evalInit() {
 
 func loadPrecompiledBundle() error {
 	// The decode + replay of core, the lg baseline namespaces, and the eager
-	// hybrid pass all live in the compiler-free spine rt.LoadCoreBundle (#506),
+	// hybrid pass all live in the compiler-free spine rt.LoadCoreBundle,
 	// shared with rt.LoadCore and rt.BootCore. EagerHybrids is true here for the
 	// same reason it is in BootCore: api.NewContext returns straight to user
 	// code, so hybrid vars reachable via qualified symbols (which bypass the
-	// on-demand loader) must be bound before then. The spine also folds in the
-	// *ns* save/restore and NSOrder-deterministic hybrid order that used to be
-	// BootCore-only.
+	// on-demand loader) must be bound before then. The spine also owns the *ns*
+	// save/restore and the NSOrder-deterministic hybrid order.
 	//
-	// Decode diagnostics (LG_DECODE_TAG_STATS, #356) still work: the var-ref
-	// hit/miss counting now lives in rt.LGBVarResolver (self-gating), so the
+	// Decode diagnostics (LG_DECODE_TAG_STATS) still work: the var-ref
+	// hit/miss counting lives in rt.LGBVarResolver (self-gating), so the
 	// enable/reset/print wrapper here drives it across the shared decode, and
 	// the OnPhase hook restores the decode-bundle / run-core-chunk bootMarks.
 	if decodeTagStats {

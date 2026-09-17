@@ -294,8 +294,8 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]any) {
 	} else {
 		// Render across the panic-to-error boundary: forcing a lazy value while
 		// printing can throw, and an unrecovered panic here would take down the
-		// whole nREPL server, not just this eval (same hazard this PR fixes for
-		// the CLI REPL via SafeString).
+		// whole nREPL server, not just this eval (the same hazard SafeString
+		// guards in the CLI REPL).
 		valStr := "nil"
 		if val != nil {
 			rendered, rerr := vm.SafeString(val)

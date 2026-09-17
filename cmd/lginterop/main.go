@@ -80,9 +80,9 @@ func main() {
 	if *packagesFlag != "" {
 		for pkg := range strings.SplitSeq(*packagesFlag, ",") {
 			// `path=alias` pins a non-default alias, mirroring deps.edn's
-			// {"path" "alias"} form — and gives the generated-by header a
-			// spelling that reproduces such a file (deps.edn used to be the
-			// only way in, so headers for aliased files did not round-trip).
+			// {"path" "alias"} form and the packages-spec the generated-by
+			// header emits (lginterop.lg), so the command in that header
+			// re-runs verbatim.
 			spec := strings.TrimSpace(pkg)
 			alias := ""
 			if eq := strings.IndexByte(spec, '='); eq >= 0 {
