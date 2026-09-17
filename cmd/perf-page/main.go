@@ -2038,6 +2038,17 @@ const pageTemplate = `<!doctype html>
       th, td { padding: 9px; }
     }
     .explorer-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+    .cpu-filter { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
+    .cpu-filter .cpu-label { font-size: 0.8rem; color: var(--muted); }
+    .cpu-filter .chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+    .cpu-filter .chips button {
+      font: inherit; font-size: 0.78rem; color: inherit; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.6rem; cursor: pointer;
+    }
+    .cpu-filter .chips button:hover { border-color: var(--ink); }
+    .cpu-filter .chips button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .cpu-filter .chips button.all { font-weight: 600; }
+    .cpu-filter .scope { font-size: 0.75rem; color: var(--muted); }
     .explorer-controls label { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
     .explorer-controls select { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); max-width: 420px; }
     .explorer-controls input[type="search"] { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); min-width: 180px; }
@@ -2144,7 +2155,7 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Timeline</h2>
-        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in.</p>
+        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts are drawn server-side from the whole timeline, so they pool every CPU tier and the CPU chips below cannot reach them; <code>-cpu</code> cuts them at build time. The baseline sections further down are a different case again: they render one machine profile picked at build time, which neither the filter nor <code>-cpu</code> changes.</p>
       </div>
       {{if .Charts}}
       <div class="chart-grid">
@@ -2197,10 +2208,18 @@ const pageTemplate = `<!doctype html>
       {{end}}
     </section>
 
+    <!-- The filter sits here, not in the header, because here is where its
+         effect starts. Everything above is rendered at build time from one
+         committed profile and cannot react to it; a control that appears to do
+         nothing where it sits reads as broken. Mounted by the first timeline
+         view that loads, and hidden when the timeline carries fewer than two
+         tiers. -->
+    <div class="cpu-filter" id="perf-cpu-filter" hidden></div>
+
     <section>
       <div class="section-head">
         <h2>Explore metrics over time</h2>
-        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them.</p>
+        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them — use the CPU chips just above to cut this chart and the sparklines below to one tier.</p>
       </div>
       <div id="perf-explorer" style="width:100%;min-height:420px"></div>
     </section>
@@ -2361,6 +2380,99 @@ const pageTemplate = `<!doctype html>
           if (a >= 10) return v.toFixed(1);
           return v.toPrecision(3);
         },
+        // Page-wide CPU selection, shared by every timeline-driven view. The
+        // tiers are not comparable to each other; see filterTimelineByCPU.
+        //
+        // Views register independently (they fetch the same payload but do not
+        // know about each other), so the control mounts on first registration
+        // and later registrations only add CPUs they contribute.
+        cpu: (function () {
+          const subs = [];
+          let cpus = [];
+          // Selected tiers. Every tier selected is the default and writes no
+          // ?cpu=, so a tier that appears in the data later shows up rather
+          // than being excluded by an old link.
+          const sel = new Set();
+          let seeded = false;
+          const params = new URLSearchParams(location.search);
+          const wanted = (params.get("cpu") || "").split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+
+          const allSelected = function () { return sel.size === cpus.length; };
+          function notify() { subs.forEach(function (fn) { fn(); }); }
+
+          function sync() {
+            const u = new URL(location.href);
+            if (allSelected()) { u.searchParams.delete("cpu"); }
+            else { u.searchParams.set("cpu", Array.from(sel).join(",")); }
+            history.replaceState(null, "", u);
+          }
+
+          function mount() {
+            const host = document.getElementById("perf-cpu-filter");
+            if (!host) return;
+            // One tier is nothing to choose between.
+            if (cpus.length < 2) { host.hidden = true; return; }
+            host.hidden = false;
+            host.innerHTML = "";
+            const label = document.createElement("span");
+            label.className = "cpu-label";
+            label.textContent = "CPU";
+            host.append(label);
+            const chips = document.createElement("span");
+            chips.className = "chips";
+            const all = document.createElement("button");
+            all.type = "button";
+            all.className = "all";
+            all.textContent = "All (" + cpus.length + ")";
+            all.setAttribute("aria-pressed", String(allSelected()));
+            all.onclick = function () { cpus.forEach(function (c) { sel.add(c); }); mount(); sync(); notify(); };
+            chips.append(all);
+            cpus.forEach(function (c) {
+              const b = document.createElement("button");
+              b.type = "button";
+              b.textContent = c;
+              b.setAttribute("aria-pressed", String(sel.has(c)));
+              b.title = "Click to toggle this tier. Alt-click to show only this tier.";
+              b.onclick = function (e) {
+                if (e.altKey) { sel.clear(); sel.add(c); }
+                else if (sel.has(c)) { sel.delete(c); }
+                else { sel.add(c); }
+                mount(); sync(); notify();
+              };
+              chips.append(b);
+            });
+            host.append(chips);
+            const scope = document.createElement("span");
+            scope.className = "scope";
+            scope.textContent = "applies to this chart and the sparklines below";
+            host.append(scope);
+          }
+
+          return {
+            register: function (list) {
+              list.forEach(function (c) { if (c && cpus.indexOf(c) < 0) cpus.push(c); });
+              cpus.sort();
+              // Seed once, from ?cpu= when it names tiers this build carries.
+              // Tiers it does not carry are dropped; if that leaves nothing,
+              // fall back to every tier rather than an empty page.
+              if (!seeded) {
+                seeded = true;
+                const known = wanted.filter(function (c) { return cpus.indexOf(c) >= 0; });
+                (known.length ? known : cpus).forEach(function (c) { sel.add(c); });
+                if (known.length !== wanted.length) { sync(); }
+              } else {
+                cpus.forEach(function (c) { if (!wanted.length) { sel.add(c); } });
+              }
+              mount();
+            },
+            onChange: function (fn) { subs.push(fn); },
+            // Rows carry the full CPU model; chips show the short tag.
+            apply: function (rows, shortOf) {
+              if (allSelected()) { return rows; }
+              return rows.filter(function (r) { return sel.has(shortOf(r.cpu)); });
+            }
+          };
+        })(),
         // Build the bench + metric <select> controls; calls onChange() on input.
         controls: function (host, opts) {
           const bar = d3.select(host).append("div").attr("class", "explorer-controls");
@@ -2399,6 +2511,8 @@ const pageTemplate = `<!doctype html>
           return;
         }
         rows.forEach(function (r) { r._t = new Date(r.date); });
+        PERF.cpu.register(Array.from(new Set(rows.map(function (r) { return PERF.shortCPU(r.cpu); }))));
+        PERF.cpu.onChange(function () { draw(); });
         const benches = Array.from(new Set(rows.map(function (r) { return r.bench; }))).sort();
         const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
         let curBench = benches.find(function (b) { return b.indexOf("ClojureTestSuite [aot_native]") >= 0; }) || benches[0];
@@ -2416,7 +2530,8 @@ const pageTemplate = `<!doctype html>
 
         function draw() {
           const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
-          const sub = rows.filter(function (r) { return r.bench === curBench && r.metric === curMetric; })
+          const sub = PERF.cpu.apply(rows, PERF.shortCPU)
+            .filter(function (r) { return r.bench === curBench && r.metric === curMetric; })
             .map(function (r) { return { _t: r._t, cpu: PERF.shortCPU(r.cpu), value: r.value, lo: r.lo, hi: r.hi, samples: r.samples }; });
           chart.selectAll("*").remove();
           if (!sub.length) { chart.append("div").attr("class", "empty").text("No data for this selection."); return; }
@@ -2472,6 +2587,8 @@ const pageTemplate = `<!doctype html>
           return;
         }
         rows.forEach(function (r) { r._t = +new Date(r.date); });
+        PERF.cpu.register(Array.from(new Set(rows.map(function (r) { return PERF.shortCPU(r.cpu); }))));
+        PERF.cpu.onChange(function () { draw(); });
         const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
         let curMetric = metrics.indexOf("ratio_to_anchor") >= 0 ? "ratio_to_anchor" : metrics[0];
         let sortDesc = true;   // by |Δ| descending
@@ -2593,7 +2710,8 @@ const pageTemplate = `<!doctype html>
 
         function draw() {
           const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
-          const sub = rows.filter(function (r) { return r.metric === curMetric; });
+          const sub = PERF.cpu.apply(rows, PERF.shortCPU)
+            .filter(function (r) { return r.metric === curMetric; });
           // Group by (base benchmark, CPU); scaling-factor variants collapse into
           // one row carrying a SET of per-scale series.
           const byKey = d3.group(sub, function (d) {
