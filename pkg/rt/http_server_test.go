@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -242,5 +243,60 @@ func TestServerWaitReportsServeError(t *testing.T) {
 	}
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		t.Fatalf("expected the Serve error, got %v", err)
+	}
+}
+
+func TestServerStopRightAfterStartFreesThePort(t *testing.T) {
+	// With one P the serving goroutine has not run when stop is called, so
+	// Shutdown returns before Serve ever registers - and closes - the
+	// listener. stop must still not report done until the port is free.
+	prev := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(prev)
+	for i := 0; i < 20; i++ {
+		scope := vm.Goroutines.Child()
+		s, err := startServer(scope, scope.Context(), okHandler(t), "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		addr := s.ln.Addr().String()
+		stopServer(s, time.Second)
+		if err, ok := waitReturned(s, time.Second); !ok || err != nil {
+			t.Fatalf("wait: returned=%v err=%v", ok, err)
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatalf("port still held after stop+wait (iteration %d): %v", i, err)
+		}
+		ln.Close()
+	}
+}
+
+func TestServerServeFailureClosesConnections(t *testing.T) {
+	// A listener dying under Serve must not leave an in-flight request
+	// hanging on an open connection after wait has returned.
+	scope := vm.Goroutines.Child()
+	gate := make(chan struct{})
+	defer close(gate)
+	s, err := startServer(scope, scope.Context(), gatedHandler(t, gate), "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	got := make(chan error, 1)
+	go func() {
+		_, _, err := getBody(t, "http://"+s.ln.Addr().String()+"/")
+		got <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	s.ln.Close()
+	if err, ok := waitReturned(s, time.Second); !ok || err == nil {
+		t.Fatalf("wait after listener death: returned=%v err=%v", ok, err)
+	}
+	select {
+	case err := <-got:
+		if err == nil {
+			t.Fatalf("held request completed; expected its connection to be closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("held request was not cut off after Serve failed")
 	}
 }

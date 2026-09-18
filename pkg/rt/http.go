@@ -232,7 +232,8 @@ const defaultStopTimeout = 5 * time.Second
 type lgServer struct {
 	srv      *http.Server
 	ln       net.Listener
-	done     chan struct{}
+	served   chan struct{} // closed when the Serve goroutine has exited
+	done     chan struct{} // closed when the server has fully stopped
 	err      error
 	stopOnce sync.Once
 	doneOnce sync.Once
@@ -255,13 +256,18 @@ func startServer(scope *vm.Scope, ctx context.Context, handler vm.Fn, addr strin
 		return nil, err
 	}
 	s := &lgServer{
-		srv:  &http.Server{Handler: &Handler{fn: handler}},
-		ln:   ln,
-		done: make(chan struct{}),
+		srv:    &http.Server{Handler: &Handler{fn: handler}},
+		ln:     ln,
+		served: make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 	scope.Go(func(_ context.Context) {
 		err := s.srv.Serve(ln)
+		close(s.served)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			// Serve closed the listener on its way out but leaves accepted
+			// connections open; Close drops them so wait means stopped.
+			_ = s.srv.Close()
 			s.finish(err)
 		}
 	})
@@ -278,6 +284,11 @@ func startServer(scope *vm.Scope, ctx context.Context, handler vm.Fn, addr strin
 // stopServer drains the server gracefully for up to timeout, then closes
 // whatever is still open. Idempotent: a second caller returns at once and
 // observes completion through waitServer.
+//
+// Completion waits for the Serve goroutine to exit: a stop that lands before
+// Serve has registered the listener sees Shutdown return at once, and the
+// port is only released when Serve eventually runs, notices the shutdown,
+// and closes the listener on its way out.
 func stopServer(s *lgServer, timeout time.Duration) {
 	s.stopOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -285,6 +296,7 @@ func stopServer(s *lgServer, timeout time.Duration) {
 		if err := s.srv.Shutdown(ctx); err != nil {
 			_ = s.srv.Close()
 		}
+		<-s.served
 		s.finish(nil)
 	})
 }
