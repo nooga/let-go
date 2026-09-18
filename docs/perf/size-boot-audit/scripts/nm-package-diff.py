@@ -15,9 +15,11 @@ Note: nm-visible symbols are only part of a Go binary; pclntab and some
 rodata are not attributed here, so the total delta undercounts the real
 file-size delta. Use it for ATTRIBUTION (what grew), not absolute totals.
 """
-import sys, re
+import re
+import sys
 
 TYPES = "TtRrDdBbCcUuGgSs?"
+
 
 def load(path):
     sizes = {}
@@ -25,14 +27,16 @@ def load(path):
         t = line.split()
         if len(t) < 3:
             continue
-        ti = next((i for i, tok in enumerate(t) if len(tok) == 1 and tok in TYPES), None)
+        ti = next(
+            (i for i, tok in enumerate(t) if len(tok) == 1 and tok in TYPES), None
+        )
         if not ti:
             continue
         try:
             sz = int(t[ti - 1])
         except ValueError:
             continue
-        name = " ".join(t[ti + 1:])
+        name = " ".join(t[ti + 1 :])
         if name.startswith(("type:", "go:", "gofile:", "runtime.")):
             pkg = re.split(r"[.:]", name)[0]
         else:
@@ -51,12 +55,18 @@ def load(path):
         sizes[pkg] = sizes.get(pkg, 0) + sz
     return sizes
 
+
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     a, b = load(sys.argv[1]), load(sys.argv[2])
-    rows = sorted(((b.get(k, 0) - a.get(k, 0), a.get(k, 0), b.get(k, 0), k)
-                   for k in set(a) | set(b)), reverse=True)
+    rows = sorted(
+        (
+            (b.get(k, 0) - a.get(k, 0), a.get(k, 0), b.get(k, 0), k)
+            for k in set(a) | set(b)
+        ),
+        reverse=True,
+    )
     print(f"{'DELTA':>10} {'old':>10} {'new':>10}  package")
     print("-" * 60)
     for d, av, bv, k in rows:
@@ -65,7 +75,8 @@ def main():
         print(f"{d:>+10} {av:>10} {bv:>10}  {k}")
     tot = sum(b.values()) - sum(a.values())
     print("-" * 60)
-    print(f"nm-visible delta: {tot:+} bytes ({tot/1048576:+.2f} MB)")
+    print(f"nm-visible delta: {tot:+} bytes ({tot/1048576:+.2f} MiB)")
+
 
 if __name__ == "__main__":
     main()

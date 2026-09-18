@@ -7,20 +7,20 @@
 # thermal noise only ever adds time, so the floor is the truest signal.
 #
 # Usage:   ./release-compare.sh [tag ...]
-# Default tags: v1.7.4 v1.8.0 v1.9.0 v1.10.0 v1.11.0 v1.11.1 main
-# Output:  CSV on stdout (release,date,bin_mb,lgb_kb,boot_us,go_files)
+# Default refs: v1.7.4 v1.8.0 v1.9.0 v1.10.0 v1.11.0 v1.11.1 ed4ecc215
+# Output:  CSV on stdout (release,date,bin_mib,lgb_kib,boot_us,go_files)
 #
 # Absolute µs are machine-specific; trust the RATIOS across releases.
 set -u
 cd "$(dirname "$0")" && . ./lib.sh
 REPO="$(repo_root)"
-TAGS=("$@"); [ ${#TAGS[@]} -eq 0 ] && TAGS=(v1.7.4 v1.8.0 v1.9.0 v1.10.0 v1.11.0 v1.11.1 main)
+TAGS=("$@"); [ ${#TAGS[@]} -eq 0 ] && TAGS=(v1.7.4 v1.8.0 v1.9.0 v1.10.0 v1.11.0 v1.11.1 ed4ecc215)
 
 WT="$(mk_worktree "$REPO" main)" || { echo "worktree failed" >&2; exit 1; }
 trap 'rm_worktree "$REPO" "$WT"' EXIT
 cd "$WT"
 
-echo "release,date,bin_mb,lgb_kb,boot_us,go_files"
+echo "release,date,bin_mib,lgb_kib,boot_us,go_files"
 for tag in "${TAGS[@]}"; do
   git checkout -q --detach "$tag" 2>/dev/null && git clean -fdq 2>/dev/null || { echo "$tag,CHECKOUT_FAIL,,,,"; continue; }
   d=$(git show -s --format=%cs HEAD)

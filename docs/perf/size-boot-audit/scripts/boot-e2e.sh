@@ -11,7 +11,7 @@ set -u
 command -v hyperfine >/dev/null || { echo "hyperfine not installed" >&2; exit 1; }
 cd "$(dirname "$0")" && . ./lib.sh
 REPO="$(repo_root)"
-TAGS=("$@"); [ ${#TAGS[@]} -eq 0 ] && TAGS=(v1.7.4 v1.8.0 v1.9.0 v1.10.0 v1.11.0 v1.11.1 main)
+TAGS=("$@"); [ ${#TAGS[@]} -eq 0 ] && TAGS=(v1.7.4 v1.8.0 v1.9.0 v1.10.0 v1.11.0 v1.11.1 ed4ecc215)
 
 WT="$(mk_worktree "$REPO" main)" || { echo "worktree failed" >&2; exit 1; }
 trap 'rm_worktree "$REPO" "$WT"' EXIT

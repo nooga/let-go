@@ -5,12 +5,12 @@
 # gradually across many commits, so a linear walk is more informative.
 #
 # Usage:   ./binary-size-walk.sh [FROM_REF] [TO_REF] [SAMPLES]
-# Default: v1.7.4 main 25
-# Output:  CSV on stdout (idx,short,date,stripped_mb,lgb_kb,subject)
+# Default: v1.7.4 ed4ecc215 25 (the audit's pinned endpoint)
+# Output:  CSV on stdout (idx,short,date,stripped_mib,lgb_kib,subject)
 set -u
 cd "$(dirname "$0")" && . ./lib.sh
 REPO="$(repo_root)"
-FROM="${1:-v1.7.4}"; TO="${2:-main}"; SAMPLES="${3:-25}"
+FROM="${1:-v1.7.4}"; TO="${2:-ed4ecc215}"; SAMPLES="${3:-25}"
 
 WT="$(mk_worktree "$REPO" "$TO")" || { echo "worktree failed" >&2; exit 1; }
 trap 'rm_worktree "$REPO" "$WT"' EXIT
@@ -20,7 +20,7 @@ LIST="$(mktemp)"; git rev-list --reverse "$FROM..$TO" > "$LIST"
 N=$(wc -l < "$LIST" | tr -d ' ')
 STEP=$(( (N + SAMPLES - 1) / SAMPLES )); [ "$STEP" -lt 1 ] && STEP=1
 
-echo "idx,short,date,stripped_mb,lgb_kb,subject"
+echo "idx,short,date,stripped_mib,lgb_kib,subject"
 i=0
 for ln in $(seq 1 "$STEP" "$N") "$N"; do
   sha=$(sed -n "${ln}p" "$LIST"); [ -z "$sha" ] && continue
