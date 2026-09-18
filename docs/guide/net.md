@@ -4,7 +4,7 @@ last-verified: 2026-07-17
 human-verified:
 ---
 
-# net and bencode: TCP clients in pure let-go
+# net and bencode: TCP clients and servers in pure let-go
 
 The `net` namespace provides a minimal TCP client, and `bencode` provides
 bencode framing over a connection — together enough to write network tools
@@ -23,6 +23,19 @@ bencode framing over a connection — together enough to write network tools
 `net/dial` takes a host string and an integer port and returns a connection
 value. `net/read!` blocks until data arrives, returning at most `max-bytes`
 bytes as a byte-array, or `nil` when the peer closes cleanly.
+
+The server side is three more functions:
+
+```clojure
+(def l (net/listen "127.0.0.1" 0))  ; explicit host; port 0 asks the OS
+(net/local-address l)               ; → {:host "127.0.0.1" :port 49152}
+(def conn (net/accept l))           ; blocks; the same connection value dial returns
+(net/close! l)                      ; wakes a blocked accept; accepted conns stay open
+```
+
+`net/listen` requires an explicit host. `net/close!` on a listener is
+idempotent and does not close connections it has accepted; the caller owns
+those and closes them one by one.
 
 ## bencode
 
