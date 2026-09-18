@@ -12,7 +12,8 @@ import (
 )
 
 func TestApplyVarMetaAcceptsLegacyMap(t *testing.T) {
-	v := vm.NewVar(vm.NewNamespace("test.legacy-meta"), "test.legacy-meta", "x")
+	ns := vm.NewNamespace("test.legacy-meta")
+	v := vm.NewVar(ns, "test.legacy-meta", "x")
 	meta := vm.NewPersistentMap([]vm.Value{
 		vm.Keyword("dynamic"), vm.TRUE,
 		vm.Keyword("private"), vm.TRUE,
@@ -22,8 +23,22 @@ func TestApplyVarMetaAcceptsLegacyMap(t *testing.T) {
 	if !v.IsDynamic() || !v.IsPrivate() {
 		t.Fatal("legacy metadata map did not set var flags")
 	}
-	if got := v.Meta(); got != meta {
-		t.Fatalf("legacy metadata = %v, want original map %v", got, meta)
+	// ApplyVarMeta additionally attaches :ns (spec 4.4), derived from the
+	// Var's own NSRef() rather than baked into the passed map — see
+	// attachVarNSMeta. So the stored meta is the original map's entries
+	// PLUS :ns, not the identical map value.
+	got, ok := v.Meta().(*vm.PersistentMap)
+	if !ok {
+		t.Fatalf("Meta() = %T, want *vm.PersistentMap", v.Meta())
+	}
+	if got.ValueAt(vm.Keyword("doc")) != vm.String("legacy") {
+		t.Fatalf(":doc = %v, want legacy", got.ValueAt(vm.Keyword("doc")))
+	}
+	if got.ValueAt(vm.Keyword("dynamic")) != vm.TRUE || got.ValueAt(vm.Keyword("private")) != vm.TRUE {
+		t.Fatalf("legacy metadata map did not survive :ns attachment: %v", got)
+	}
+	if got.ValueAt(vm.Keyword("ns")) != vm.Value(ns) {
+		t.Fatalf(":ns = %v, want %v", got.ValueAt(vm.Keyword("ns")), ns)
 	}
 }
 

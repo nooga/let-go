@@ -34,7 +34,14 @@
           ;; engines emit different `:other | ...` buckets even when the
           ;; semantic content is identical. Normalize the address to a
           ;; fixed marker so truncation lands at a stable spot.
-          raw (str err-str)
+          ;; Classify the MESSAGE, never the rendering of the thrown object.
+          ;; Core library validation failures are ExceptionInfo, so (str e)
+          ;; yields `#error {:message "...", :data ...}` -- which both shifts
+          ;; the truncation point below and lets the unresolved-symbol capture
+          ;; run into the message's closing quote. ex-message returns the
+          ;; message for an exception and the printed form for any other
+          ;; thrown value, so both cases arrive here as the bare text.
+          raw (ex-message err-str)
           m   (string/replace raw #"0x[0-9a-fA-F]{6,}" "0xXXX")
           truncated (if (> (count m) 100) (str (subs m 0 100) "...") m)]
       (cond
@@ -50,7 +57,10 @@
 
         ;; Genuinely-unresolved symbol: bucket by the symbol name.
         (re-find #"unresolved symbol" m)
-        (let [match (re-find #"unresolved symbol ([^\s,)]+)" m)]
+        ;; The class excludes `"` as well as whitespace/comma/paren: if a
+        ;; caller ever hands us a quoted rendering rather than a message, the
+        ;; bucket name must not absorb the closing quote.
+        (let [match (re-find #"unresolved symbol ([^\s,)\"]+)" m)]
           (if match
             (keyword "unresolved" (second match))
             :unresolved-symbol))
