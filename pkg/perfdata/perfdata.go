@@ -61,14 +61,19 @@ type BenchmarkEntry struct {
 	RatioToAnchor float64 `json:"ratio_to_anchor"`
 	BestSinceSHA  string  `json:"best_since_sha,omitempty"`
 	BestSinceAt   string  `json:"best_since_at,omitempty"`
-	// AllocsBytesSinceSHA / AllocsBytesSinceAt date the DETERMINISTIC pair
-	// (allocs/op, bytes/op) alone. BestSince* moves whenever any metric of the
-	// entry improves, timing included, so it cannot say when these two numbers
-	// were measured — and they are the ones gated across machines. Absent means
-	// the row predates the stamp: its deterministic provenance is unknown.
-	AllocsBytesSinceSHA string            `json:"allocs_bytes_since_sha,omitempty"`
-	AllocsBytesSinceAt  string            `json:"allocs_bytes_since_at,omitempty"`
-	Samples             []BenchmarkSample `json:"samples,omitempty"`
+	// AllocsSince* and BytesSince* date the two DETERMINISTIC metrics, one
+	// stamp each. BestSince* moves whenever any metric of the entry improves,
+	// timing included, so it cannot say when these numbers were measured — and
+	// they are the ones gated across machines. They are dated separately
+	// because the ratchet takes each metric's minimum on its own: a run that
+	// lowers allocs while regressing bytes leaves a stored pair that no single
+	// run measured, and one stamp over both would date the kept metric to a
+	// commit that never produced it. Absent means the row predates the stamp.
+	AllocsSinceSHA string            `json:"allocs_since_sha,omitempty"`
+	AllocsSinceAt  string            `json:"allocs_since_at,omitempty"`
+	BytesSinceSHA  string            `json:"bytes_since_sha,omitempty"`
+	BytesSinceAt   string            `json:"bytes_since_at,omitempty"`
+	Samples        []BenchmarkSample `json:"samples,omitempty"`
 }
 
 // BenchmarkSample is one raw benchmark measurement retained for statistics.

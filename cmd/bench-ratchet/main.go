@@ -511,36 +511,33 @@ func forceRebaseline(existing *Baseline, key string, current MachineBaseline, ac
 			if acceptDeterministic {
 				continue
 			}
-			// The stored row's date can be implicit in the profile it sat in,
+			// A stored value's date can be implicit in the profile it sat in,
 			// and this write re-stamps the profile, so resolve it now or it is
-			// gone.
-			keptSHA, keptAt := entryProvenance(previous, entry)
-			keptAllocs := cur.AllocsPerOp > entry.AllocsPerOp
-			keptBytes := cur.BytesPerOp > entry.BytesPerOp
-			if keptAllocs {
+			// gone. Each metric keeps or adopts on its own, so each keeps or
+			// adopts its own date with it.
+			keptAllocsSHA, keptAllocsAt := allocsProvenance(previous, entry)
+			keptBytesSHA, keptBytesAt := bytesProvenance(previous, entry)
+			if cur.AllocsPerOp > entry.AllocsPerOp {
 				rejected = append(rejected, deterministicRejection{
 					Name: name, Metric: "allocs/op",
 					Kept: entry.AllocsPerOp, Measured: cur.AllocsPerOp,
-					SinceSHA: keptSHA,
+					SinceSHA: keptAllocsSHA,
 				})
 				cur.AllocsPerOp = entry.AllocsPerOp
+				cur.AllocsSinceSHA, cur.AllocsSinceAt = keptAllocsSHA, keptAllocsAt
+			} else if cur.AllocsPerOp == entry.AllocsPerOp {
+				cur.AllocsSinceSHA, cur.AllocsSinceAt = keptAllocsSHA, keptAllocsAt
 			}
-			if keptBytes {
+			if cur.BytesPerOp > entry.BytesPerOp {
 				rejected = append(rejected, deterministicRejection{
 					Name: name, Metric: "bytes/op",
 					Kept: entry.BytesPerOp, Measured: cur.BytesPerOp,
-					SinceSHA: keptSHA,
+					SinceSHA: keptBytesSHA,
 				})
 				cur.BytesPerOp = entry.BytesPerOp
-			}
-			// The stamp dates the pair as stored. Nothing moved means nothing was
-			// measured anew, so the old date stands; a kept value alongside a
-			// lowered one leaves the pair older than this run, so it stands then
-			// too rather than claiming a measurement this run did not make.
-			if keptAllocs || keptBytes ||
-				(cur.AllocsPerOp == entry.AllocsPerOp && cur.BytesPerOp == entry.BytesPerOp) {
-				cur.AllocsBytesSinceSHA = keptSHA
-				cur.AllocsBytesSinceAt = keptAt
+				cur.BytesSinceSHA, cur.BytesSinceAt = keptBytesSHA, keptBytesAt
+			} else if cur.BytesPerOp == entry.BytesPerOp {
+				cur.BytesSinceSHA, cur.BytesSinceAt = keptBytesSHA, keptBytesAt
 			}
 			current.Benchmarks[name] = cur
 		}
@@ -621,8 +618,8 @@ func ratchetMerge(existing, current MachineBaseline) (MachineBaseline, RatchetSu
 		if !ok {
 			cur.BestSinceSHA = current.CapturedAtSHA
 			cur.BestSinceAt = current.CapturedAt
-			cur.AllocsBytesSinceSHA = current.CapturedAtSHA
-			cur.AllocsBytesSinceAt = current.CapturedAt
+			cur.AllocsSinceSHA, cur.AllocsSinceAt = current.CapturedAtSHA, current.CapturedAt
+			cur.BytesSinceSHA, cur.BytesSinceAt = current.CapturedAtSHA, current.CapturedAt
 			out.Benchmarks[name] = cur
 			summary.NewBench = append(summary.NewBench, SummaryEntry{Name: name, NSPerOp: cur.NSPerOp})
 			continue
@@ -633,15 +630,19 @@ func ratchetMerge(existing, current MachineBaseline) (MachineBaseline, RatchetSu
 			BytesPerOp:    minI(cur.BytesPerOp, base.BytesPerOp),
 			RatioToAnchor: minF(cur.RatioToAnchor, base.RatioToAnchor),
 		}
-		// The deterministic pair carries its own stamp, moved only by a run that
-		// actually lowers one of the two. Sharing the timing stamp would date
-		// untouched allocs/bytes to a commit that only ran faster.
-		if merged.AllocsPerOp != base.AllocsPerOp || merged.BytesPerOp != base.BytesPerOp {
-			merged.AllocsBytesSinceSHA = current.CapturedAtSHA
-			merged.AllocsBytesSinceAt = current.CapturedAt
+		// Each deterministic metric carries its own stamp, moved only by a run
+		// that lowers THAT metric. Sharing one stamp would date a value this run
+		// never produced — the timing stamp dates a run that only got faster, and
+		// a pair stamp dates a kept metric to the run that moved the other one.
+		if merged.AllocsPerOp != base.AllocsPerOp {
+			merged.AllocsSinceSHA, merged.AllocsSinceAt = current.CapturedAtSHA, current.CapturedAt
 		} else {
-			merged.AllocsBytesSinceSHA = base.AllocsBytesSinceSHA
-			merged.AllocsBytesSinceAt = base.AllocsBytesSinceAt
+			merged.AllocsSinceSHA, merged.AllocsSinceAt = base.AllocsSinceSHA, base.AllocsSinceAt
+		}
+		if merged.BytesPerOp != base.BytesPerOp {
+			merged.BytesSinceSHA, merged.BytesSinceAt = current.CapturedAtSHA, current.CapturedAt
+		} else {
+			merged.BytesSinceSHA, merged.BytesSinceAt = base.BytesSinceSHA, base.BytesSinceAt
 		}
 		tightened := merged.RatioToAnchor < base.RatioToAnchor ||
 			merged.AllocsPerOp < base.AllocsPerOp ||
@@ -721,8 +722,8 @@ func stampAll(b *MachineBaseline) {
 	for name, e := range b.Benchmarks {
 		e.BestSinceSHA = b.CapturedAtSHA
 		e.BestSinceAt = b.CapturedAt
-		e.AllocsBytesSinceSHA = b.CapturedAtSHA
-		e.AllocsBytesSinceAt = b.CapturedAt
+		e.AllocsSinceSHA, e.AllocsSinceAt = b.CapturedAtSHA, b.CapturedAt
+		e.BytesSinceSHA, e.BytesSinceAt = b.CapturedAtSHA, b.CapturedAt
 		b.Benchmarks[name] = e
 	}
 }
@@ -1509,10 +1510,15 @@ func canonicalizeBenchmarks(bm map[string]BenchmarkEntry) map[string]BenchmarkEn
 	return out
 }
 
-// entryProvenance returns the commit identity and time one entry's
-// DETERMINISTIC metrics were measured at, in three cases:
+// allocsProvenance and bytesProvenance return the commit identity and time one
+// entry's allocs/op, respectively bytes/op, was measured at. Each metric is
+// asked separately because the ratchet keeps each one's minimum separately: a
+// stored pair can hold this run's allocs beside an older run's bytes, and no
+// single date describes that.
 //
-//  1. allocs_bytes_since_* when set — the run that recorded these two numbers.
+// Three cases, per metric:
+//
+//  1. the metric's own since_* stamp when set — the run that recorded it.
 //  2. otherwise, for an entry with no best_since_* either: the profile's
 //     captured_at_sha / captured_at. No best_since means the entry has never
 //     been ratcheted, so seed or capture wrote every one of its numbers in the
@@ -1524,10 +1530,21 @@ func canonicalizeBenchmarks(bm map[string]BenchmarkEntry) map[string]BenchmarkEn
 // allocs/bytes were pinned from an older run. The profile's captured_at is no
 // better there — it dates the run that wrote the file, not the run that set a
 // bar the ratchet has carried forward.
-func entryProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
-	if e.AllocsBytesSinceSHA != "" || e.AllocsBytesSinceAt != "" {
-		return e.AllocsBytesSinceSHA, e.AllocsBytesSinceAt
+func allocsProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
+	if e.AllocsSinceSHA != "" || e.AllocsSinceAt != "" {
+		return e.AllocsSinceSHA, e.AllocsSinceAt
 	}
+	return unratchetedProvenance(prof, e)
+}
+
+func bytesProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
+	if e.BytesSinceSHA != "" || e.BytesSinceAt != "" {
+		return e.BytesSinceSHA, e.BytesSinceAt
+	}
+	return unratchetedProvenance(prof, e)
+}
+
+func unratchetedProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
 	if e.BestSinceSHA == "" && e.BestSinceAt == "" {
 		return prof.CapturedAtSHA, prof.CapturedAt
 	}
@@ -1548,18 +1565,28 @@ func entryProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
 // and gates current code against whichever code state happened to allocate
 // least.
 //
-// So the reference for each benchmark is the entry with the NEWEST provenance
+// So the reference for each benchmark is the value with the NEWEST provenance
 // among the profiles that carry it — the most recent commit anyone measured it
-// at — with ties broken by the minimum, so the bar still ratchets across rows
-// measured at the same commit. An entry with no provenance at all sorts oldest:
-// it is only the reference when nothing better exists.
+// at — with same-commit rows reduced to their minimum, so the bar still
+// ratchets across repeated measurements of one code state. A value with no
+// provenance at all sorts oldest: it is only the reference when nothing better
+// exists.
+//
+// allocs/op and bytes/op are selected SEPARATELY, because they are dated
+// separately. A profile can hold a freshly measured allocs figure beside a
+// bytes figure the ratchet kept from an older run, and taking both from
+// whichever row won on one of them would either discard the fresh measurement
+// or adopt the stale one.
 //
 // Same-commit rows are recognised by the SHA, not the clock. Two machines run
 // one commit at whatever times their queues allow, so equal timestamps neither
 // identify a shared code state nor are needed to: rows that name the same
 // commit are two measurements of one code state and reduce to their minimum,
 // while rows from different commits are ranked even when their timestamps
-// collide, because mixing them would describe code that never existed.
+// collide, because mixing them would describe code that never existed. A merged
+// group is then ranked by its NEWEST member, since its claim on describing
+// current code rests on its latest capture, not on whichever profile happened to
+// be read first.
 //
 // Ranking is by the recorded timestamp, not by commit topology — a SHA alone
 // cannot be ordered without the repository, and a baseline is read on machines
@@ -1567,48 +1594,58 @@ func entryProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
 // time.RFC3339 in UTC, so a string compare orders them; the SHA breaks a
 // remaining timestamp tie so the choice does not depend on map order.
 func machineIndependentBar(b Baseline) map[string]BenchmarkEntry {
-	type barEntry struct {
-		entry BenchmarkEntry
-		sha   string
-		at    string
+	type metricBar struct {
+		value    int64
+		sha, at  string
+		selected bool
 	}
-	newer := func(cand, cur barEntry) bool {
-		if cand.at != cur.at {
-			return cand.at > cur.at
+	// consider folds one measurement into the running selection for one metric.
+	consider := func(cur metricBar, value int64, sha, at string) metricBar {
+		cand := metricBar{value: value, sha: sha, at: at, selected: true}
+		switch {
+		case !cur.selected:
+			return cand
+		case cand.sha == cur.sha:
+			cur.value = minI(cur.value, cand.value)
+			if cand.at > cur.at {
+				cur.at = cand.at
+			}
+			return cur
+		case cand.at != cur.at:
+			if cand.at > cur.at {
+				return cand
+			}
+			return cur
+		case cand.sha > cur.sha:
+			return cand
+		default:
+			return cur
 		}
-		return cand.sha > cur.sha
 	}
-	best := map[string]barEntry{}
+	allocs := map[string]metricBar{}
+	bytes := map[string]metricBar{}
+	names := map[string]bool{}
 	for _, key := range profileKeys(b) {
 		prof := b.Machines[key]
 		for name, e := range prof.Benchmarks {
-			sha, at := entryProvenance(prof, e)
-			cand := barEntry{
-				entry: BenchmarkEntry{
-					AllocsPerOp:  e.AllocsPerOp,
-					BytesPerOp:   e.BytesPerOp,
-					BestSinceSHA: sha,
-					BestSinceAt:  at,
-				},
-				sha: sha,
-				at:  at,
-			}
-			cur, ok := best[name]
-			switch {
-			case !ok:
-				best[name] = cand
-			case cand.sha == cur.sha:
-				cur.entry.AllocsPerOp = minI(cur.entry.AllocsPerOp, cand.entry.AllocsPerOp)
-				cur.entry.BytesPerOp = minI(cur.entry.BytesPerOp, cand.entry.BytesPerOp)
-				best[name] = cur
-			case newer(cand, cur):
-				best[name] = cand
-			}
+			names[name] = true
+			aSHA, aAt := allocsProvenance(prof, e)
+			bSHA, bAt := bytesProvenance(prof, e)
+			allocs[name] = consider(allocs[name], e.AllocsPerOp, aSHA, aAt)
+			bytes[name] = consider(bytes[name], e.BytesPerOp, bSHA, bAt)
 		}
 	}
-	bar := make(map[string]BenchmarkEntry, len(best))
-	for name, b := range best {
-		bar[name] = b.entry
+	bar := make(map[string]BenchmarkEntry, len(names))
+	for name := range names {
+		a, by := allocs[name], bytes[name]
+		bar[name] = BenchmarkEntry{
+			AllocsPerOp:    a.value,
+			AllocsSinceSHA: a.sha,
+			AllocsSinceAt:  a.at,
+			BytesPerOp:     by.value,
+			BytesSinceSHA:  by.sha,
+			BytesSinceAt:   by.at,
+		}
 	}
 	return bar
 }
@@ -1637,16 +1674,16 @@ func compareDeterministic(bar map[string]BenchmarkEntry, current MachineBaseline
 		if !ok {
 			continue
 		}
-		check := func(metric string, b, c int64) {
+		check := func(metric string, b, c int64, sinceSHA string) {
 			if b <= 0 {
 				return
 			}
 			if d := float64(c-b) / float64(b); d > budget {
-				regs = append(regs, reg{n, metric, b, c, d, base.BestSinceSHA})
+				regs = append(regs, reg{n, metric, b, c, d, sinceSHA})
 			}
 		}
-		check("allocs/op", base.AllocsPerOp, cur.AllocsPerOp)
-		check("bytes/op", base.BytesPerOp, cur.BytesPerOp)
+		check("allocs/op", base.AllocsPerOp, cur.AllocsPerOp, base.AllocsSinceSHA)
+		check("bytes/op", base.BytesPerOp, cur.BytesPerOp, base.BytesSinceSHA)
 	}
 	if len(regs) == 0 {
 		fmt.Printf("deterministic (allocs/bytes, machine-independent): OK — within %.0f%% of the newest measured row\n", budget*100)

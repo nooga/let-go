@@ -163,7 +163,7 @@ The command:
 the identity of the profile rather than the sole source of its numbers. The seed
 log prints the window size and how many snapshots contributed. Every seeded
 entry is stamped with that same identity, as its `best_since_sha` /
-`best_since_at` and as its `allocs_bytes_since_sha` / `allocs_bytes_since_at`:
+`best_since_at` and as its `allocs_since_*` / `bytes_since_*` stamps:
 a deterministic floor with no commit attached is one the
 [deterministic gate](#the-deterministic-gate-allocsop-bytesop) cannot place in
 time, and a tier that later stops reporting would leave an unattributable row
@@ -256,8 +256,10 @@ into a second `.jsonl` and aggregating both.
       "ratio_to_anchor": 41862.4,
       "best_since_sha": "<short-sha>",
       "best_since_at": "2026-09-07T05:34:02Z",
-      "allocs_bytes_since_sha": "<short-sha>",
-      "allocs_bytes_since_at": "2026-09-07T05:34:02Z"
+      "allocs_since_sha": "<short-sha>",
+      "allocs_since_at": "2026-09-07T05:34:02Z",
+      "bytes_since_sha": "<short-sha>",
+      "bytes_since_at": "2026-09-07T05:34:02Z"
     }
   }
 }
@@ -270,14 +272,19 @@ into a second `.jsonl` and aggregating both.
 - `best_since_sha` / `best_since_at` date the entry as a whole: the run that
   last moved **any** of its metrics toward better. They are what the timing
   report's "best since" column names.
-- `allocs_bytes_since_sha` / `allocs_bytes_since_at` date the **deterministic
-  pair** (`allocs_per_op`, `bytes_per_op`) alone — the run that last lowered one
-  of the two, and so the run that measured what is stored. They exist because
-  `best_since_*` also moves on a timing-only win, which would date a pinned
-  allocation floor to a commit that never measured it; the
+- `allocs_since_sha` / `allocs_since_at` date `allocs_per_op`, and
+  `bytes_since_sha` / `bytes_since_at` date `bytes_per_op` — each the run that
+  last lowered that metric, and so the run that measured what is stored. They
+  exist because `best_since_*` also moves on a timing-only win, which would date
+  a pinned allocation floor to a commit that never measured it. The two metrics
+  are dated **separately** because the ratchet takes each one's minimum
+  separately: a run that lowers allocs while regressing bytes leaves this run's
+  allocs stored beside an older run's bytes, and one stamp over both would date
+  the kept metric to a commit that never produced it. The
   [deterministic gate](#the-deterministic-gate-allocsop-bytesop) selects its
-  reference by this stamp, falling back to the profile's capture identity only
-  for a row that was never ratcheted (see that section for the two cases).
+  reference per metric by these stamps, falling back to the profile's capture
+  identity only for a row that was never ratcheted (see that section for the two
+  cases).
 
 ## How the check works
 
@@ -316,13 +323,19 @@ measured", which is a fact about the fleet's history rather than about any one
 commit, and gates current code against whichever code state happened to allocate
 least.
 
-So for each benchmark the reference is **the entry with the newest provenance
+So for each benchmark the reference is **the value with the newest provenance
 among the profiles that carry it** — the most recent commit anyone measured it
 at — with rows from the **same commit** reduced to their minimum, so the bar
 still ratchets across repeated measurements of one code state.
 
-Provenance here is the entry's `allocs_bytes_since_sha` / `allocs_bytes_since_at`
-when it has one. A row predating that field is read in one of two ways:
+`allocs_per_op` and `bytes_per_op` are selected **separately**, since they are
+dated separately: a profile can hold a freshly measured allocs figure beside a
+bytes figure the ratchet kept from an older run, and taking both from whichever
+row won on one of them would either throw away the fresh measurement or adopt
+the stale one.
+
+Provenance is the metric's own `allocs_since_*` / `bytes_since_*` stamp when it
+has one. A value predating those fields is read in one of two ways:
 
 - **No `best_since_*` either** — the entry has never been ratcheted, so seed or
   capture wrote every one of its numbers in the run the profile records. The
@@ -333,9 +346,9 @@ when it has one. A row predating that field is read in one of two ways:
   included, so on a row whose allocs/bytes were pinned from an older run it
   names a commit that never measured them. The profile's `captured_at` is no
   better: it dates the run that wrote the file, not the run that set a bar the
-  ratchet carried forward. Such a row has **unknown** deterministic provenance:
-  it sorts oldest, ties with the other undated rows at their minimum, and is
-  displaced by any row that can name its commit.
+  ratchet carried forward. Such a value has **unknown** provenance: it sorts
+  oldest, ties with the other undated values at their minimum, and is displaced
+  by any row that can name its commit.
 
 The reported regression line names the commit the reference came from (`—` when
 unknown), so a surprising bar can be traced to the run that set it.
@@ -344,10 +357,13 @@ Same-commit is decided by the SHA, not by the clock. Two machines run one commit
 whenever their queues allow, so equal timestamps neither identify a shared code
 state nor are needed to; conversely two different commits that happen to be
 stamped in the same second are ranked rather than mixed, since a bar assembled
-from two commits describes code that never existed. The timestamp orders rows
-across commits (a SHA cannot be ordered without the repository, and baselines are
-read on machines that lack the history), and breaks a remaining tie by SHA so the
-selection does not depend on map order.
+from two commits describes code that never existed. A merged same-commit group
+then carries the **newest** of its members' timestamps: its claim on describing
+current code rests on its latest capture, not on whichever profile happened to be
+read first. The timestamp orders groups across commits (a SHA cannot be ordered
+without the repository, and baselines are read on machines that lack the
+history), and breaks a remaining tie by SHA so the selection does not depend on
+map order.
 
 ## Running the check on a PR (the `perf` label)
 
@@ -471,7 +487,8 @@ property of the code at a commit and every profile is gated against it, so a
 local recapture that allocates more is a regression everywhere rather than a
 number this host gets to reset. A forced update therefore keeps any stored
 deterministic value it measured worse, along with its
-`allocs_bytes_since_*` stamp, and prints what it declined:
+`allocs_since_*` or `bytes_since_*` stamp — each metric keeps or adopts on its
+own — and prints what it declined:
 
 ```
   NOT ACCEPTED (deterministic regression; stored bar kept — re-run with -accept-deterministic to record it):
