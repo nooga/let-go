@@ -27,7 +27,9 @@
 // The wrapped command runs in its own process group. A timeout, a signal to
 // the baton, or the command exiting while processes it started live on all
 // stop the whole group before the lease is released, so no workload outlives
-// its lease.
+// its lease. A signal that arrives while the baton is still queued for the
+// pool cancels the wait instead: the command never starts, the waiter record
+// and any lock already taken are unwound, and the baton exits 128+signal.
 //
 // Usage:
 //
@@ -139,10 +141,58 @@ func alive(pid int) bool {
 
 func now() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
-// flockUntil takes `how` (LOCK_EX or LOCK_SH) on f, polling until deadline.
-// A zero deadline blocks indefinitely.
-func flockUntil(f *os.File, how int, deadline time.Time, what string) error {
-	if deadline.IsZero() {
+// canceled reports that a signal to the baton arrived while it was still
+// queued for the pool, before the wrapped command started. It carries the
+// signal so the exit code can follow the shell's 128+signal convention.
+type canceled struct{ sig os.Signal }
+
+func (c *canceled) Error() string {
+	return fmt.Sprintf("canceled by %v while waiting for the pool", c.sig)
+}
+
+// exitCode is the shell's convention for a run ended by a signal.
+func (c *canceled) exitCode() int {
+	if s, ok := c.sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 1
+}
+
+// stopped reports a *canceled if stop already has a signal waiting. A nil
+// channel is never ready, so a caller that cannot be interrupted passes nil.
+func stopped(stop <-chan os.Signal) error {
+	select {
+	case sig := <-stop:
+		return &canceled{sig: sig}
+	default:
+		return nil
+	}
+}
+
+// waitPoll sleeps one poll interval, or returns a *canceled as soon as stop
+// delivers a signal. Every wait inside acquisition goes through it, so a
+// signal reaches a worker that is queued and not yet running.
+func waitPoll(stop <-chan os.Signal) error {
+	if stop == nil {
+		time.Sleep(pollInterval)
+		return nil
+	}
+	timer := time.NewTimer(pollInterval)
+	defer timer.Stop()
+	select {
+	case sig := <-stop:
+		return &canceled{sig: sig}
+	case <-timer.C:
+		return nil
+	}
+}
+
+// flockUntil takes `how` (LOCK_EX or LOCK_SH) on f, polling until deadline or
+// until stop delivers a signal. A zero deadline waits indefinitely; it only
+// blocks in the kernel when there is neither a deadline nor a stop channel,
+// because a blocked flock cannot observe a signal.
+func flockUntil(f *os.File, how int, deadline time.Time, stop <-chan os.Signal, what string) error {
+	if deadline.IsZero() && stop == nil {
 		return syscall.Flock(int(f.Fd()), how)
 	}
 	for {
@@ -153,10 +203,12 @@ func flockUntil(f *os.File, how int, deadline time.Time, what string) error {
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
 			return err
 		}
-		if time.Now().After(deadline) {
+		if !deadline.IsZero() && time.Now().After(deadline) {
 			return fmt.Errorf("timed out acquiring %s", what)
 		}
-		time.Sleep(pollInterval)
+		if err := waitPoll(stop); err != nil {
+			return err
+		}
 	}
 }
 
@@ -294,9 +346,18 @@ type lease struct {
 // Shared: take the gate shared (blocked only while an exclusive holds or
 // waits for it), drop it, take the lease shared, then one of the pool's
 // max_shared slots. maxShared <= 0 uses the pool's recorded capacity.
-func acquire(intent, mode, pool, owner string, timeout time.Duration, maxShared int, verbose bool) (*lease, error) {
+//
+// Every wait observes stop: a signal delivered while the caller is queued
+// unwinds its waiter record and any lock it has already taken, and returns a
+// *canceled. Without that a queued worker could not be interrupted at all,
+// and a shared one would keep the shared lease it already holds, delaying the
+// exclusive run that is waiting behind it. A nil stop channel never fires.
+func acquire(intent, mode, pool, owner string, timeout time.Duration, maxShared int, verbose bool, stop <-chan os.Signal) (*lease, error) {
 	if mode != modeExclusive && mode != modeShared {
 		return nil, fmt.Errorf("mode must be %q or %q", modeExclusive, modeShared)
+	}
+	if err := stopped(stop); err != nil {
+		return nil, err
 	}
 	if owner == "" {
 		owner = os.Getenv("BENCH_BATON_OWNER")
@@ -353,21 +414,21 @@ func acquire(intent, mode, pool, owner string, timeout time.Duration, maxShared 
 		return fail(err)
 	}
 	if mode == modeExclusive {
-		if err := flockUntil(gate, syscall.LOCK_EX, deadline, "gate"); err != nil {
+		if err := flockUntil(gate, syscall.LOCK_EX, deadline, stop, "gate"); err != nil {
 			return fail(err)
 		}
-		if err := flockUntil(lock, syscall.LOCK_EX, deadline, "exclusive lease"); err != nil {
+		if err := flockUntil(lock, syscall.LOCK_EX, deadline, stop, "exclusive lease"); err != nil {
 			return fail(err)
 		}
 	} else {
-		if err := flockUntil(gate, syscall.LOCK_SH, deadline, "gate"); err != nil {
+		if err := flockUntil(gate, syscall.LOCK_SH, deadline, stop, "gate"); err != nil {
 			return fail(err)
 		}
 		_ = syscall.Flock(int(gate.Fd()), syscall.LOCK_UN)
-		if err := flockUntil(lock, syscall.LOCK_SH, deadline, "shared lease"); err != nil {
+		if err := flockUntil(lock, syscall.LOCK_SH, deadline, stop, "shared lease"); err != nil {
 			return fail(err)
 		}
-		slot, idx, err := acquireSlot(pool, maxShared, deadline)
+		slot, idx, err := acquireSlot(pool, maxShared, deadline, stop)
 		if err != nil {
 			return fail(err)
 		}
@@ -389,7 +450,7 @@ func acquire(intent, mode, pool, owner string, timeout time.Duration, maxShared 
 	return l, nil
 }
 
-func acquireSlot(pool string, maxShared int, deadline time.Time) (*os.File, int, error) {
+func acquireSlot(pool string, maxShared int, deadline time.Time, stop <-chan os.Signal) (*os.File, int, error) {
 	for {
 		for i := 0; i < maxShared; i++ {
 			f, err := os.OpenFile(poolFile(pool, fmt.Sprintf("slot%d.lock", i)), os.O_CREATE|os.O_RDWR, 0o644)
@@ -404,7 +465,9 @@ func acquireSlot(pool string, maxShared int, deadline time.Time) (*os.File, int,
 		if !deadline.IsZero() && time.Now().After(deadline) {
 			return nil, 0, fmt.Errorf("no shared slot in pool %s (max_shared=%d)", pool, maxShared)
 		}
-		time.Sleep(pollInterval)
+		if err := waitPoll(stop); err != nil {
+			return nil, 0, err
+		}
 	}
 }
 
@@ -510,9 +573,10 @@ type runOptions struct {
 	maxShared    int           // zero = the pool's recorded capacity
 	tailLines    int
 	verbose      bool
-	// stop delivers a signal sent to the baton itself. Receiving one stops the
-	// wrapped command's process group before the lease is released. Nil means
-	// the run is never interrupted.
+	// stop delivers a signal sent to the baton itself. While the run is queued
+	// for the pool it cancels the acquisition; once the command is running it
+	// stops the command's process group before the lease is released. Nil
+	// means the run is never interrupted.
 	stop <-chan os.Signal
 }
 
@@ -534,7 +598,7 @@ func run(o runOptions) (runResult, error) {
 	logPath := filepath.Join(poolDir(o.pool), "logs",
 		fmt.Sprintf("%s-%s.log", time.Now().UTC().Format("20060102T150405"), newID()[:6]))
 	tReq := time.Now()
-	l, err := acquire(o.intent, o.mode, o.pool, o.owner, o.leaseTimeout, o.maxShared, o.verbose)
+	l, err := acquire(o.intent, o.mode, o.pool, o.owner, o.leaseTimeout, o.maxShared, o.verbose, o.stop)
 	if err != nil {
 		return runResult{}, err
 	}
@@ -721,6 +785,12 @@ func mainWithArgs(args []string) int {
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bench-baton: %v\n", err)
+			// A run cancelled before its command started still reports
+			// 128+signal, the same as one cancelled while running.
+			var c *canceled
+			if errors.As(err, &c) {
+				return c.exitCode()
+			}
 			return 1
 		}
 		fmt.Println(res.Tail)
