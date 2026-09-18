@@ -109,7 +109,11 @@ func installNetNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("net/local-address: expected TCP address")
 		}
-		return vm.EmptyPersistentMap.Assoc(vm.Keyword("host"), vm.String(address.IP.String())).(*vm.PersistentMap).Assoc(vm.Keyword("port"), vm.Int(address.Port)), nil
+		host := address.IP.String()
+		if address.Zone != "" {
+			host += "%" + address.Zone
+		}
+		return vm.EmptyPersistentMap.Assoc(vm.Keyword("host"), vm.String(host)).(*vm.PersistentMap).Assoc(vm.Keyword("port"), vm.Int(address.Port)), nil
 	})
 	acceptFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {

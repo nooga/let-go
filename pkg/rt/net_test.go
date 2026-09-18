@@ -18,6 +18,25 @@ import (
 	"github.com/zeebo/bencode"
 )
 
+type addrOnlyListener struct{ addr net.Addr }
+
+func (l *addrOnlyListener) Accept() (net.Conn, error) { return nil, net.ErrClosed }
+func (l *addrOnlyListener) Close() error              { return nil }
+func (l *addrOnlyListener) Addr() net.Addr            { return l.addr }
+
+type acceptObservedListener struct {
+	net.Listener
+	entered chan struct{}
+}
+
+func (l *acceptObservedListener) Accept() (net.Conn, error) {
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+	return l.Listener.Accept()
+}
+
 // nsFn looks up a namespace var and returns it as an Fn, following the
 // async_test.go / urlparam_test.go convention for exercising an rt namespace
 // from within package rt (a package rt test cannot import pkg/compiler to
@@ -413,11 +432,26 @@ func TestNetListen(t *testing.T) {
 		t.Fatalf("client dial: %v", err)
 	}
 	defer client.Close()
-	a := <-ch
+	var a acceptResult
+	select {
+	case a = <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("net/accept did not return after the client connected")
+	}
 	if a.err != nil {
 		t.Fatalf("net/accept: %v", a.err)
 	}
 	connV := a.v
+	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("client deadline: %v", err)
+	}
+	acceptedConn, err := unboxNetConn(connV)
+	if err != nil {
+		t.Fatalf("unbox accepted connection: %v", err)
+	}
+	if err := acceptedConn.conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("accepted connection deadline: %v", err)
+	}
 
 	// The accepted connection is the same representation dial returns, so
 	// write!/read! work on it unchanged.
@@ -446,11 +480,22 @@ func TestNetListen(t *testing.T) {
 	// Closing the listener wakes a blocked accept with an error, is
 	// idempotent, and leaves the accepted connection open: the caller owns
 	// accepted connections and closes them separately.
+	l, err := unboxNetListener(lV)
+	if err != nil {
+		t.Fatalf("unbox listener: %v", err)
+	}
+	acceptEntered := make(chan struct{}, 1)
+	l.listener = &acceptObservedListener{Listener: l.listener, entered: acceptEntered}
 	ch2 := make(chan acceptResult, 1)
 	go func() {
 		v, err := accept.Invoke([]vm.Value{lV})
 		ch2 <- acceptResult{v, err}
 	}()
+	select {
+	case <-acceptEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("net/accept did not enter the listener")
+	}
 	if _, err := closeFn.Invoke([]vm.Value{lV}); err != nil {
 		t.Fatalf("net/close! listener: %v", err)
 	}
@@ -494,5 +539,23 @@ func TestNetListen(t *testing.T) {
 	}
 	if _, err := localAddr.Invoke([]vm.Value{connV}); err == nil {
 		t.Errorf("net/local-address on a connection: want an error")
+	}
+
+	// IPv6 link-local addresses need their scope zone to remain dialable.
+	zoned := vm.NewBoxed(&netListener{listener: &addrOnlyListener{addr: &net.TCPAddr{
+		IP:   net.ParseIP("fe80::1"),
+		Port: 4321,
+		Zone: "en0",
+	}}})
+	zonedV, err := localAddr.Invoke([]vm.Value{zoned})
+	if err != nil {
+		t.Fatalf("net/local-address on scoped IPv6 listener: %v", err)
+	}
+	zonedMap := zonedV.(*vm.PersistentMap)
+	if host := zonedMap.ValueAt(vm.Keyword("host")); host != vm.String("fe80::1%en0") {
+		t.Errorf("net/local-address scoped IPv6 :host = %v, want fe80::1%%en0", host)
+	}
+	if port := zonedMap.ValueAt(vm.Keyword("port")); port != vm.Int(4321) {
+		t.Errorf("net/local-address scoped IPv6 :port = %v, want 4321", port)
 	}
 }
