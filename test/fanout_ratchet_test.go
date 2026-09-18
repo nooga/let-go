@@ -28,6 +28,12 @@ func TestMain(m *testing.M) {
 	if out, err := build.CombinedOutput(); err != nil {
 		panic("build lg: " + err.Error() + "\n" + string(out))
 	}
+	// .lg tests that shell out to an engine (the spec-evidence CLI tests) run
+	// in this process under TestRunner, and no lg binary exists at the repo
+	// root in CI. Hand them the binary built above.
+	if err := os.Setenv("CLJ_ENGINE", lgBin); err != nil {
+		panic("set CLJ_ENGINE: " + err.Error())
+	}
 	repoRoot, _ = filepath.Abs("..")
 	code := m.Run()
 	// Leave the submodule worktree as we found it — these are test-time

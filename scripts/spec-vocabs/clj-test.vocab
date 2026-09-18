@@ -1,0 +1,13 @@
+# scripts/spec-vocabs/clj-test.vocab -- deftest blocks run through clojure.test.
+# The runner opens its OWN namespace: the block is emitted verbatim and may
+# leave the reader inside whatever (ns ...) it declared last, so the epilogue
+# has to hop back with in-ns before spec-t/run-test-var and
+# spec-evidence-namespaces can resolve.
+# Per-var run-test-var (not namespace-wide run-tests): each var carries its
+# own :ns metadata for the switch, and the returned counters aggregate with
+# plain fail/error checks. There is no successful? predicate in this runtime;
+# success is zero fail AND zero error across every var's counters.
+boot (ns spec-evidence.runner (:require [clojure.test :as spec-t]))
+block => {form}
+epilogue (in-ns 'spec-evidence.runner)
+epilogue (let [results (mapcat (fn [ns-sym] (map (fn [v] (spec-t/run-test-var v)) (vals (ns-interns ns-sym)))) (spec-evidence-namespaces)) fails (filter #(or (pos? (:fail %)) (pos? (:error %))) results)] (println (if (empty? fails) (str "ok " "{id}") (str "FAIL " "{id}" " want successful got " (pr-str results)))) (System/exit (if (empty? fails) 0 1)))
