@@ -34,7 +34,7 @@ func installNetNS() {
 	}
 
 	ns := vm.NewNamespace("net")
-	for _, name := range []string{"dial", "write!", "read!", "close!"} {
+	for _, name := range []string{"dial", "write!", "read!", "close!", "listen", "local-address", "accept"} {
 		ns.Def(name, unsupported(name))
 	}
 	RegisterNS(ns)
