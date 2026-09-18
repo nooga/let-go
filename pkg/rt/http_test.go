@@ -81,3 +81,28 @@ func TestHandlerResponseHeadersUseRawStringKeys(t *testing.T) {
 		t.Fatalf("expected string header key to be unquoted, got %q", got)
 	}
 }
+
+func TestHandlerResponseAcceptsEmptyHeaders(t *testing.T) {
+	// {:status 204 :headers {} :body ""} - an empty headers map is the
+	// natural "no headers" value in a Ring response. Its seq yields one nil
+	// entry, which the header loop used to dereference.
+	handlerFnValue, err := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
+		return vm.NewPersistentMap([]vm.Value{
+			vm.Keyword("status"), vm.Int(204),
+			vm.Keyword("headers"), vm.EmptyPersistentMap,
+			vm.Keyword("body"), vm.String(""),
+		}), nil
+	})
+	if err != nil {
+		t.Fatalf("wrap handler: %v", err)
+	}
+	handlerFn := handlerFnValue.(vm.Fn)
+
+	req := httptest.NewRequest(http.MethodDelete, "http://example.test/todos/1", nil)
+	rec := httptest.NewRecorder()
+	(&Handler{fn: handlerFn}).ServeHTTP(rec, req)
+
+	if got := rec.Code; got != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d", http.StatusNoContent, got)
+	}
+}

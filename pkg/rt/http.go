@@ -124,6 +124,11 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		if sq, ok := respHeaders.(vm.Sequable); ok {
 			for s := sq.Seq(); s != nil; s = s.Next() {
 				entry := s.First()
+				// An empty map seqs to one nil entry; skip it, as the
+				// client header loops do.
+				if entry == vm.NIL {
+					continue
+				}
 				// Use Sequable to get key/value from any vector type
 				eSeq, ok := entry.(vm.Sequable)
 				if !ok {
