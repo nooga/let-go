@@ -41,6 +41,15 @@ type HTTPResponse struct {
 	Headers vm.Value `letgo:"headers"`
 }
 
+// HTTPServer is the struct behind the record http/start returns. Addr and
+// Port come from the bound listener, so a ":0" start reports the real port.
+// Server is the boxed handle http/stop and http/wait take.
+type HTTPServer struct {
+	Addr   string   `letgo:"addr"`
+	Port   int      `letgo:"port"`
+	Server vm.Value `letgo:"server"`
+}
+
 // LGURL represents a parsed URL as a record.
 type LGURL struct {
 	Scheme   string `letgo:"scheme"`
@@ -83,6 +92,7 @@ var (
 	shellResultMapping  *vm.StructMapping
 	httpRequestMapping  *vm.StructMapping
 	httpResponseMapping *vm.StructMapping
+	httpServerMapping   *vm.StructMapping
 	urlMapping          *vm.StructMapping
 )
 
@@ -93,6 +103,7 @@ func initTypeMappings() {
 	shellResultMapping = vm.RegisterStruct[ShellResult]("os/ShellResult")
 	httpRequestMapping = vm.RegisterStruct[HTTPRequest]("http/Request")
 	httpResponseMapping = vm.RegisterStruct[HTTPResponse]("http/Response")
+	httpServerMapping = vm.RegisterStruct[HTTPServer]("http/Server")
 	urlMapping = vm.RegisterStruct[LGURL]("io/URL")
 	initSyscallTypeMappings()
 }

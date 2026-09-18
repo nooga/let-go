@@ -303,6 +303,11 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		if sq, ok := respHeaders.(vm.Sequable); ok {
 			for s := sq.Seq(); s != nil; s = s.Next() {
 				entry := s.First()
+				// An empty map seqs to one nil entry; skip it, as the
+				// client header loops do.
+				if entry == vm.NIL {
+					continue
+				}
 				// Use Sequable to get key/value from any vector type
 				eSeq, ok := entry.(vm.Sequable)
 				if !ok {
@@ -388,27 +393,223 @@ func streamResponseBody(resp http.ResponseWriter, request *http.Request, body vm
 	return false
 }
 
+// defaultStopTimeout bounds http/stop's graceful drain before it falls back
+// to closing connections outright.
+const defaultStopTimeout = 5 * time.Second
+
+// lgServer is the handle behind http/start: a bound listener, the server
+// draining it, and a done channel that closes once the server has fully
+// stopped. "Fully" matters: Shutdown makes Serve return ErrServerClosed at
+// once, before in-flight requests finish, so done is owned by the stop path
+// (closed after Shutdown or the Close fallback returns) and by the serving
+// goroutine only when Serve fails on its own.
+type lgServer struct {
+	srv      *http.Server
+	ln       net.Listener
+	served   chan struct{} // closed when the Serve goroutine has exited
+	done     chan struct{} // closed when the server has fully stopped
+	err      error
+	stopOnce sync.Once
+	doneOnce sync.Once
+}
+
+func (s *lgServer) finish(err error) {
+	s.doneOnce.Do(func() {
+		s.err = err
+		close(s.done)
+	})
+}
+
+// startServer binds addr now, so a bad address is the caller's error, then
+// serves on a goroutine of scope. A second goroutine ties the server to the
+// scope's context: cancelling the scope stops the server the same way
+// http/stop does.
+func startServer(scope *vm.Scope, ctx context.Context, handler vm.Fn, addr string) (*lgServer, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	s := &lgServer{
+		srv:    &http.Server{Handler: &Handler{fn: handler}},
+		ln:     ln,
+		served: make(chan struct{}),
+		done:   make(chan struct{}),
+	}
+	scope.Go(func(_ context.Context) {
+		err := s.srv.Serve(ln)
+		close(s.served)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			// Serve closed the listener on its way out but leaves accepted
+			// connections open; Close drops them so wait means stopped.
+			_ = s.srv.Close()
+			s.finish(err)
+		}
+	})
+	scope.Go(func(_ context.Context) {
+		select {
+		case <-ctx.Done():
+			stopServer(s, defaultStopTimeout)
+		case <-s.done:
+		}
+	})
+	return s, nil
+}
+
+// stopServer drains the server gracefully for up to timeout, then closes
+// whatever is still open. Idempotent: a second caller returns at once and
+// observes completion through waitServer.
+//
+// Completion waits for the Serve goroutine to exit: a stop that lands before
+// Serve has registered the listener sees Shutdown return at once, and the
+// port is only released when Serve eventually runs, notices the shutdown,
+// and closes the listener on its way out.
+func stopServer(s *lgServer, timeout time.Duration) {
+	s.stopOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := s.srv.Shutdown(ctx); err != nil {
+			_ = s.srv.Close()
+		}
+		<-s.served
+		s.finish(nil)
+	})
+}
+
+// waitServer blocks until the server has stopped: nil after http/stop (or
+// a scope cancel), else the error Serve returned.
+func waitServer(s *lgServer) error {
+	<-s.done
+	return s.err
+}
+
+func serverRecord(s *lgServer) vm.Value {
+	port := 0
+	if tcp, ok := s.ln.Addr().(*net.TCPAddr); ok {
+		port = tcp.Port
+	}
+	return httpServerMapping.StructToRecord(HTTPServer{
+		Addr:   s.ln.Addr().String(),
+		Port:   port,
+		Server: vm.NewBoxed(s),
+	})
+}
+
+// unboxServer accepts the record http/start returned or its :server value.
+func unboxServer(v vm.Value) (*lgServer, error) {
+	asServer := func(v vm.Value) *lgServer {
+		if b, ok := v.(*vm.Boxed); ok {
+			if s, ok := b.Unbox().(*lgServer); ok {
+				return s
+			}
+		}
+		return nil
+	}
+	if s := asServer(v); s != nil {
+		return s, nil
+	}
+	// A record: the :server field. Checked after the boxed case because a
+	// *vm.Boxed is also a Lookup (by reflection) and rejects the probe.
+	if _, boxed := v.(*vm.Boxed); !boxed {
+		if l, ok := v.(vm.Lookup); ok {
+			if s := asServer(l.ValueAt(vm.Keyword("server"))); s != nil {
+				return s, nil
+			}
+		}
+	}
+	return nil, vm.NewExecutionError(fmt.Sprintf("expected an http server (from http/start), got %s", v.Type().Name()))
+}
+
 func init() { RegisterInstaller(installHttpNS) }
 
 // nolint
 func installHttpNS() {
-	// http/serve — (http/serve handler addr)
-	// Ring-style: handler is a fn that takes a request map, returns a response map.
-	serve, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// serveArgs validates the (handler addr) pair http/serve and http/start
+	// share.
+	serveArgs := func(name string, vs []vm.Value) (vm.Fn, string, error) {
 		if len(vs) != 2 {
-			return vm.NIL, vm.NewExecutionError("serve expects 2 args (handler, addr)")
+			return nil, "", vm.NewExecutionError(name + " expects 2 args (handler, addr)")
 		}
 		handlerFunc, ok := vs[0].(vm.Fn)
 		if !ok {
-			return vm.NIL, vm.NewExecutionError("serve expected handler function as Fn")
+			return nil, "", vm.NewExecutionError(name + " expected handler function as Fn")
 		}
 		addr, ok := vs[1].(vm.String)
 		if !ok {
-			return vm.NIL, vm.NewExecutionError("serve expected listen address as String")
+			return nil, "", vm.NewExecutionError(name + " expected listen address as String")
 		}
-		handler := &Handler{fn: handlerFunc}
-		err := http.ListenAndServe(string(addr), handler)
+		return handlerFunc, string(addr), nil
+	}
+
+	// http/serve — (http/serve handler addr)
+	// Ring-style: handler is a fn that takes a request map, returns a response map.
+	// Blocks until the server stops: on a bind error, a scope cancel, or an
+	// http/stop from another goroutine.
+	serve := vm.NewCtxNativeFn("http/serve", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		handlerFunc, addr, err := serveArgs("serve", vs)
 		if err != nil {
+			return vm.NIL, err
+		}
+		s, err := startServer(ec.Scope(), ec.Context(), handlerFunc, addr)
+		if err != nil {
+			return vm.NIL, err
+		}
+		if err := waitServer(s); err != nil {
+			return vm.NIL, err
+		}
+		return vm.NIL, nil
+	})
+
+	// http/start — (http/start handler addr) -> http/Server record
+	// Binds now and serves in the background; the record carries :addr,
+	// :port (resolved, so ":0" works) and the :server handle for stop/wait.
+	start := vm.NewCtxNativeFn("http/start", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		handlerFunc, addr, err := serveArgs("start", vs)
+		if err != nil {
+			return vm.NIL, err
+		}
+		s, err := startServer(ec.Scope(), ec.Context(), handlerFunc, addr)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return serverRecord(s), nil
+	})
+
+	// http/stop — (http/stop server) or (http/stop server timeout-ms)
+	// Graceful shutdown, then Close once timeout-ms (default 5000) elapses.
+	stop, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 || len(vs) > 2 {
+			return vm.NIL, vm.NewExecutionError("stop expects 1-2 args (server, timeout-ms)")
+		}
+		s, err := unboxServer(vs[0])
+		if err != nil {
+			return vm.NIL, err
+		}
+		timeout := defaultStopTimeout
+		if len(vs) == 2 {
+			ms, ok := vs[1].(vm.Int)
+			if !ok || ms < 0 {
+				return vm.NIL, vm.NewExecutionError("stop timeout-ms must be a non-negative integer")
+			}
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+		stopServer(s, timeout)
+		return vm.NIL, nil
+	})
+	if err != nil {
+		panic("http NS init failed")
+	}
+
+	// http/wait — (http/wait server)
+	// Blocks until the server has stopped; nil on a clean stop.
+	wait, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, vm.NewExecutionError("wait expects 1 arg (server)")
+		}
+		s, err := unboxServer(vs[0])
+		if err != nil {
+			return vm.NIL, err
+		}
+		if err := waitServer(s); err != nil {
 			return vm.NIL, err
 		}
 		return vm.NIL, nil
@@ -665,8 +866,13 @@ func installHttpNS() {
 	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
 	ns.Exclude("get")
 
-	ns.Def("serve", serve)
+	// The server fns run under the caller's scope too: a cancelled scope
+	// stops the server, so they carry the same meta as the clients.
 	clientMeta := vm.EmptyPersistentMap.Assoc(vm.Keyword("scope-cancellation"), vm.TRUE)
+	ns.Def("serve", serve).SetMeta(clientMeta)
+	ns.Def("start", start).SetMeta(clientMeta)
+	ns.Def("stop", stop)
+	ns.Def("wait", wait)
 	ns.Def("get", httpGet).SetMeta(clientMeta)
 	ns.Def("post", httpPost).SetMeta(clientMeta)
 	ns.Def("request", httpRequest).SetMeta(clientMeta)
