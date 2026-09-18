@@ -109,13 +109,15 @@ Examples and transcripts throughout this document use the test file `test/tap/ta
   (:require [clojure.test :refer [deftest is run-tests run-all-tests testing]]
             [clojure.test.tap :refer [with-tap-output]]))
 
-(deftest math-test
+(deftest ^:expected-failure math-test
   (testing "simple addition"
     (is (= 4 (+ 2 2)))
     (is (= 5 (+ 2 3))))
   (testing "deliberate-failure-test"
     (is (= 10 (+ 5 4)) "This assertion will fail intentionally")))
 ```
+
+`math-test` carries `^:expected-failure` (Section 3.4). `clojure.test` counts, prints, and TAP-reports its failure exactly as any other failing test; the marker only tells the Go harness (Section 12) that this var is meant to fail, so the harness's own verdict for it inverts.
 
 ### 1.8 Delivery Order
 
@@ -269,6 +271,7 @@ Every var below is `^:dynamic` and interned in `test`. The Default column is the
 | `:name` | `def` | The var's symbol. |
 | `:file`, `:line`, `:column` | `def` | Source position of the defining form. |
 | `:private` | `deftest-` | Excludes the var from `ns-publics`. |
+| `:expected-failure` | the author, on the `deftest` form (`^:expected-failure`) | Boolean. `clojure.test` itself never reads it; the Go harness (Section 12) does, to invert its per-var verdict for a test that is meant to fail. |
 
 Harnesses group by `(comp :ns meta)` and read `:file`/`:line` from var metadata, so `def` attaches these keys (Section 4.4).
 
@@ -1286,6 +1289,11 @@ FUNCTION classify_loaded(initial_ns, before) -> Loaded:
         RETURN Loaded(LOAD_ONLY, [])       -- no namespace gained a test; any assertions ran at load time
     RETURN Loaded(TESTS, touched)
 
+FUNCTION expected_failures(namespaces) -> Integer:
+    -- added: count of vars, across `namespaces`, whose metadata carries
+    -- :expected-failure true. Walks the same ns-interns + meta path as
+    -- test_snapshot; needs no new discovery mechanism.
+
 FUNCTION run_file_tests(path) -> Boolean:
     initial_ns = CurrentNS       -- the harness resets *ns* to clojure.core before every file (test/language_test.go)
     before = test_snapshot()
@@ -1298,9 +1306,8 @@ FUNCTION run_file_tests(path) -> Boolean:
             -- Step 2: run every touched namespace through the public API, one call
             summary, run_error = invoke(test, "run-tests", namespaces...) -- rt.LookupVar + rt.InvokeValue
             IF run_error IS NOT None: FAIL file with copied error text
-            success, result_error = invoke(test, "successful?", summary)
-            IF result_error IS NOT None: FAIL file with copied error text
-            RETURN success == true
+            expected = expected_failures(namespaces)   -- added
+            RETURN (summary.fail + summary.error) == expected
 
 -- Behavior:
 --   - The harness compiles no source strings.
@@ -1343,6 +1350,11 @@ FUNCTION run_file_tests(path) -> Boolean:
 --     a user sees.
 --   - Cost: the snapshot walks every namespace's interns once before each file.
 --     It runs on the test path only.
+--   - A `run-tests` summary carries no per-var attribution, so `run_file_tests` cannot
+--     tell which var produced a `:fail` or `:error`. It accepts any combination: the
+--     file passes when `fail + error` equals the number of `:expected-failure` vars
+--     across the touched namespaces, however that total is reached. The report bridge
+--     (12.3), which does see every event's originating var, is exact.
 ```
 
 ### 12.3 Fast Follow: The Report Bridge
@@ -1362,6 +1374,8 @@ RECORD BridgeEnvelope:                  -- immutable, Go-owned
     failure_text    : String
     default_text    : String
     summary         : copied integer fields | None
+    expected_failure : Boolean          -- added: true on a BEGIN_TEST_VAR whose var
+                                         -- carries ^:expected-failure; false otherwise
 
 -- No field is a vm.Value, Var, Namespace, persistent collection, dynamic-var
 -- reference, writer, or lazily rendered object.
@@ -1390,7 +1404,9 @@ FUNCTION bridge_report(ec, events, cancel) -> NativeFn:
         envelope = freeze_event_on_runner(ec, event)
         -- freeze_event reads *testing-vars*, *testing-contexts*, and trace depth;
         -- renders names, expected, actual, traces, default text, and complete
-        -- failure text; and copies summary integers before bindings can change.
+        -- failure text; copies summary integers and, for a BEGIN_TEST_VAR, the
+        -- var's :expected-failure metadata into envelope.expected_failure; all
+        -- before bindings can change.
         envelope.sequence = next_sequence++
 
         IF event.type == BEGIN_TEST_VAR:
@@ -1418,6 +1434,7 @@ FUNCTION protocol_fault(state, events, text):
     drain(events)                              -- read until the sole producer closes
 
 FUNCTION consume_scope(sub : testing.T, begin : BridgeEnvelope, events, state):
+    saw_failure = false        -- added: whether an expected-failure var actually failed
     FOR EACH envelope IN events:
         IF envelope.sequence != state.expected_sequence++:
             protocol_fault(state, events, "non-contiguous event sequence")
@@ -1433,11 +1450,17 @@ FUNCTION consume_scope(sub : testing.T, begin : BridgeEnvelope, events, state):
                 IF envelope.scope_id != begin.scope_id:
                     protocol_fault(state, events, "event attributed to wrong scope")
                     RETURN
-                sub.Error(envelope.failure_text)   -- text is never a printf format
+                IF begin.expected_failure:                              -- added
+                    sub.Log("expected failure: " + envelope.failure_text)
+                    saw_failure = true
+                ELSE:
+                    sub.Error(envelope.failure_text)   -- text is never a printf format
             END_TEST_VAR:
                 IF envelope.scope_id != begin.scope_id:
                     protocol_fault(state, events, "scope ended out of order")
                     RETURN
+                IF begin.expected_failure AND NOT saw_failure:          -- added
+                    sub.Error("expected failure passed")
                 RETURN
             PASS:
                 IF envelope.scope_id != begin.scope_id:
@@ -1538,14 +1561,11 @@ FUNCTION run_file_tests_bridged(t, path) -> Boolean:
                         IF run_error IS NOT None:
                             terminal = Terminal(INVOKE_ERROR, error_text = copy_text(run_error))
                             RETURN
-                        success, result_error = invoke(test, "successful?", summary)
-                        IF result_error IS NOT None:
-                            terminal = Terminal(INVOKE_ERROR, error_text = copy_text(result_error))
-                            RETURN
+                        expected = expected_failures(namespaces)   -- added: Section 12.2
                         -- Copy and evaluate while still on the runner ExecContext.
                         terminal = Terminal(NORMAL,
                                             summary = copy_summary(summary),
-                                            successful = success == true)
+                                            successful = (summary.fail + summary.error) == expected)
         CATCH bridge_cancelled:
             terminal = Terminal(CANCELLED)
 
@@ -1566,14 +1586,22 @@ FUNCTION run_file_tests_bridged(t, path) -> Boolean:
 --   - Each deftest is a Go subtest named <ns>/<var>, selectable with -run. A file
 --     with deftests in two namespaces runs both under one `run-tests` call and
 --     one Terminal, and each deftest appears as its own `<ns>/<var>` subtest.
+--   - A deftest var marked `^:expected-failure` inverts consume_scope's verdict for
+--     its subtest: one or more `:fail`/`:error` events in the scope makes the
+--     subtest pass, with the failure text logged via `t.Log` prefixed
+--     `expected failure:`; zero makes it fail with `t.Error("expected failure passed")`.
+--     Nothing about `report`, `run-tests`, or the printed default/TAP output changes;
+--     the marker is read only by consume_scope, off the frozen envelope.
 --   - Classification is Section 12.2's `classify_loaded`, run on the runner
 --     goroutine, with `before = test_snapshot()` taken on that same goroutine
 --     immediately before `load_file`. A LOAD_ONLY file sends no envelopes and a
 --     NORMAL terminal with no summary, which the NORMAL arm below accepts.
 --   - The bridge increments counters itself, exactly as default methods and
 --     tap-report do, since binding `report` replaces the methods that would
---     otherwise count. successful? on the returned summary remains the authoritative
---     pass/fail result; the Error calls agree by construction.
+--     otherwise count. `terminal.successful` and the per-var Error calls agree by
+--     construction: both compare `fail + error` against the same `expected_failures`
+--     count (Section 12.2), so a file where every marked var failed and no other
+--     var did produces a `successful` Terminal and no `sub.Error` from any subtest.
 --   - The bridge does not wrap printing in with-test-out. testing.T owns the output.
 --   - Nested BEGIN/END pairs receive explicit scope IDs. A composed deftest opens
 --     a nested Go subtest; its END returns only from that matching recursive scope,
@@ -1609,7 +1637,7 @@ Existing `test/*.lg` files use `deftest`, `is`, `testing`, `are`, and `use-fixtu
 | `(throw (str ...))` in core library code | `(throw (ex-info ...))` | Convert the 40 core sites. Behavior under `catch Throwable` and bare `catch` is unchanged. |
 | `:trace` under `ex-data` as strings | Vector of `Frame` maps, derived from the chain on read, excluded from equality | Readers of the string form must switch. |
 
-Add the reference example as `test/tap/tap-example.lg`. Its failure line reads `(math-test) (test/tap/tap-example.lg:9)`. Remove any demonstration scripts that print TAP output without asserting from `test/`, since the harness runs every `.lg` file there.
+Add the reference example, `^:expected-failure` marker included, as `test/tap/tap-example.lg`. Its failure line reads `(math-test) (test/tap/tap-example.lg:9)`. Remove any demonstration scripts that print TAP output without asserting from `test/`, since the harness runs every `.lg` file there.
 
 **Patterns to avoid in new tests.** Tests capturing reporter output bind `*test-out*` to an `io/buffer` and read it with `io/buffer-str`. `with-out-str` around a runner returns `""`. Tests needing counters bind `*report-counters*` to `(ref *initial-report-counters*)` or call `run-test-var`, and increment via `inc-report-counter`. Tests define probes with `deftest` rather than attaching `:test` metadata by hand. Tests needing an integer from a regex group use `parse-long`.
 
@@ -1824,6 +1852,9 @@ The costs are on the error path and in generated code, not the happy path. The l
 - [ ] Bridge: a deftest invoked from another deftest becomes a nested subtest, and events after its matching end remain on the outer subtest
 - [ ] Bridge: harness stdout is empty; all text flows through `t.Log`/`t.Error`, and percent signs in messages remain literal
 - [ ] Bridge: load/invoke errors, panics, cancellation, premature channel close, and mismatched scope IDs each produce one terminal result without panic, timeout, deadlock, or a stranded producer
+- [ ] Bridge: a `deftest` var marked `^:expected-failure` that produces a `:fail` or `:error` passes its subtest, with the failure logged via `t.Log`
+- [ ] Bridge: a `deftest` var marked `^:expected-failure` that produces none fails its subtest with `t.Error("expected failure passed")`
+- [ ] `test/tap/tap-example.lg` passes under both `LG_TEST_REPORTER` modes, with `run-tests` reporting `math-test`'s failure and the bridge logging it as expected
 - [ ] `go test ./test/...` passes on the migrated corpus
 - [ ] A namespace whose only test entry point is a new or changed `test-ns-hook` (no `:test` var) is discovered as touched and run through `run-tests`, in both harness modes
 
@@ -1843,7 +1874,7 @@ The reference example from Section 1.7, run through both reporters in one proces
             [clojure.test.tap :refer [with-tap-output]]
             [clojure.string :as str]))
 
-(deftest math-test
+(deftest ^:expected-failure math-test
   (testing "simple addition"
     (is (= 4 (+ 2 2)))
     (is (= 5 (+ 2 3))))
@@ -1912,8 +1943,8 @@ The rendered class and message of the `:error` are engine-specific (the JVM prin
 
 Prose-only cases that remain:
 
-- `go test ./test/ -run 'TestRunner/tap-example.lg' -v` reports `--- FAIL: TestRunner/tap-example.lg/my.test.tap-example/math-test` with `(math-test) (test/tap/tap-example.lg:9)` and `actual: (not (= 10 9))` (bridge, Section 12.3)
-- The failure line names `test/tap/tap-example.lg:9` when the example is loaded from that file
+- `go test ./test/ -run 'TestRunner/tap-example.lg' -v` reports `--- PASS: TestRunner/tap-example.lg/my.test.tap-example/math-test`, with `t.Log` carrying `expected failure: ... (math-test) (test/tap/tap-example.lg:9)` and `actual: (not (= 10 9))` (bridge, Section 12.3), since `math-test` is marked `^:expected-failure`
+- The logged failure line names `test/tap/tap-example.lg:9` when the example is loaded from that file
 
 ---
 
