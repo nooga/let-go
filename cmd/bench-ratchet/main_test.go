@@ -494,6 +494,13 @@ func TestSeedBaselineAmd64OnlyPreservesM3(t *testing.T) {
 			if e.BestSinceSHA != mb.CapturedAtSHA {
 				t.Errorf("seeded provenance %q != profile captured_at_sha %q", e.BestSinceSHA, mb.CapturedAtSHA)
 			}
+			// The deterministic pair is measured by the seed window too, so it
+			// carries its own date; without one the gate would rank the seeded
+			// row below every stamped row.
+			if e.AllocsBytesSinceSHA != mb.CapturedAtSHA || e.AllocsBytesSinceAt != mb.CapturedAt {
+				t.Errorf("seeded deterministic provenance = %q/%q, want %q/%q",
+					e.AllocsBytesSinceSHA, e.AllocsBytesSinceAt, mb.CapturedAtSHA, mb.CapturedAt)
+			}
 		}
 	}
 	if !hasAmd64 {
@@ -551,7 +558,7 @@ func TestForceRebaselineWritesOnlyItsOwnProfile(t *testing.T) {
 		},
 	}
 
-	forceRebaseline(&baseline, currentKey, current)
+	forceRebaseline(&baseline, currentKey, current, true)
 
 	// Profile B is untouched — numbers and provenance both.
 	gotOther := baseline.Machines[otherKey].Benchmarks[benchmark]
@@ -620,7 +627,7 @@ func TestForceRebaselineRetainsUnmeasuredEntries(t *testing.T) {
 		},
 	}
 
-	forceRebaseline(&baseline, currentKey, current)
+	forceRebaseline(&baseline, currentKey, current, true)
 
 	gotCurrent := baseline.Machines[currentKey].Benchmarks[benchmark]
 	if gotCurrent.NSPerOp != 15 || gotCurrent.AllocsPerOp != 12 || gotCurrent.BytesPerOp != 120 {
@@ -653,7 +660,8 @@ func TestMachineIndependentBarUsesNewestMeasuredRow(t *testing.T) {
 			CapturedAtSHA: "f3ca5f9be1da",
 			Machine:       Machine{OS: "linux", Arch: "amd64", CPUModel: "Stale Xeon"},
 			Benchmarks: map[string]BenchmarkEntry{
-				benchmark: {AllocsPerOp: 7041, BytesPerOp: 743356},
+				benchmark: {AllocsPerOp: 7041, BytesPerOp: 743356,
+					AllocsBytesSinceSHA: "f3ca5f9be1da", AllocsBytesSinceAt: "2026-08-11T16:10:14Z"},
 			},
 		},
 		// Current tier: the newest row that carries this benchmark.
@@ -662,7 +670,8 @@ func TestMachineIndependentBarUsesNewestMeasuredRow(t *testing.T) {
 			CapturedAtSHA: "477a5d36e25f",
 			Machine:       Machine{OS: "linux", Arch: "amd64", CPUModel: "Fresh EPYC"},
 			Benchmarks: map[string]BenchmarkEntry{
-				benchmark: {AllocsPerOp: 13995, BytesPerOp: 1016128},
+				benchmark: {AllocsPerOp: 13995, BytesPerOp: 1016128,
+					AllocsBytesSinceSHA: "477a5d36e25f", AllocsBytesSinceAt: "2026-09-07T05:34:02Z"},
 			},
 		},
 		// A third tier, newer than the stale one but older than the newest.
@@ -672,7 +681,8 @@ func TestMachineIndependentBarUsesNewestMeasuredRow(t *testing.T) {
 			Machine:       Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M3"},
 			Benchmarks: map[string]BenchmarkEntry{
 				benchmark: {AllocsPerOp: 26294, BytesPerOp: 1599971,
-					BestSinceSHA: "dadb8e0b54b7", BestSinceAt: "2026-08-24T20:18:19Z"},
+					BestSinceSHA: "dadb8e0b54b7", BestSinceAt: "2026-08-24T20:18:19Z",
+					AllocsBytesSinceSHA: "dadb8e0b54b7", AllocsBytesSinceAt: "2026-08-24T20:18:19Z"},
 			},
 		},
 	}}
@@ -740,6 +750,7 @@ func TestMachineIndependentBarPrefersEntryProvenance(t *testing.T) {
 			Benchmarks: map[string]BenchmarkEntry{benchmark: {
 				AllocsPerOp: 10, BytesPerOp: 100,
 				BestSinceSHA: "oldsha", BestSinceAt: "2026-01-01T00:00:00Z",
+				AllocsBytesSinceSHA: "oldsha", AllocsBytesSinceAt: "2026-01-01T00:00:00Z",
 			}},
 		},
 		"b": {
@@ -747,6 +758,7 @@ func TestMachineIndependentBarPrefersEntryProvenance(t *testing.T) {
 			Benchmarks: map[string]BenchmarkEntry{benchmark: {
 				AllocsPerOp: 50, BytesPerOp: 500,
 				BestSinceSHA: "midsha", BestSinceAt: "2026-06-01T00:00:00Z",
+				AllocsBytesSinceSHA: "midsha", AllocsBytesSinceAt: "2026-06-01T00:00:00Z",
 			}},
 		},
 	}}
@@ -776,5 +788,321 @@ func TestFilterUnstableBenchmarksKeepsStableGateRows(t *testing.T) {
 	}
 	if _, ok := filtered.Benchmarks[stable]; !ok {
 		t.Fatal("stable gate benchmark was filtered")
+	}
+}
+
+// TestDeterministicProvenanceSurvivesTimingOnlyImprovement pins the rule that a
+// row's deterministic stamp names the run that measured its allocs/bytes, not
+// the run that last moved any metric. A timing win leaves allocs/bytes where
+// they were, so it must leave their provenance where it was too — otherwise a
+// pinned old floor would outrank a row that genuinely measured the benchmark
+// later, and the gate would attribute the old numbers to the newer commit.
+func TestDeterministicProvenanceSurvivesTimingOnlyImprovement(t *testing.T) {
+	const benchmark = "pkg.BenchmarkPinned"
+
+	january := MachineBaseline{
+		CapturedAt: "2026-01-10T00:00:00Z", CapturedAtSHA: "jansha",
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			NSPerOp: 100, RatioToAnchor: 10, AllocsPerOp: 10, BytesPerOp: 100,
+			BestSinceSHA: "jansha", BestSinceAt: "2026-01-10T00:00:00Z",
+			AllocsBytesSinceSHA: "jansha", AllocsBytesSinceAt: "2026-01-10T00:00:00Z",
+		}},
+	}
+	// March: faster, identical allocs/bytes.
+	march := MachineBaseline{
+		CapturedAt: "2026-03-10T00:00:00Z", CapturedAtSHA: "marsha",
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			NSPerOp: 50, RatioToAnchor: 5, AllocsPerOp: 10, BytesPerOp: 100,
+		}},
+	}
+	merged, _ := ratchetMerge(january, march)
+	got := merged.Benchmarks[benchmark]
+	if got.BestSinceSHA != "marsha" {
+		t.Fatalf("timing provenance = %q, want marsha", got.BestSinceSHA)
+	}
+	if got.AllocsBytesSinceSHA != "jansha" || got.AllocsBytesSinceAt != "2026-01-10T00:00:00Z" {
+		t.Fatalf("deterministic provenance = %q/%q, want jansha/2026-01-10T00:00:00Z",
+			got.AllocsBytesSinceSHA, got.AllocsBytesSinceAt)
+	}
+
+	// February measured this benchmark for real; it is the newest row that did.
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{
+		"a": merged,
+		"b": {
+			CapturedAt: "2026-02-10T00:00:00Z", CapturedAtSHA: "febsha",
+			Benchmarks: map[string]BenchmarkEntry{benchmark: {
+				AllocsPerOp: 15, BytesPerOp: 150,
+				BestSinceSHA: "febsha", BestSinceAt: "2026-02-10T00:00:00Z",
+				AllocsBytesSinceSHA: "febsha", AllocsBytesSinceAt: "2026-02-10T00:00:00Z",
+			}},
+		},
+	}}
+	bar := machineIndependentBar(baseline)[benchmark]
+	if bar.AllocsPerOp != 15 || bar.BytesPerOp != 150 || bar.BestSinceSHA != "febsha" {
+		t.Fatalf("bar = %d allocs/%d bytes (%q), want 15/150 (febsha)",
+			bar.AllocsPerOp, bar.BytesPerOp, bar.BestSinceSHA)
+	}
+}
+
+// TestDeterministicProvenanceMovesWhenAllocsChange is the other half: a run that
+// actually lowers allocs/bytes re-dates them.
+func TestDeterministicProvenanceMovesWhenAllocsChange(t *testing.T) {
+	const benchmark = "pkg.BenchmarkTightened"
+	january := MachineBaseline{
+		CapturedAt: "2026-01-10T00:00:00Z", CapturedAtSHA: "jansha",
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			NSPerOp: 100, AllocsPerOp: 10, BytesPerOp: 100,
+			AllocsBytesSinceSHA: "jansha", AllocsBytesSinceAt: "2026-01-10T00:00:00Z",
+		}},
+	}
+	march := MachineBaseline{
+		CapturedAt: "2026-03-10T00:00:00Z", CapturedAtSHA: "marsha",
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			NSPerOp: 100, AllocsPerOp: 8, BytesPerOp: 100,
+		}},
+	}
+	merged, _ := ratchetMerge(january, march)
+	got := merged.Benchmarks[benchmark]
+	if got.AllocsPerOp != 8 {
+		t.Fatalf("merged allocs = %d, want 8", got.AllocsPerOp)
+	}
+	if got.AllocsBytesSinceSHA != "marsha" || got.AllocsBytesSinceAt != "2026-03-10T00:00:00Z" {
+		t.Fatalf("deterministic provenance = %q/%q, want marsha/2026-03-10T00:00:00Z",
+			got.AllocsBytesSinceSHA, got.AllocsBytesSinceAt)
+	}
+}
+
+// TestDeterministicProvenanceUnknownSortsOldest pins that a RATCHETED row
+// predating the deterministic stamp claims no measurement date: best_since says
+// only that some metric moved at that commit, which may have been the timing,
+// so the row may be the reference only when nothing better exists.
+func TestDeterministicProvenanceUnknownSortsOldest(t *testing.T) {
+	const benchmark = "pkg.BenchmarkUnstamped"
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{
+		"a": {
+			CapturedAt: "2026-09-07T05:34:02Z", CapturedAtSHA: "newprofile",
+			Benchmarks: map[string]BenchmarkEntry{benchmark: {
+				AllocsPerOp: 10, BytesPerOp: 100,
+				BestSinceSHA: "newprofile", BestSinceAt: "2026-09-07T05:34:02Z",
+			}},
+		},
+		"b": {
+			CapturedAt: "2026-06-01T00:00:00Z", CapturedAtSHA: "midprofile",
+			Benchmarks: map[string]BenchmarkEntry{benchmark: {
+				AllocsPerOp: 50, BytesPerOp: 500,
+				AllocsBytesSinceSHA: "midsha", AllocsBytesSinceAt: "2026-06-01T00:00:00Z",
+			}},
+		},
+	}}
+	bar := machineIndependentBar(baseline)[benchmark]
+	if bar.AllocsPerOp != 50 || bar.BestSinceSHA != "midsha" {
+		t.Fatalf("bar = %d allocs (%q), want 50 (midsha)", bar.AllocsPerOp, bar.BestSinceSHA)
+	}
+}
+
+// TestMachineIndependentBarTiesOnSHANotTimestamp pins that "same commit" is
+// decided by the commit, not the clock: two captures of one code state tie
+// however far apart they ran, and the tightest of them is the floor.
+func TestMachineIndependentBarTiesOnSHANotTimestamp(t *testing.T) {
+	const benchmark = "pkg.BenchmarkSameCommit"
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{
+		"a": {Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			AllocsPerOp: 10, BytesPerOp: 100,
+			AllocsBytesSinceSHA: "same-sha", AllocsBytesSinceAt: "2026-09-07T05:34:02Z",
+		}}},
+		"b": {Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			AllocsPerOp: 20, BytesPerOp: 200,
+			AllocsBytesSinceSHA: "same-sha", AllocsBytesSinceAt: "2026-09-08T11:00:00Z",
+		}}},
+	}}
+	bar := machineIndependentBar(baseline)[benchmark]
+	if bar.AllocsPerOp != 10 || bar.BytesPerOp != 100 {
+		t.Fatalf("bar = %d allocs/%d bytes, want the same-commit minimum 10/100",
+			bar.AllocsPerOp, bar.BytesPerOp)
+	}
+	if bar.BestSinceSHA != "same-sha" {
+		t.Fatalf("bar provenance = %q, want same-sha", bar.BestSinceSHA)
+	}
+}
+
+// TestMachineIndependentBarDoesNotMergeDistinctSHAs is the converse: rows from
+// different commits describe different code, so they are ranked rather than
+// mixed, even when their timestamps collide.
+func TestMachineIndependentBarDoesNotMergeDistinctSHAs(t *testing.T) {
+	const benchmark = "pkg.BenchmarkDistinctCommits"
+	const sameSecond = "2026-09-07T05:34:02Z"
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{
+		"a": {Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			AllocsPerOp: 10, BytesPerOp: 100,
+			AllocsBytesSinceSHA: "aaaa1111", AllocsBytesSinceAt: sameSecond,
+		}}},
+		"b": {Benchmarks: map[string]BenchmarkEntry{benchmark: {
+			AllocsPerOp: 20, BytesPerOp: 200,
+			AllocsBytesSinceSHA: "bbbb2222", AllocsBytesSinceAt: sameSecond,
+		}}},
+	}}
+	bar := machineIndependentBar(baseline)[benchmark]
+	// One row wins whole; a 10/200 or 10/100-from-two-commits mix would mean the
+	// bar describes code that never existed.
+	if !(bar.AllocsPerOp == 10 && bar.BytesPerOp == 100 && bar.BestSinceSHA == "aaaa1111") &&
+		!(bar.AllocsPerOp == 20 && bar.BytesPerOp == 200 && bar.BestSinceSHA == "bbbb2222") {
+		t.Fatalf("bar = %d allocs/%d bytes (%q), want one row intact",
+			bar.AllocsPerOp, bar.BytesPerOp, bar.BestSinceSHA)
+	}
+}
+
+// TestForceRebaselineKeepsDeterministicUnlessImproved pins that -force is a
+// timing instrument: it replaces this machine's wall-clock numbers, but an
+// allocs/bytes regression is a code fact no local recapture can accept, so the
+// stored value and its provenance stay and the rejection is reported.
+func TestForceRebaselineKeepsDeterministicUnlessImproved(t *testing.T) {
+	const regressed = "pkg.BenchmarkRegressedBytes"
+	const improved = "pkg.BenchmarkImprovedBytes"
+	machine := Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M3", GoVersion: "go1.26.5"}
+	key := perfdata.MachineKey(machine)
+
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{key: {
+		CapturedAt: "2026-08-01T00:00:00Z", CapturedAtSHA: "oldsha",
+		Machine: machine,
+		Benchmarks: map[string]BenchmarkEntry{
+			regressed: {NSPerOp: 100, AllocsPerOp: 10, BytesPerOp: 100,
+				AllocsBytesSinceSHA: "oldsha", AllocsBytesSinceAt: "2026-08-01T00:00:00Z"},
+			improved: {NSPerOp: 200, AllocsPerOp: 20, BytesPerOp: 200,
+				AllocsBytesSinceSHA: "oldsha", AllocsBytesSinceAt: "2026-08-01T00:00:00Z"},
+		},
+	}}}
+	current := MachineBaseline{
+		CapturedAt: "2026-09-18T17:13:27Z", CapturedAtSHA: "newsha",
+		Machine: machine,
+		Benchmarks: map[string]BenchmarkEntry{
+			regressed: {NSPerOp: 90, AllocsPerOp: 12, BytesPerOp: 150},
+			improved:  {NSPerOp: 180, AllocsPerOp: 15, BytesPerOp: 150},
+		},
+	}
+
+	rejected := forceRebaseline(&baseline, key, current, false)
+
+	got := baseline.Machines[key].Benchmarks[regressed]
+	if got.NSPerOp != 90 {
+		t.Fatalf("forced timing was not written: ns_per_op = %v, want 90", got.NSPerOp)
+	}
+	if got.AllocsPerOp != 10 || got.BytesPerOp != 100 {
+		t.Fatalf("regression was accepted: %d allocs/%d bytes, want the stored 10/100",
+			got.AllocsPerOp, got.BytesPerOp)
+	}
+	if got.AllocsBytesSinceSHA != "oldsha" || got.AllocsBytesSinceAt != "2026-08-01T00:00:00Z" {
+		t.Fatalf("kept values were re-stamped: %q/%q", got.AllocsBytesSinceSHA, got.AllocsBytesSinceAt)
+	}
+
+	gotImproved := baseline.Machines[key].Benchmarks[improved]
+	if gotImproved.AllocsPerOp != 15 || gotImproved.BytesPerOp != 150 {
+		t.Fatalf("improvement was not adopted: %d allocs/%d bytes, want 15/150",
+			gotImproved.AllocsPerOp, gotImproved.BytesPerOp)
+	}
+	if gotImproved.AllocsBytesSinceSHA != "newsha" || gotImproved.AllocsBytesSinceAt != "2026-09-18T17:13:27Z" {
+		t.Fatalf("improvement was not stamped: %q/%q",
+			gotImproved.AllocsBytesSinceSHA, gotImproved.AllocsBytesSinceAt)
+	}
+
+	if len(rejected) != 2 {
+		t.Fatalf("rejected = %+v, want the allocs and bytes regressions of %s", rejected, regressed)
+	}
+	for _, r := range rejected {
+		if r.Name != regressed {
+			t.Fatalf("rejected names %q, want %q", r.Name, regressed)
+		}
+	}
+}
+
+// TestForceRebaselineAcceptsDeterministicWhenAsked pins the explicit escape
+// hatch: an operator who has justified an allocation regression can record it,
+// and the new numbers then carry this run's provenance.
+func TestForceRebaselineAcceptsDeterministicWhenAsked(t *testing.T) {
+	const benchmark = "pkg.BenchmarkAcceptedRegression"
+	machine := Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M3", GoVersion: "go1.26.5"}
+	key := perfdata.MachineKey(machine)
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{key: {
+		CapturedAt: "2026-08-01T00:00:00Z", CapturedAtSHA: "oldsha",
+		Machine:    machine,
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {NSPerOp: 10, AllocsPerOp: 10, BytesPerOp: 100}},
+	}}}
+	current := MachineBaseline{
+		CapturedAt: "2026-08-18T21:00:00Z", CapturedAtSHA: "accepted-sha",
+		Machine:    machine,
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {NSPerOp: 15, AllocsPerOp: 12, BytesPerOp: 120}},
+	}
+	if rejected := forceRebaseline(&baseline, key, current, true); len(rejected) != 0 {
+		t.Fatalf("rejected = %+v, want none under -accept-deterministic", rejected)
+	}
+	got := baseline.Machines[key].Benchmarks[benchmark]
+	if got.AllocsPerOp != 12 || got.BytesPerOp != 120 {
+		t.Fatalf("accepted numbers not written: %d allocs/%d bytes", got.AllocsPerOp, got.BytesPerOp)
+	}
+	if got.AllocsBytesSinceSHA != "accepted-sha" {
+		t.Fatalf("accepted numbers not stamped: %q", got.AllocsBytesSinceSHA)
+	}
+}
+
+// TestDeterministicProvenanceFallsBackToProfileForNeverRatchetedRow pins the one
+// case where the profile's own capture identity IS the deterministic
+// provenance: an entry that carries no best_since stamp has never been
+// ratcheted, so seed or capture wrote every one of its numbers in the run the
+// profile records. Reading them as undated would throw away a fact the file
+// states, and hand the bar back to the fleet-wide minimum the newest-row rule
+// exists to replace.
+func TestDeterministicProvenanceFallsBackToProfileForNeverRatchetedRow(t *testing.T) {
+	const benchmark = "pkg.BenchmarkSeeded"
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{
+		// Never ratcheted: no best_since, no deterministic stamp.
+		"a": {
+			CapturedAt: "2026-09-07T05:34:02Z", CapturedAtSHA: "477a5d36e25f",
+			Benchmarks: map[string]BenchmarkEntry{benchmark: {AllocsPerOp: 13995, BytesPerOp: 1016128}},
+		},
+		// An older tier whose lower numbers describe superseded code.
+		"b": {
+			CapturedAt: "2026-08-11T16:10:14Z", CapturedAtSHA: "f3ca5f9be1da",
+			Benchmarks: map[string]BenchmarkEntry{benchmark: {AllocsPerOp: 7041, BytesPerOp: 743356}},
+		},
+	}}
+	bar := machineIndependentBar(baseline)[benchmark]
+	if bar.AllocsPerOp != 13995 || bar.BytesPerOp != 1016128 {
+		t.Fatalf("bar = %d allocs/%d bytes, want the newest profile's 13995/1016128",
+			bar.AllocsPerOp, bar.BytesPerOp)
+	}
+	if bar.BestSinceSHA != "477a5d36e25f" {
+		t.Fatalf("bar provenance = %q, want 477a5d36e25f", bar.BestSinceSHA)
+	}
+}
+
+// TestForceRebaselineRecordsProvenanceOfKeptValues pins that a kept
+// deterministic value keeps its provenance in a form the next reader can still
+// see. The stored row's date may be implicit in the profile it sat in; a forced
+// write stamps the profile with this run, so the date has to be written onto
+// the entry or it is lost.
+func TestForceRebaselineRecordsProvenanceOfKeptValues(t *testing.T) {
+	const benchmark = "pkg.BenchmarkKeptProvenance"
+	machine := Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M3", GoVersion: "go1.26.5"}
+	key := perfdata.MachineKey(machine)
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{key: {
+		CapturedAt: "2026-08-01T00:00:00Z", CapturedAtSHA: "seedsha",
+		Machine: machine,
+		// Never ratcheted: its numbers are the profile's own capture.
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {NSPerOp: 100, AllocsPerOp: 10, BytesPerOp: 100}},
+	}}}
+	current := MachineBaseline{
+		CapturedAt: "2026-09-18T17:13:27Z", CapturedAtSHA: "newsha",
+		Machine:    machine,
+		Benchmarks: map[string]BenchmarkEntry{benchmark: {NSPerOp: 90, AllocsPerOp: 12, BytesPerOp: 150}},
+	}
+	if rejected := forceRebaseline(&baseline, key, current, false); len(rejected) != 2 {
+		t.Fatalf("rejected = %+v, want the allocs and bytes regressions", rejected)
+	}
+	got := baseline.Machines[key].Benchmarks[benchmark]
+	if got.AllocsPerOp != 10 || got.BytesPerOp != 100 {
+		t.Fatalf("kept values = %d allocs/%d bytes, want 10/100", got.AllocsPerOp, got.BytesPerOp)
+	}
+	if got.AllocsBytesSinceSHA != "seedsha" || got.AllocsBytesSinceAt != "2026-08-01T00:00:00Z" {
+		t.Fatalf("kept provenance = %q/%q, want seedsha/2026-08-01T00:00:00Z",
+			got.AllocsBytesSinceSHA, got.AllocsBytesSinceAt)
 	}
 }

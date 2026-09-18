@@ -162,8 +162,9 @@ The command:
 `captured_at_sha` names the newest *surviving* snapshot in the window, which is
 the identity of the profile rather than the sole source of its numbers. The seed
 log prints the window size and how many snapshots contributed. Every seeded
-entry is stamped with that same identity as its `best_since_sha` /
-`best_since_at`: a deterministic floor with no commit attached is one the
+entry is stamped with that same identity, as its `best_since_sha` /
+`best_since_at` and as its `allocs_bytes_since_sha` / `allocs_bytes_since_at`:
+a deterministic floor with no commit attached is one the
 [deterministic gate](#the-deterministic-gate-allocsop-bytesop) cannot place in
 time, and a tier that later stops reporting would leave an unattributable row
 behind.
@@ -252,7 +253,11 @@ into a second `.jsonl` and aggregating both.
       "ns_per_op": 45590.0,
       "allocs_per_op": 720,
       "bytes_per_op": 41200,
-      "ratio_to_anchor": 41862.4
+      "ratio_to_anchor": 41862.4,
+      "best_since_sha": "<short-sha>",
+      "best_since_at": "2026-09-07T05:34:02Z",
+      "allocs_bytes_since_sha": "<short-sha>",
+      "allocs_bytes_since_at": "2026-09-07T05:34:02Z"
     }
   }
 }
@@ -262,6 +267,17 @@ into a second `.jsonl` and aggregating both.
   drift checks. Comparisons across machines should ignore them.
 - `ratio_to_anchor` = `ns_per_op / anchor.ns_per_op`. This is what the
   `check` mode actually compares.
+- `best_since_sha` / `best_since_at` date the entry as a whole: the run that
+  last moved **any** of its metrics toward better. They are what the timing
+  report's "best since" column names.
+- `allocs_bytes_since_sha` / `allocs_bytes_since_at` date the **deterministic
+  pair** (`allocs_per_op`, `bytes_per_op`) alone — the run that last lowered one
+  of the two, and so the run that measured what is stored. They exist because
+  `best_since_*` also moves on a timing-only win, which would date a pinned
+  allocation floor to a commit that never measured it; the
+  [deterministic gate](#the-deterministic-gate-allocsop-bytesop) selects its
+  reference by this stamp, falling back to the profile's capture identity only
+  for a row that was never ratcheted (see that section for the two cases).
 
 ## How the check works
 
@@ -302,12 +318,36 @@ least.
 
 So for each benchmark the reference is **the entry with the newest provenance
 among the profiles that carry it** — the most recent commit anyone measured it
-at — with ties broken by the minimum, so the bar still ratchets across rows
-measured at the same commit. Provenance is the entry's `best_since_sha` /
-`best_since_at` when it has one, else the profile's `captured_at_sha` /
-`captured_at`; an entry with neither sorts oldest and is the reference only when
-nothing better exists. The reported regression line names the commit the
-reference came from, so a surprising bar can be traced to the run that set it.
+at — with rows from the **same commit** reduced to their minimum, so the bar
+still ratchets across repeated measurements of one code state.
+
+Provenance here is the entry's `allocs_bytes_since_sha` / `allocs_bytes_since_at`
+when it has one. A row predating that field is read in one of two ways:
+
+- **No `best_since_*` either** — the entry has never been ratcheted, so seed or
+  capture wrote every one of its numbers in the run the profile records. The
+  profile's `captured_at_sha` / `captured_at` is then their exact provenance and
+  is used.
+- **`best_since_*` set, deterministic stamp absent** — the entry HAS been
+  ratcheted, and `best_since_*` moves whenever any metric improves, timing
+  included, so on a row whose allocs/bytes were pinned from an older run it
+  names a commit that never measured them. The profile's `captured_at` is no
+  better: it dates the run that wrote the file, not the run that set a bar the
+  ratchet carried forward. Such a row has **unknown** deterministic provenance:
+  it sorts oldest, ties with the other undated rows at their minimum, and is
+  displaced by any row that can name its commit.
+
+The reported regression line names the commit the reference came from (`—` when
+unknown), so a surprising bar can be traced to the run that set it.
+
+Same-commit is decided by the SHA, not by the clock. Two machines run one commit
+whenever their queues allow, so equal timestamps neither identify a shared code
+state nor are needed to; conversely two different commits that happen to be
+stamped in the same second are ranked rather than mixed, since a bar assembled
+from two commits describes code that never existed. The timestamp orders rows
+across commits (a SHA cannot be ordered without the repository, and baselines are
+read on machines that lack the history), and breaks a remaining tie by SHA so the
+selection does not depend on map order.
 
 ## Running the check on a PR (the `perf` label)
 
@@ -419,16 +459,35 @@ run.
 
 ### `-force`
 
-`go run ./cmd/bench-ratchet -force update` bypasses the ratchet and
-writes current numbers as-is, including any regressions. It replaces the measured
-entries in the current machine's profile, stamped with this run's commit, and
-writes no other profile: the accepted allocation/byte metrics reach the
+`go run ./cmd/bench-ratchet -force update` bypasses the ratchet for the current
+machine's **timing**: it writes this run's `ns_per_op` / `ratio_to_anchor` as-is,
+regressions included, stamped with this run's commit, and writes no other
+profile. Unmeasured entries are retained, so a fast-gate rebaseline cannot erase
+full-profile history.
+
+`allocs/op` and `bytes/op` are not part of that bargain. Timing is a property of
+the host, so a machine may re-declare its own; the deterministic pair is a
+property of the code at a commit and every profile is gated against it, so a
+local recapture that allocates more is a regression everywhere rather than a
+number this host gets to reset. A forced update therefore keeps any stored
+deterministic value it measured worse, along with its
+`allocs_bytes_since_*` stamp, and prints what it declined:
+
+```
+  NOT ACCEPTED (deterministic regression; stored bar kept — re-run with -accept-deterministic to record it):
+    ! pkg/ir.BenchmarkIRCompile [bytecode]   bytes/op  kept 4941030 (since 477a5d36e25f), measured 5232922
+```
+
+An improvement needs no ceremony: it is lower, so it ratchets and takes this
+run's stamp. To record a regression deliberately, add
+`-accept-deterministic`, which writes the measured pair and dates it to this run.
+Accepted values reach the
 [deterministic gate](#the-deterministic-gate-allocsop-bytesop) by being the
-newest measurement of them, so no other tier has to be told. Copying them into
+newest measurement of them, so no other tier has to be told; copying them into
 the other profiles would record one machine's local capture as those tiers'
-stored floor under a commit they never ran. Unmeasured entries
-are retained, so a fast-gate rebaseline cannot erase full-profile history. Use
-only when:
+stored floor under a commit they never ran.
+
+Use only when:
 
 - A regression has been investigated, discussed, and accepted as
   the new floor (rare; should have a paper trail in the commit).
@@ -440,6 +499,9 @@ What NOT to do:
 - Don't `-force` to silence a regression you can't explain. The
   whole point of the system is to surface regressions; force-updating
   defeats it. Investigate first.
+- Don't reach for `-accept-deterministic` to clear the "NOT ACCEPTED" lines. An
+  allocation regression the gate reports on every machine needs the paper trail,
+  not the flag.
 - Don't bundle a baseline update with the change being measured —
   split them so the reviewer sees which numbers moved and why.
 

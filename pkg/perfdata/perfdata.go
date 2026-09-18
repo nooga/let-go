@@ -55,13 +55,20 @@ type Anchor struct {
 
 // BenchmarkEntry is one benchmark's current summary plus optional raw samples.
 type BenchmarkEntry struct {
-	NSPerOp       float64           `json:"ns_per_op"`
-	AllocsPerOp   int64             `json:"allocs_per_op"`
-	BytesPerOp    int64             `json:"bytes_per_op"`
-	RatioToAnchor float64           `json:"ratio_to_anchor"`
-	BestSinceSHA  string            `json:"best_since_sha,omitempty"`
-	BestSinceAt   string            `json:"best_since_at,omitempty"`
-	Samples       []BenchmarkSample `json:"samples,omitempty"`
+	NSPerOp       float64 `json:"ns_per_op"`
+	AllocsPerOp   int64   `json:"allocs_per_op"`
+	BytesPerOp    int64   `json:"bytes_per_op"`
+	RatioToAnchor float64 `json:"ratio_to_anchor"`
+	BestSinceSHA  string  `json:"best_since_sha,omitempty"`
+	BestSinceAt   string  `json:"best_since_at,omitempty"`
+	// AllocsBytesSinceSHA / AllocsBytesSinceAt date the DETERMINISTIC pair
+	// (allocs/op, bytes/op) alone. BestSince* moves whenever any metric of the
+	// entry improves, timing included, so it cannot say when these two numbers
+	// were measured — and they are the ones gated across machines. Absent means
+	// the row predates the stamp: its deterministic provenance is unknown.
+	AllocsBytesSinceSHA string            `json:"allocs_bytes_since_sha,omitempty"`
+	AllocsBytesSinceAt  string            `json:"allocs_bytes_since_at,omitempty"`
+	Samples             []BenchmarkSample `json:"samples,omitempty"`
 }
 
 // BenchmarkSample is one raw benchmark measurement retained for statistics.

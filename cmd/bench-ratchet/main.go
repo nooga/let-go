@@ -178,6 +178,7 @@ func main() {
 		outPath          = flag.String("out", "", "capture .jsonl output path (default: docs/perf/.runs/<sha>-<ts>.jsonl)")
 		inPath           = flag.String("in", "", "aggregate .jsonl input path (default: most recent under docs/perf/.runs/)")
 		force            = flag.Bool("force", false, "with update: bypass the ratchet — replace current-machine timing and rebase global deterministic metrics. Use sparingly for accepted regressions.")
+		acceptDet        = flag.Bool("accept-deterministic", false, "with update -force: also write allocs/op and bytes/op the run measured WORSE than the stored bar. Without it a forced rebaseline moves timing only, since allocs/bytes are a property of the code rather than of this host and every profile is gated against them.")
 		shaOverride      = flag.String("sha", "", "override the SHA recorded for this run (default: git rev-parse HEAD of cwd). Use when aggregating a capture from a worktree that differs from cwd.")
 		tags             = flag.String("tags", defaultTags, "go test -tags. Default 'gogen_ir' so the lowered-to-Go VM is compiled into the test binary alongside the bytecode VM. Has no effect on releases that pre-date the lowered-Go work (the build tag matches no files there).")
 		format           = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
@@ -274,7 +275,7 @@ func main() {
 		if mode == "snapshot" {
 			writeSnapshot(*baselinePath, current)
 		} else {
-			writeOrCheck(*baselinePath, current, "update", *budget, *force, *format, nil)
+			writeOrCheck(*baselinePath, current, "update", *budget, *force, *acceptDet, *format, nil)
 		}
 		return
 	}
@@ -375,7 +376,7 @@ func main() {
 	if mode == "snapshot" {
 		writeSnapshot(*baselinePath, current)
 	} else {
-		writeOrCheck(*baselinePath, current, mode, effBudget, *force, *format, jobs)
+		writeOrCheck(*baselinePath, current, mode, effBudget, *force, *acceptDet, *format, jobs)
 	}
 }
 
@@ -401,7 +402,7 @@ func writeSnapshot(path string, current MachineBaseline) {
 // scope of THIS run (nil when aggregating from a pre-recorded .jsonl, where
 // the scope is unknown); check reporting uses it to suppress out-of-scope
 // baseline entries instead of listing them as MISSING.
-func writeOrCheck(baselinePath string, current MachineBaseline, mode string, budget float64, force bool, format string, jobs []captureJob) {
+func writeOrCheck(baselinePath string, current MachineBaseline, mode string, budget float64, force, acceptDeterministic bool, format string, jobs []captureJob) {
 	switch mode {
 	case "show":
 		switch format {
@@ -431,8 +432,8 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 		prof, ok := existing.Machines[key]
 		switch {
 		case force:
-			fmt.Printf("  -force: writing current %s numbers as the new bar, bypassing ratchet.\n", key)
-			forceRebaseline(&existing, key, current)
+			fmt.Printf("  -force: writing current %s timing as the new bar, bypassing ratchet.\n", key)
+			printDeterministicRejections(forceRebaseline(&existing, key, current, acceptDeterministic))
 		case !ok:
 			fmt.Printf("  new machine profile %s — seeding its baseline.\n", key)
 			stampAll(&current)
@@ -476,28 +477,107 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 	}
 }
 
-// forceRebaseline replaces every measured metric in the current machine's
-// profile with the accepted numbers, stamped with this run's commit. Entries the
-// run did not measure are retained: a fast-gate rebaseline must not erase the
-// full-profile benchmark history.
+// forceRebaseline replaces this machine's TIMING numbers with the accepted
+// ones, stamped with this run's commit. Entries the run did not measure are
+// retained: a fast-gate rebaseline must not erase the full-profile benchmark
+// history.
 //
-// It writes only this profile. The accepted deterministic metrics become the
-// gate's reference by being the newest measurement of them, which
-// machineIndependentBar selects on its own — so no other profile needs to be
-// told. Copying them into the other profiles would record one machine's local
-// capture as every other tier's stored floor under this run's commit, which is
-// both untrue of those tiers and outside the window discipline their numbers are
-// otherwise held to.
-func forceRebaseline(existing *Baseline, key string, current MachineBaseline) {
+// Timing is where -force belongs. ns/op and ratio_to_anchor are properties of
+// the host, so a machine may legitimately re-declare its own; allocs/op and
+// bytes/op are properties of the code at a commit, and every profile is gated
+// against them, so a local recapture that allocates more is a regression on
+// every machine rather than a number this one gets to reset. Such values are
+// kept with their provenance and returned as rejections for the caller to
+// report; acceptDeterministic (-accept-deterministic) is the deliberate
+// override for a regression that has been justified on its own terms. An
+// improvement needs no override — it ratchets, as anywhere else.
+//
+// It writes only this profile. Accepted deterministic metrics reach the gate by
+// being the newest measurement of them, which machineIndependentBar selects on
+// its own — so no other profile needs to be told. Copying them into the other
+// profiles would record one machine's local capture as every other tier's
+// stored floor under this run's commit, which is both untrue of those tiers and
+// outside the window discipline their numbers are otherwise held to.
+func forceRebaseline(existing *Baseline, key string, current MachineBaseline, acceptDeterministic bool) []deterministicRejection {
 	stampAll(&current)
+	var rejected []deterministicRejection
 	if previous, ok := existing.Machines[key]; ok {
 		for name, entry := range previous.Benchmarks {
-			if _, measured := current.Benchmarks[name]; !measured {
+			cur, measured := current.Benchmarks[name]
+			if !measured {
 				current.Benchmarks[name] = entry
+				continue
 			}
+			if acceptDeterministic {
+				continue
+			}
+			// The stored row's date can be implicit in the profile it sat in,
+			// and this write re-stamps the profile, so resolve it now or it is
+			// gone.
+			keptSHA, keptAt := entryProvenance(previous, entry)
+			keptAllocs := cur.AllocsPerOp > entry.AllocsPerOp
+			keptBytes := cur.BytesPerOp > entry.BytesPerOp
+			if keptAllocs {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "allocs/op",
+					Kept: entry.AllocsPerOp, Measured: cur.AllocsPerOp,
+					SinceSHA: keptSHA,
+				})
+				cur.AllocsPerOp = entry.AllocsPerOp
+			}
+			if keptBytes {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "bytes/op",
+					Kept: entry.BytesPerOp, Measured: cur.BytesPerOp,
+					SinceSHA: keptSHA,
+				})
+				cur.BytesPerOp = entry.BytesPerOp
+			}
+			// The stamp dates the pair as stored. Nothing moved means nothing was
+			// measured anew, so the old date stands; a kept value alongside a
+			// lowered one leaves the pair older than this run, so it stands then
+			// too rather than claiming a measurement this run did not make.
+			if keptAllocs || keptBytes ||
+				(cur.AllocsPerOp == entry.AllocsPerOp && cur.BytesPerOp == entry.BytesPerOp) {
+				cur.AllocsBytesSinceSHA = keptSHA
+				cur.AllocsBytesSinceAt = keptAt
+			}
+			current.Benchmarks[name] = cur
 		}
 	}
 	existing.Machines[key] = current
+	sort.Slice(rejected, func(i, j int) bool {
+		if rejected[i].Name != rejected[j].Name {
+			return rejected[i].Name < rejected[j].Name
+		}
+		return rejected[i].Metric < rejected[j].Metric
+	})
+	return rejected
+}
+
+// printDeterministicRejections reports the allocs/bytes a -force run measured
+// worse than the stored bar. They are named in full because a forced timing
+// rebaseline is precisely when an allocation regression would otherwise be
+// written to disk unannounced.
+func printDeterministicRejections(rejected []deterministicRejection) {
+	if len(rejected) == 0 {
+		return
+	}
+	fmt.Printf("\n  NOT ACCEPTED (deterministic regression; stored bar kept — re-run with -accept-deterministic to record it):\n")
+	for _, r := range rejected {
+		fmt.Printf("    ! %-60s %-9s kept %d (since %s), measured %d\n",
+			short(r.Name, 60), r.Metric, r.Kept, shortSHA(r.SinceSHA), r.Measured)
+	}
+}
+
+// deterministicRejection is one allocs/bytes value a -force run measured worse
+// than the stored bar and therefore did not write.
+type deterministicRejection struct {
+	Name     string
+	Metric   string
+	Kept     int64
+	Measured int64
+	SinceSHA string
 }
 
 // RatchetSummary describes what ratchetMerge changed. Each named bench
@@ -541,6 +621,8 @@ func ratchetMerge(existing, current MachineBaseline) (MachineBaseline, RatchetSu
 		if !ok {
 			cur.BestSinceSHA = current.CapturedAtSHA
 			cur.BestSinceAt = current.CapturedAt
+			cur.AllocsBytesSinceSHA = current.CapturedAtSHA
+			cur.AllocsBytesSinceAt = current.CapturedAt
 			out.Benchmarks[name] = cur
 			summary.NewBench = append(summary.NewBench, SummaryEntry{Name: name, NSPerOp: cur.NSPerOp})
 			continue
@@ -550,6 +632,16 @@ func ratchetMerge(existing, current MachineBaseline) (MachineBaseline, RatchetSu
 			AllocsPerOp:   minI(cur.AllocsPerOp, base.AllocsPerOp),
 			BytesPerOp:    minI(cur.BytesPerOp, base.BytesPerOp),
 			RatioToAnchor: minF(cur.RatioToAnchor, base.RatioToAnchor),
+		}
+		// The deterministic pair carries its own stamp, moved only by a run that
+		// actually lowers one of the two. Sharing the timing stamp would date
+		// untouched allocs/bytes to a commit that only ran faster.
+		if merged.AllocsPerOp != base.AllocsPerOp || merged.BytesPerOp != base.BytesPerOp {
+			merged.AllocsBytesSinceSHA = current.CapturedAtSHA
+			merged.AllocsBytesSinceAt = current.CapturedAt
+		} else {
+			merged.AllocsBytesSinceSHA = base.AllocsBytesSinceSHA
+			merged.AllocsBytesSinceAt = base.AllocsBytesSinceAt
 		}
 		tightened := merged.RatioToAnchor < base.RatioToAnchor ||
 			merged.AllocsPerOp < base.AllocsPerOp ||
@@ -629,6 +721,8 @@ func stampAll(b *MachineBaseline) {
 	for name, e := range b.Benchmarks {
 		e.BestSinceSHA = b.CapturedAtSHA
 		e.BestSinceAt = b.CapturedAt
+		e.AllocsBytesSinceSHA = b.CapturedAtSHA
+		e.AllocsBytesSinceAt = b.CapturedAt
 		b.Benchmarks[name] = e
 	}
 }
@@ -1415,19 +1509,29 @@ func canonicalizeBenchmarks(bm map[string]BenchmarkEntry) map[string]BenchmarkEn
 	return out
 }
 
-// entryProvenance returns the commit identity and time the deterministic
-// metrics of one entry were measured at: the entry's own best_since stamp when
-// it has one, else the profile's capture identity.
+// entryProvenance returns the commit identity and time one entry's
+// DETERMINISTIC metrics were measured at, in three cases:
 //
-// The entry stamp is the more precise of the two — within a profile,
-// ratchetMerge keeps entries whose bar was set at an older commit alongside
-// freshly measured ones, so the profile's captured_at describes the run, not
-// necessarily this number.
+//  1. allocs_bytes_since_* when set — the run that recorded these two numbers.
+//  2. otherwise, for an entry with no best_since_* either: the profile's
+//     captured_at_sha / captured_at. No best_since means the entry has never
+//     been ratcheted, so seed or capture wrote every one of its numbers in the
+//     run the profile records, and that run IS their provenance.
+//  3. otherwise UNKNOWN, which sorts oldest.
+//
+// Case 3 is the one best_since cannot answer: it moves whenever ANY metric of
+// the entry improves, so on a ratcheted row it may date a timing win while the
+// allocs/bytes were pinned from an older run. The profile's captured_at is no
+// better there — it dates the run that wrote the file, not the run that set a
+// bar the ratchet has carried forward.
 func entryProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
-	if e.BestSinceAt != "" || e.BestSinceSHA != "" {
-		return e.BestSinceSHA, e.BestSinceAt
+	if e.AllocsBytesSinceSHA != "" || e.AllocsBytesSinceAt != "" {
+		return e.AllocsBytesSinceSHA, e.AllocsBytesSinceAt
 	}
-	return prof.CapturedAtSHA, prof.CapturedAt
+	if e.BestSinceSHA == "" && e.BestSinceAt == "" {
+		return prof.CapturedAtSHA, prof.CapturedAt
+	}
+	return "", ""
 }
 
 // machineIndependentBar collapses every machine profile into one bar of the
@@ -1450,14 +1554,29 @@ func entryProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
 // measured at the same commit. An entry with no provenance at all sorts oldest:
 // it is only the reference when nothing better exists.
 //
-// "Newest" is by the recorded timestamp, not by commit topology — a SHA alone
+// Same-commit rows are recognised by the SHA, not the clock. Two machines run
+// one commit at whatever times their queues allow, so equal timestamps neither
+// identify a shared code state nor are needed to: rows that name the same
+// commit are two measurements of one code state and reduce to their minimum,
+// while rows from different commits are ranked even when their timestamps
+// collide, because mixing them would describe code that never existed.
+//
+// Ranking is by the recorded timestamp, not by commit topology — a SHA alone
 // cannot be ordered without the repository, and a baseline is read on machines
 // that may not have the history. Every timestamp this tool writes is
-// time.RFC3339 in UTC, so a string compare orders them.
+// time.RFC3339 in UTC, so a string compare orders them; the SHA breaks a
+// remaining timestamp tie so the choice does not depend on map order.
 func machineIndependentBar(b Baseline) map[string]BenchmarkEntry {
 	type barEntry struct {
 		entry BenchmarkEntry
+		sha   string
 		at    string
+	}
+	newer := func(cand, cur barEntry) bool {
+		if cand.at != cur.at {
+			return cand.at > cur.at
+		}
+		return cand.sha > cur.sha
 	}
 	best := map[string]barEntry{}
 	for _, key := range profileKeys(b) {
@@ -1471,18 +1590,19 @@ func machineIndependentBar(b Baseline) map[string]BenchmarkEntry {
 					BestSinceSHA: sha,
 					BestSinceAt:  at,
 				},
-				at: at,
+				sha: sha,
+				at:  at,
 			}
 			cur, ok := best[name]
 			switch {
-			case !ok || cand.at > cur.at:
+			case !ok:
 				best[name] = cand
-			case cand.at == cur.at:
-				// Same commit: two measurements of one code state, so the
-				// tightest is the honest floor.
+			case cand.sha == cur.sha:
 				cur.entry.AllocsPerOp = minI(cur.entry.AllocsPerOp, cand.entry.AllocsPerOp)
 				cur.entry.BytesPerOp = minI(cur.entry.BytesPerOp, cand.entry.BytesPerOp)
 				best[name] = cur
+			case newer(cand, cur):
+				best[name] = cand
 			}
 		}
 	}
