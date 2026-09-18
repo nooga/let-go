@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-21
+last-verified: 2026-09-18
 human-verified: 2026-08-11
 ---
 
@@ -58,6 +58,8 @@ See [Custom data readers](custom-data-readers.md).
 - Base integer `+`/`-`/`*`/`inc`/`dec` throw on overflow; use `+'`/`-'`/`*'`/`inc'`/`dec'` for BigInt-promoting exact math
 - Regex is Go flavor (`re2`), not Java regex
 - `letfn` uses atoms internally for forward references
+- `Thread/currentThread` is the current scope: `.isInterrupted` reads scope cancellation and `.interrupt` cancels the scope (bounded inside `with-scope`; at the root it cancels the whole program's tracked work). `Thread.` itself is not supported
+- `format` is Go `fmt` underneath; Java's `%n` is honored as `\n`
 
 ## Compiler compatibility vars
 
