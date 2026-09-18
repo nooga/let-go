@@ -103,6 +103,8 @@
     (is (nil? (let [[a & more] nil] more)))
     (is (nil? (let [[a & more] (list 1)] more)))
     (is (nil? (loop [[x & xs] [1 2]] (if x (recur xs) xs)))))
+  (testing "the expansion is hygienic: a local named seq does not capture it"
+    (is (= '(2) (let [[seq & more] [1 2]] more))))
   (testing "an if-let over a rest binding terminates"
     ;; A regression here loops forever; the timeout turns that into a
     ;; failure instead of a hung suite.
