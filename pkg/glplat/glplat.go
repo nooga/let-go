@@ -1,7 +1,17 @@
 /*
- * glplat — minimal OpenGL platform for let-go spike
+ * glplat — minimal GL platform layer for let-go.
  *
- * Pure Go public API; native GLFW/OpenGL backend in internal/native.
+ * Pure Go public API; backends live under internal/ behind build tags:
+ * -tags glplat for GLFW/OpenGL, -tags glplat_ebiten for Ebitengine, and
+ * -tags glplat_fonts for the headless font primitives. Without a backend tag
+ * every operation returns a "no backend registered" error.
+ *
+ * Provisional as of 2026-09-18. The package landed ahead of the seam decision
+ * in docs/design/glplat-backend-contract.md: the registry stays under
+ * internal/, the glplat namespace is experimental, and the planned follow-up
+ * is the rt.Display / *display* binding described there, which may rename
+ * natives and change Init's window-shaped signature. Nothing here is a
+ * compatibility promise yet.
  */
 
 package glplat

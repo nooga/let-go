@@ -1,6 +1,6 @@
 ---
 status: planning
-last-verified: 2026-09-13
+last-verified: 2026-09-18
 authoritative-for:
   - glplat-backend-contract
   - glplat-host-capability-seam
@@ -9,8 +9,10 @@ human-verified:
 
 # glplat backend contract and host-capability seam
 
-**Status:** planning. Nothing here is implemented; this is the agreement that
-nooga/let-go#392 and nooga/let-go#744 are blocked on.
+**Status:** planning, with a provisional landing agreed on 2026-09-18 (§5).
+nooga/let-go#744 lands with the registry under `internal/` and the `glplat`
+namespace marked experimental; the §2 seam and the behavior-changing rules
+move to nooga/let-go#392's re-scope.
 
 **Decision requested:** adopt §2 (bind the backend as a host capability at a
 dynamic var, retire the package-level registry) and §3 (the backend-independent
@@ -222,3 +224,30 @@ If both carry, the implementation order is contract-visible behavior first
 (C10 and C13, with their consumer changes), then the seam, then rebasing the
 two backend PRs onto it. The remaining safety findings on #392 are unaffected
 by this decision and can proceed in parallel.
+
+### 5.1 Decision record, 2026-09-18
+
+Answers collected on nooga/let-go#744.
+
+- **nooga:** land #744 with the registry provisional and document it (yes);
+  the `rt.Display` migration goes in #392's re-scope (agreed); no preference
+  on C1–C15; release notes call the namespace experimental (agreed).
+- **nnunley:** the larger design is a scene graph at the top, a renderer in
+  the middle, and a surface at the bottom where frames land. 3D is a renderer
+  choice, not a kind of surface. The §2 seam holds as long as a display does
+  not imply a window and a GL context; if C1–C15 encode that assumption, that
+  is the one amendment wanted.
+- **Check against that condition:** no rule assumes a GL context (C4 chose
+  painter's order so a backend without one qualifies; C15 makes thread
+  ownership a backend property; the Ebitengine backend is the existence
+  proof). No rule assumes a window either; C6 and C7 use "window" only as the
+  name for the presentation target's logical size. The assumption lives in
+  the interface: `Init(width, height, title)` takes a window title, and
+  `PollEventsWindow`, `WindowSize`, and `ShouldClose` are named for one.
+  C1–C5 assume a triangle-submitting renderer, which is the middle layer of
+  the model above with presentation bundled in.
+- **Outcome:** C1–C15 stand as written. The re-scope in #392 carries the §2
+  seam with one amendment: the presentation target may be a bound
+  `*surface*` rather than the backend's own window, and `Init`'s title and
+  the `Window*` names generalise with it. C3, C4, and C10 are implemented
+  there as well.
