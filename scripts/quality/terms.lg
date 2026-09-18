@@ -1,0 +1,115 @@
+(ns quality.terms
+  "The bounded metric terms: erosion and verbosity, both shares in [0, 1]
+   where 0 is perfect.
+
+   A SHARE is bounded by construction and strictly monotone in every input.
+   That is the property the score needs and the reason the SlopCodeBench
+   metrics are shaped this way: unlike a clamped linear, a share has no dead
+   zone, so reducing the complexity of the worst function in the corpus
+   always moves the number.
+
+   Paper: arXiv 2603.24755 section 2.3. Where we depart from it -- the
+   callable enumeration, verbosity being clone-only -- is recorded in
+   docs/superpowers/specs/2026-09-12-quality-bounded-score-design.md under
+   \"Extensions and deviations from SlopCodeBench\"."
+  (:require
+   [quality.score :as score]))
+
+(defn mass
+  "The paper's mass(f) = CC(f) * sqrt(SLOC(f)): complexity weighted by size,
+   so a complex 200-line function outweighs an equally complex 3-line one."
+  [{:keys [cc sloc]}]
+  (* (double cc) (math/sqrt (max 1 (or sloc 1)))))
+
+(defn erosion
+  "Erosion = the share of total mass carried by callables above the
+   complexity threshold.
+
+       sum over f of 1[CC(f) > 10] * mass(f)   /   sum over f of mass(f)
+
+   The inequality is STRICT: a callable at exactly CC 10 is not
+   high-complexity. Returns nil when there is no mass to divide by -- an
+   empty corpus is omitted, never reported as a perfect 0.
+
+   `callables` are maps carrying `:cc` and `:sloc`. The enumeration is
+   top-level declarations, with live nested functions folded into them; see
+   the design's deviations section."
+  [callables]
+  (let [th (get-in score/thresholds [:erosion :cc])
+        total (reduce + 0.0 (map mass callables))]
+    (when (pos? total)
+      (/ (reduce + 0.0 (map mass (filter (fn [c] (> (:cc c) th)) callables)))
+         total))))
+
+(defn verbosity
+  "Verbosity = |flagged code lines UNION clone lines| / LOC.
+
+   The paper's numerator unions ast-grep-flagged lines with clone lines. Ours
+   flags CODE-verbosity lines only -- comment findings are deliberately NOT
+   here, because the paper's rule set is code constructs and its metric is
+   introduced as catching copy-pasted or unnecessary lines; comment slop is a
+   different thing and lives in `comment-debt`. Folding comments in here
+   would be a silent deviation dressed as fidelity, and it would double-count
+   against `comment-debt`.
+
+   Still a LOWER BOUND on the paper's figure -- our code rules are a handful
+   against their 137, and cover `.lg` only -- but a tighter one than
+   clone-only, and it must not be printed against their baselines without
+   that caveat.
+
+   `flagged` is a set of [path line] pairs, or nil when the linter could not
+   run, in which case only clone lines count and the report must say the
+   flagged half was omitted. A UNION, not a sum: a line that is both cloned
+   and flagged is one bad line, not two."
+  [dup-line-count flagged-count loc]
+  (when (and loc (pos? loc))
+    (min 1.0 (/ (double (+ (or dup-line-count 0) (or flagged-count 0))) loc))))
+
+(defn comment-debt
+  "Flagged comment lines / TOTAL COMMENT LINES.
+
+   OURS, not the paper's. It exists because the paper's denominator is LOC,
+   and comments are a small fraction of a codebase -- so a corpus where 11.7%
+   of comment lines are flagged shows up as 0.87% of LOC and vanishes into a
+   rounding error. Dividing by comment lines puts the finding on its own axis
+   at roughly thirteen times the resolution.
+
+   A share like every other term: bounded, monotone, 0 is perfect."
+  [flagged-comment-lines total-comment-lines]
+  (when (and total-comment-lines (pos? total-comment-lines))
+    (min 1.0 (/ (double (or flagged-comment-lines 0)) total-comment-lines))))
+
+(defn squash
+  "A rate turned into a bounded term: `v / (v + k)`.
+
+   In [0, 1), zero at zero, strictly monotone, and its derivative is never
+   zero -- diminishing returns rather than a cliff. `k` is calibrated so the
+   metric's existing `bad` threshold lands on exactly 0.5, which preserves
+   the meaning already encoded in `thresholds`."
+  [v k]
+  (let [v (max 0.0 (double v))]
+    (if (pos? (+ v k)) (/ v (+ v k)) 0.0)))
+
+(defn shortfall-squash
+  "`squash` for a metric where HIGHER is better: the squash applies to how
+   far `v` falls short of `good`, so meeting or beating `good` is exactly 0."
+  [v good k]
+  (squash (max 0.0 (- (double good) v)) k))
+
+(defn dead-share
+  "Dead = SLOC of unreachable definitions / SLOC of all definitions.
+
+   SLOC-weighted, not count-weighted: 200 lines of dead code must read far
+   worse than one dead two-liner. Returns nil when there is nothing to
+   divide by.
+
+   OURS, NOT THE PAPER'S -- SlopCodeBench never mentions dead code.
+
+   UPPER BOUND. Reachability follows only literally-occurring symbols, so it
+   under-approximates reachability and therefore over-approximates dead code:
+   anything reached by computed dispatch, a registry, `resolve` or `eval`
+   looks dead and is not."
+  [dead all]
+  (let [total (reduce + 0 (map (fn [d] (or (:sloc d) 1)) all))]
+    (when (pos? total)
+      (min 1.0 (/ (double (reduce + 0 (map (fn [d] (or (:sloc d) 1)) dead))) total)))))

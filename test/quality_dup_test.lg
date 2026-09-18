@@ -1,0 +1,254 @@
+(ns test.quality-dup-test
+  (:require
+   [clojure.string :as str]
+   [quality.dup :as dup]
+   [quality.lex :as lex]
+   [quality.score :as score]
+   [test :refer :all]))
+
+(deftest lexer-normalizes-identifiers-and-literals
+  (is (= ["(" "defn" "ID" "[" "ID" "]" "(" "ID" "ID" "NUM" ")" ")"]
+         (map :t (lex/tokens "(defn f [x] (+ x 1))" :lg))))
+  (is (= ["func" "ID" "(" ")" "{" "return" "STR" "}"]
+         (map :t (lex/tokens "func f() { return \"s\" } // c" :go))))
+  ;; NB: the brief's literal here was [1 1 2] (3 elements) but "(a\n b)"
+  ;; tokenizes to 4 tokens ("(" "a" "b" ")") on lines 1 1 2 2 -- corrected
+  ;; after verifying by hand; see task-3-report.md.
+  (is (= [1 1 2 2] (map :line (lex/tokens "(a\n b)" :lg)))))
+
+(deftest lexer-keeps-reader-macro-punctuation-verbatim
+  ;; `#{` must not lex like a call on an identifier: `#`, `'`, and the rest
+  ;; of the reader-macro marks are punctuation, kept verbatim. `%` (the
+  ;; anonymous-fn arg placeholder) is not special-cased -- it lexes as any
+  ;; other bare symbol would, i.e. "ID".
+  (is (= ["#" "{" ":a" "}" "#" "(" "ID" "ID" ")" "'" "ID"]
+         (map :t (lex/tokens "#{:a} #(inc %) 'x" :lg)))))
+
+(deftest lexer-collapses-named-char-literals-to-one-token
+  (is (= ["(" "ID" "ID" "STR" "STR" "STR" ")"]
+         (map :t (lex/tokens "(nth s \\space \\tab \\a)" :lg)))))
+
+(defn- files [& paths]
+  (mapv (fn [p] {:path p :tokens (lex/tokens (slurp p) (if (clojure.string/ends-with? p ".go") :go :lg))}) paths))
+
+(deftest finds-renamed-duplicates-in-lg
+  (let [fs (files "fixtures/quality/dup_a.lg" "fixtures/quality/dup_b.lg")
+        ps (dup/pairs fs 25 40 50)]
+    (is (= 1 (count ps)))
+    (is (> (:similarity (first ps)) 0.8))
+    (is (= "fixtures/quality/dup_a.lg" (get-in (first ps) [:a :path])))
+    (is (pos? (get-in (first ps) [:a :start])))))
+
+(deftest finds-renamed-duplicates-in-go
+  (let [fs (files "fixtures/quality/dup_a.go" "fixtures/quality/dup_b.go")]
+    (is (= 1 (count (dup/pairs fs 25 40 50))))))
+
+(deftest distinct-code-has-no-pairs
+  (let [fs (files "fixtures/quality/forms_fixture.lg" "fixtures/quality/metrics_fixture.lg")]
+    (is (empty? (dup/pairs fs 25 40 50)))))
+
+(deftest percent-is-duplicated-lines-over-total
+  (let [fs (files "fixtures/quality/dup_a.lg" "fixtures/quality/dup_b.lg")
+        pct (dup/file-percent fs (dup/pairs fs 25 40 50))]
+    (is (< 30 (get pct "fixtures/quality/dup_a.lg") 90))))
+
+(deftest similarity-is-bounded-by-one
+  (let [src (slurp "fixtures/quality/dup_a.lg")
+        toks (lex/tokens src :lg)
+        ;; Two files with identical token streams share every k-gram
+        ;; exactly once each, so distinct-hash `shared` must equal each
+        ;; file's total k-gram count and similarity must be exactly 1.0 --
+        ;; not the cross-product blow-up a naive "shared" definition gives.
+        fs [{:path "id-a" :tokens toks} {:path "id-b" :tokens toks}]
+        cross (first (filter #(not= (get-in % [:a :path]) (get-in % [:b :path])) (dup/pairs fs 25 40 50)))]
+    (is (some? cross))
+    (is (= 1.0 (:similarity cross)))))
+
+(deftest similarity-stays-bounded-on-repetitive-input
+  ;; A highly repetitive file (many identical short forms) is the case that
+  ;; previously blew similarity past 1.0 via the cross-product bug: every
+  ;; k-gram hash has dozens of positions in both copies, so a cross product
+  ;; of positions would massively over-count `shared` relative to `nk`.
+  (let [src (apply str (repeat 60 "(def x 1)\n"))
+        toks (lex/tokens src :lg)
+        fs [{:path "rep-a" :tokens toks} {:path "rep-b" :tokens toks}]
+        cross (first (filter #(not= (get-in % [:a :path]) (get-in % [:b :path])) (dup/pairs fs 25 40 50)))]
+    (is (some? cross))
+    (is (= 1.0 (:similarity cross)))
+    (is (<= (:similarity cross) 1.0))))
+
+(deftest finds-copy-paste-duplicate-within-one-file
+  (let [fs (files "fixtures/quality/dup_self.lg")
+        ps (dup/pairs fs 25 40 50)]
+    (is (= 1 (count ps)))
+    (is (= "fixtures/quality/dup_self.lg" (get-in (first ps) [:a :path])))
+    (is (= "fixtures/quality/dup_self.lg" (get-in (first ps) [:b :path])))
+    (is (not= (get-in (first ps) [:a :start]) (get-in (first ps) [:b :start])))
+    (is (<= (:similarity (first ps)) 1.0))))
+
+(defn- one-line-file
+  "A synthetic file whose last token sits on line `n`, so `file-percent`
+   divides by `n`."
+  [path n]
+  {:path path :tokens [{:t "ID" :line n}]})
+
+(defn- pair-at [path from to]
+  {:a {:path path :start from :end to}
+   :b {:path "other.lg" :start 1 :end (inc (- to from))}
+   :shared 60 :similarity 0.5})
+
+(deftest percent-unions-overlapping-spans
+  ;; Spans 1-10, 5-20 and 30-35 over a 100-line file cover 1-20 (20 lines)
+  ;; plus 30-35 (6 lines) = 26, not 10 + 16 + 6 = 32.
+  (let [fs [(one-line-file "f.lg" 100)]
+        ps [(pair-at "f.lg" 1 10) (pair-at "f.lg" 5 20) (pair-at "f.lg" 30 35)]]
+    (is (< 25.99 (get (dup/file-percent fs ps) "f.lg") 26.01))))
+
+(deftest percent-does-not-saturate-on-many-small-partners
+  ;; 60 partners all matching the same 3 lines: summing spans gives 180 over
+  ;; 100 lines and clamps to 100%; the union is 3 lines, i.e. 3%.
+  (let [fs [(one-line-file "f.lg" 100)]
+        ps (vec (repeat 60 (pair-at "f.lg" 10 12)))]
+    (is (< 2.99 (get (dup/file-percent fs ps) "f.lg") 3.01))))
+
+(deftest reports-every-shared-region-not-only-the-largest
+  ;; dup_two_blocks_{a,b}.lg share TWO separate ~33-line blocks (an identical
+  ;; `let` cascade at the top, an identical `cond` chain at the bottom) with
+  ;; differently-shaped filler between them. Reporting only the largest region
+  ;; would hide the second block entirely.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        ps (dup/pairs fs 25 40 50)
+        [p1 p2] ps]
+    (is (= 2 (count ps)))
+    ;; Each region names its own span on BOTH sides -- aligned by the matches
+    ;; themselves, so region 1 of A points at region 1 of B, not at the file.
+    (is (= [1 35] [(get-in p1 [:a :start]) (get-in p1 [:a :end])]))
+    (is (= [1 35] [(get-in p1 [:b :start]) (get-in p1 [:b :end])]))
+    (is (= [49 79] [(get-in p2 [:a :start]) (get-in p2 [:a :end])]))
+    (is (= [49 79] [(get-in p2 [:b :start]) (get-in p2 [:b :end])]))
+    ;; ...and the two regions are disjoint on both sides.
+    (is (< (get-in p1 [:a :end]) (get-in p2 [:a :start])))
+    (is (< (get-in p1 [:b :end]) (get-in p2 [:b :start])))
+    (is (= [1.0 1.0] [(:similarity p1) (:similarity p2)]))
+    (is (every? (fn [p] (>= (:shared p) 50)) ps))))
+
+(deftest every-region-becomes-its-own-duplicate-issue
+  ;; One `duplicate` issue per region, each rendering as
+  ;; `path:start-end ... ~ other:start-end` (the report builds the left side
+  ;; from :path/:line/:end and prints :hint verbatim).
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        iss (score/issues [] {:untested []} (dup/pairs fs 25 40 50))
+        at (fn [i] (str (:path i) ":" (:line i) "-" (:end i)))]
+    (is (= 2 (count iss)))
+    (is (every? (fn [i] (= :duplicate (:kind i))) iss))
+    (is (= "fixtures/quality/dup_two_blocks_a.lg:1-35" (at (first iss))))
+    (is (= "~ fixtures/quality/dup_two_blocks_b.lg:1-35 (lines 35)" (:hint (first iss))))
+    (is (= "fixtures/quality/dup_two_blocks_a.lg:49-79" (at (second iss))))
+    (is (= "~ fixtures/quality/dup_two_blocks_b.lg:49-79 (lines 31)" (:hint (second iss))))))
+
+(deftest file-percent-unions-the-reported-regions
+  ;; The fixture's two regions cover lines 1-35 and 49-79 = 66 of its 79
+  ;; token-bearing lines = 83.54%.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        ps (dup/pairs fs 25 40 50)
+        pct (dup/file-percent fs ps)
+        ;; A third region overlapping the first (lines 10-40) adds only lines
+        ;; 36-40: the union becomes 1-40 + 49-79 = 71 of 79 = 89.87%. Summing
+        ;; spans instead would give 35 + 31 + 31 = 97 lines and clamp to 100%.
+        overlapping (conj ps {:a {:path "fixtures/quality/dup_two_blocks_a.lg" :start 10 :end 40}
+                              :b {:path "fixtures/quality/dup_two_blocks_b.lg" :start 10 :end 40}
+                              :shared 60 :similarity 0.5})
+        pct2 (dup/file-percent fs overlapping)]
+    (is (< 83.5 (get pct "fixtures/quality/dup_two_blocks_a.lg") 83.6))
+    (is (< 83.5 (get pct "fixtures/quality/dup_two_blocks_b.lg") 83.6))
+    (is (< 89.8 (get pct2 "fixtures/quality/dup_two_blocks_a.lg") 89.9))
+    (is (not= 100.0 (get pct2 "fixtures/quality/dup_two_blocks_a.lg")))))
+
+(deftest duplicated-lines-counts-token-bearing-lines-after-union
+  ;; The two shared blocks cover lines 1-35 and 49-79. `duplicated-lines`
+  ;; reports the code lines inside them -- blanks and comment-only lines in
+  ;; the span are not code -- as a raw count for the caller to divide by the
+  ;; file's own LOC.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        ps (dup/pairs fs 25 40 50)
+        covered (dup/duplicated-lines fs ps)
+        n (get covered "fixtures/quality/dup_two_blocks_a.lg")
+        span-lines (+ (- 35 1 -1) (- 79 49 -1))]
+    ;; strictly fewer than the raw span, because the spans contain comment
+    ;; and blank lines, and at most the span
+    (is (< n span-lines))
+    (is (pos? n))
+    ;; every counted line is a real code line, so it cannot exceed the file's
+    ;; token-bearing line count
+    (is (<= n (count (distinct (map :line (:tokens (first fs)))))))))
+
+(deftest duplicated-lines-does-not-double-count-overlap
+  ;; Three overlapping regions over the same file: the count is the union's
+  ;; code lines, not the sum of the three spans.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg")
+        one (fn [from to] {:a {:path "fixtures/quality/dup_two_blocks_a.lg" :start from :end to}
+                           :b {:path "other.lg" :start 1 :end 2}
+                           :shared 60 :similarity 0.5})
+        n1 (get (dup/duplicated-lines fs [(one 5 20)]) "fixtures/quality/dup_two_blocks_a.lg")
+        n3 (get (dup/duplicated-lines fs [(one 5 20) (one 8 15) (one 10 20)])
+                "fixtures/quality/dup_two_blocks_a.lg")]
+    (is (= n1 n3))))
+
+(deftest merge-spans-merges-overlapping-and-adjacent
+  (is (= [[1 20] [30 35]] (dup/merge-spans [[1 10] [5 20] [30 35]])))
+  ;; adjacent (10 then 11) merges; a one-line gap does not
+  (is (= [[1 20]] (dup/merge-spans [[1 10] [11 20]])))
+  (is (= [[1 10] [12 20]] (dup/merge-spans [[1 10] [12 20]]))))
+
+(defn- region-pair [pa sa ea pb sb eb sim]
+  {:a {:path pa :start sa :end ea} :b {:path pb :start sb :end eb}
+   :shared 60 :similarity sim})
+
+(deftest clone-classes-group-pairs-into-one-opportunity
+  ;; One block in three files is THREE pairs but ONE extraction opportunity.
+  ;; The pair view prints three lines and overstates the work.
+  (let [ps [(region-pair "a.lg" 1 30 "b.lg" 1 30 1.0)
+            (region-pair "a.lg" 1 30 "c.lg" 5 34 1.0)
+            (region-pair "b.lg" 1 30 "c.lg" 5 34 1.0)]
+        cs (dup/clone-classes ps 12)]
+    (is (= 1 (count cs)))
+    (is (= 3 (:member-count (first cs))))
+    (is (= #{"a.lg" "b.lg" "c.lg"} (set (map :path (:members (first cs))))))
+    ;; 30 lines in each of three members
+    (is (= 90 (:total-lines (first cs))))
+    (is (= 30 (:representative-lines (first cs))))))
+
+(deftest clone-classes-rank-by-total-duplicated-lines
+  ;; A five-member class of small blocks is a bigger prize than a two-member
+  ;; class of larger ones: 5x20 = 100 lines beats 2x40 = 80.
+  (let [small (for [i (range 4)]
+                (region-pair "s.lg" 1 20 (str "s" i ".lg") 1 20 1.0))
+        big [(region-pair "b1.lg" 1 40 "b2.lg" 1 40 1.0)]
+        cs (dup/clone-classes (vec (concat small big)) 12)]
+    (is (= 2 (count cs)))
+    (is (= 5 (:member-count (first cs))))
+    (is (= 100 (:total-lines (first cs))))
+    (is (= 80 (:total-lines (second cs))))))
+
+(deftest clone-classes-flag-over-merging-rather-than-hiding-it
+  ;; Transitive closure can chain unrelated regions through a shared
+  ;; intermediate. The class is still reported, but marked.
+  (let [ps (vec (for [i (range 6)]
+                  (region-pair "hub.lg" 1 10 (str "f" i ".lg") 1 10 0.4)))
+        small (dup/clone-classes ps 3)
+        roomy (dup/clone-classes ps 12)]
+    (is (:over-merged? (first small)))
+    (is (not (:over-merged? (first roomy))))
+    ;; reported either way -- flagged, never dropped
+    (is (= (:member-count (first small)) (:member-count (first roomy))))))
+
+(deftest clone-classes-are-stable-and-identified
+  (let [ps [(region-pair "a.lg" 1 30 "b.lg" 1 30 1.0)]
+        once (dup/clone-classes ps 12)
+        twice (dup/clone-classes ps 12)]
+    (is (= (:id (first once)) (:id (first twice))))
+    (is (str/starts-with? (:id (first once)) "c"))))

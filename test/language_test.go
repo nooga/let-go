@@ -47,21 +47,24 @@ func ensureHarness() {
 		// Search paths for `require`: current dir for in-tree test helpers
 		// (test/test.lg etc.), pkg/rt/gogen so tests can exercise the
 		// gogen macro layer, and the repo's scripts/ root so test files can
-		// require the tooling namespaces that live there (spec-evidence.lg
-		// and spec-evidence/*.lg). scripts/ is UNCONDITIONAL: those tests
+		// require the tooling namespaces that live there (spec-evidence.lg,
+		// spec-evidence/*.lg, quality.*). scripts/ is UNCONDITIONAL: those tests
 		// are part of the default suite, and requiring an env var to make
 		// them compile meant a plain `go test ./test/` — which is what CI
 		// and the pre-push hook run — failed with "unable to load namespace
 		// spec-evidence". `go test ./test/` runs with cwd set to this
 		// package's directory (test/), one level below the repo root, so
-		// each entry is resolved relative to "..".
+		// each relative entry is resolved relative to "..".
 		nsPath := []string{".", "../pkg/rt/gogen", "../scripts"}
 		// LG_SOURCE_PATHS still adds FURTHER namespace roots on top, for
 		// one-off runs against an out-of-tree corpus. This harness runs
 		// in-process rather than shelling out to ./lg, so the resolver never
-		// otherwise reads the env var.
+		// otherwise reads the env var. An absolute entry is used as-is.
 		for _, p := range resolver.ParseSearchPaths(os.Getenv("LG_SOURCE_PATHS")) {
-			nsPath = append(nsPath, filepath.Join("..", p))
+			if !filepath.IsAbs(p) {
+				p = filepath.Join("..", p)
+			}
+			nsPath = append(nsPath, p)
 		}
 		rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, nsPath))
 
@@ -314,7 +317,10 @@ func TestRunner(t *testing.T) {
 			// native-entry/ holds AOT gate fixtures (programs with -main, not
 			// deftests) driven by TestNativeEntryASTGate; tools/ holds
 			// test-scoped generators invoked with arguments by e2e tests.
-			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" || info.Name() == "gogen" || info.Name() == "gold-aot" || info.Name() == "native-entry" || info.Name() == "tools" {
+			// fixtures/ holds inputs read by tests via slurp (and, for the
+			// quality corpus, files whose compilation order would matter);
+			// they are data, not deftests.
+			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" || info.Name() == "gogen" || info.Name() == "gold-aot" || info.Name() == "native-entry" || info.Name() == "tools" || info.Name() == "fixtures" {
 				return filepath.SkipDir
 			}
 			return nil

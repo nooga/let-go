@@ -1,0 +1,275 @@
+;; Copyright (c) 2026 Norman Nunley, Jr <nnunley@gmail.com>
+(ns quality.touched
+  "Expand Git hunk coordinates to complete source definitions. Selection and
+   unique identity pairing are separate: an untouched counterpart can still
+   be found in the full opposite-side index."
+  (:require
+   [clojure.string :as str]
+   [quality.forms :as forms]
+   [quality.lex :as lex]
+   [quality.metrics :as metrics]))
+
+(def ^:private definition-heads
+  #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
+(def ^:private callable-heads #{'defn 'defn- 'defmacro 'defmethod 'deftest})
+
+(defn- named-symbol [x]
+  (cond
+    (symbol? x) x
+    (and (seq? x) (= 'with-meta (first x)) (symbol? (second x))) (second x)
+    :else nil))
+
+(defn- next-namespace [namespace form]
+  (let [head (when (seq? form) (first form))
+        target (when (seq? form) (second form))]
+    (cond
+      (= 'ns head) (when (symbol? target) target)
+      (= 'in-ns head) (when (and (seq? target)
+                                 (= 'quote (first target))
+                                 (symbol? (second target)))
+                        (second target))
+      :else namespace)))
+
+(defn- definition-key [namespace form]
+  (when (and namespace (seq? form) (definition-heads (first form)))
+    (when-let [name (named-symbol (second form))]
+      [(str namespace) (str name) (keyword (str (first form)))
+       (when (= 'defmethod (first form)) (pr-str (nth form 2 nil)))])))
+
+(defn- source-index [text]
+  (let [segments (forms/validated-segments text)
+        token-lines (set (map :line (lex/tokens text :lg)))]
+    (loop [remaining segments namespace nil i 0 out []]
+      (if (empty? remaining)
+        out
+        (let [seg (first remaining)
+              form (forms/read-segment seg)
+              head (when (seq? form) (first form))
+              namespace (next-namespace namespace form)
+              bare-name (when (and (definition-heads head) (seq? form))
+                          (named-symbol (second form)))
+              id (definition-key namespace form)
+              qualified-name (when id (symbol (str (nth id 0) "/" (nth id 1))))
+              callable? (and bare-name (callable-heads head))]
+          (recur (rest remaining) namespace (inc i)
+                 (conj out
+                       {:index i :span {:start (:start seg) :end (:end seg)}
+                        :name (or qualified-name bare-name)
+                        :kind (when bare-name (keyword (str head)))
+                        :dispatch (when (= head 'defmethod) (pr-str (nth form 2 nil)))
+                        :key id :identity qualified-name
+                        :metrics (when callable?
+                                   {:cc (metrics/complexity form)
+                                    :sloc (metrics/definition-sloc
+                                            token-lines {:line (:start seg) :end (:end seg)})})})))))))
+
+(defn- intersects? [unit {:keys [start count]}]
+  (when (and unit start count)
+    (let [{lo :start hi :end} (:span unit)]
+      (if (zero? count)
+        (and (<= lo start) (< start hi))
+        (and (<= lo (+ start count -1)) (<= start hi))))))
+
+(defn- selected [units spans]
+  (vec (filter (fn [unit] (some #(intersects? unit %) spans)) units)))
+
+(defn- unique-match [unit opposite]
+  (when-let [key (:key unit)]
+    (let [matches (filter #(= key (:key %)) opposite)]
+      (when (= 1 (count matches)) (first matches)))))
+
+(defn- uniquely-paired? [old new old-index new-index]
+  (and old new
+       (= old (unique-match new old-index))
+       (= new (unique-match old new-index))))
+
+(defn- metric-delta [old new]
+  (when (and (:metrics old) (:metrics new))
+    {:cc (- (:cc (:metrics new)) (:cc (:metrics old)))
+     :sloc (- (:sloc (:metrics new)) (:sloc (:metrics old)))}))
+
+(defn- form-entry [change old new paired?]
+  (let [unit (or new old)
+        delta (when paired? (metric-delta old new))]
+    (cond-> {:entry-type :form :status (:status change)
+             :old-path (:old-path change) :new-path (:new-path change)
+             :old-span (:span old) :new-span (:span new)
+             :name (:name unit) :kind (:kind unit)
+             :identity (:identity unit) :dispatch (:dispatch unit)
+             :pairing (if paired? :paired :unpaired)
+             :old-metrics (:metrics old) :new-metrics (:metrics new)}
+      delta (assoc :delta delta))))
+
+(defn- line-span [{:keys [start count]}]
+  (when (and count (pos? count))
+    {:start start :end (+ start count -1)}))
+
+(defn- uncovered-spans [units {:keys [start count]}]
+  (if (and start count (pos? count))
+    (reduce (fn [out line]
+              (if (and (seq out) (= line (inc (:end (peek out)))))
+                (conj (pop out) (assoc (peek out) :end line))
+                (conj out {:start line :end line})))
+            []
+            (filter (fn [line]
+                      (not (some (fn [unit]
+                                   (let [{lo :start hi :end} (:span unit)]
+                                     (<= lo line hi))) units)))
+                    (range start (+ start count))))
+    []))
+
+(defn- outside-entries [change old-index new-index]
+  (let [old-spans (:old-spans change)
+        new-spans (:new-spans change)
+        n (max (count old-spans) (count new-spans))]
+    (vec (mapcat (fn [i]
+                   (let [old (nth old-spans i nil)
+                         new (nth new-spans i nil)
+                         old-out (uncovered-spans old-index old)
+                         new-out (uncovered-spans new-index new)
+                         neither-form? (and (not (some #(intersects? % old) old-index))
+                                            (not (some #(intersects? % new) new-index)))
+                         count-out (max (count old-out) (count new-out))]
+                     (if (pos? count-out)
+                       (map (fn [j]
+                              {:entry-type :outside-form :reason :outside-form
+                               :status (:status change)
+                               :old-path (:old-path change) :new-path (:new-path change)
+                               :old-span (nth old-out j nil)
+                               :new-span (nth new-out j nil)})
+                            (range count-out))
+                       (when neither-form?
+                         [{:entry-type :outside-form :reason :outside-form
+                           :status (:status change)
+                           :old-path (:old-path change) :new-path (:new-path change)
+                           :old-span (line-span old) :new-span (line-span new)}]))))
+                 (range n)))))
+
+(defn- file-entry [change type reason message]
+  {:entry-type type :reason reason :message message
+   :status (:status change) :old-path (:old-path change)
+   :new-path (:new-path change)})
+
+(defn- indexed-change [change old-index new-index]
+  (let [old-selected (selected old-index (:old-spans change))
+        new-selected (selected new-index (:new-spans change))
+        pairs (vec (keep (fn [old]
+                           (when-let [new (unique-match old new-index)]
+                             (when (uniquely-paired? old new old-index new-index)
+                               [old new]))) old-selected))
+        new-pairs (keep (fn [new]
+                          (when-let [old (unique-match new old-index)]
+                            (when (uniquely-paired? old new old-index new-index)
+                              [old new]))) new-selected)
+        all-pairs (vec (distinct (concat pairs new-pairs)))
+        paired-old (set (map (comp :index first) all-pairs))
+        paired-new (set (map (comp :index second) all-pairs))]
+    (vec (concat
+           (map (fn [[old new]] (form-entry change old new true)) all-pairs)
+           (map #(form-entry change % nil false)
+                (remove (fn [u] (contains? paired-old (:index u))) old-selected))
+           (map #(form-entry change nil % false)
+                (remove (fn [u] (contains? paired-new (:index u))) new-selected))
+           (outside-entries change old-index new-index)))))
+
+(defn- source-change [change]
+  (try
+    (let [old-index (if (contains? change :old-text)
+                      (source-index (:old-text change)) [])
+          new-index (if (contains? change :new-text)
+                      (source-index (:new-text change)) [])]
+      (indexed-change change old-index new-index))
+    (catch Throwable e
+      (if (= :invalid-source (:reason (ex-data e)))
+        [(file-entry change :file-fallback :invalid-source (str e))]
+        (throw e)))))
+
+(defn- source-change? [change]
+  (and (every? #(str/ends-with? % ".lg")
+               (remove nil? [(:old-path change) (:new-path change)]))
+       (or (contains? change :old-text) (contains? change :new-text))))
+
+(defn- go-source-change? [change]
+  (and (every? #(str/ends-with? % ".go")
+               (remove nil? [(:old-path change) (:new-path change)]))
+       (or (contains? change :old-text) (contains? change :new-text))))
+
+(defn- go-unit [i d]
+  {:index i :span {:start (:start d) :end (:end d)}
+   :name (:name d) :kind (:kind d)
+   :identity (str (:package d) "/" (:name d))
+   :key [(:package d) (:name d) (:kind d)]
+   :metrics (when (and (number? (:cc d)) (number? (:sloc d)))
+              {:cc (:cc d) :sloc (:sloc d)})})
+
+(defn- analyze-go-side [changes side]
+  (let [text-key (if (= side :old) :old-text :new-text)
+        selected (vec (keep-indexed (fn [i change]
+                                      (when (and (go-source-change? change)
+                                                 (contains? change text-key))
+                                        [i (get change text-key)])) changes))]
+    (if (empty? selected)
+      {}
+      (let [created (os/sh "mktemp" "-d")
+            dir (str/trim (:out created))]
+        (when (or (not (zero? (:exit created))) (str/blank? dir))
+          (throw (ex-info "cannot create Go analysis directory" {:stderr (:err created)})))
+        (try
+          (let [paths (vec (map (fn [[i text]]
+                                  (let [path (str dir "/" i ".go")]
+                                    (spit path text)
+                                    path)) selected))
+                indices (into {} (map (fn [[i path]] [path i])
+                                      (map vector (map first selected) paths)))
+                bin (os/getenv "QUALITY_GO_CALLABLES")
+                command (if (str/blank? bin)
+                          ["go" "run" "github.com/nooga/let-go/cmd/go-callables"]
+                          [bin])
+                result (try (apply os/sh (concat command paths))
+                            (catch Throwable e {:exit 1 :out "" :err (str e)}))
+                report (try (read-string (:out result)) (catch Throwable _ nil))]
+            (if (and (map? report) (vector? (:declarations report))
+                     (vector? (:errors report)))
+              (let [grouped (group-by (fn [d] (get indices (:path d))) (:declarations report))
+                    errors (group-by (fn [e] (get indices (:path e))) (:errors report))]
+                (into {} (map (fn [[i _]]
+                                [i {:units (vec (map-indexed go-unit (get grouped i [])))
+                                    :error (when-let [e (first (get errors i))] (:message e))}])
+                              selected)))
+              (into {} (map (fn [[i _]]
+                              [i {:units [] :error (str "Go analysis failed: "
+                                                     (str/trim (str (:err result))))}])
+                            selected))))
+          (finally (os/delete-tree dir)))))))
+
+(defn- go-change [change old new]
+  (let [error (or (:error old) (:error new))]
+    (if error
+      [(file-entry change :file-fallback :invalid-source error)]
+      (indexed-change change (or (:units old) []) (or (:units new) [])))))
+
+(defn- sort-key [entry]
+  [(:new-path entry) (:old-path entry)
+   (or (get-in entry [:new-span :start]) (get-in entry [:old-span :start]) 0)
+   (or (get-in entry [:old-span :start]) 0)
+   (str (:identity entry)) (str (:dispatch entry))])
+
+(defn build
+  "Expand Git change records to deterministic touched-form entries. A row
+   without parsed source text stays path-only; malformed source is an explicit
+   file fallback rather than an empty set of definitions."
+  [changes]
+  (let [changes (vec changes)
+        old-go (analyze-go-side changes :old)
+        new-go (analyze-go-side changes :new)]
+    (vec (sort-by sort-key
+                  (mapcat (fn [i change]
+                            (let [entries (cond
+                                            (source-change? change) (source-change change)
+                                            (go-source-change? change)
+                                            (go-change change (get old-go i) (get new-go i))
+                                            :else nil)]
+                              (if (seq entries)
+                                entries
+                                [(file-entry change :path-only :path-only nil)])))
+                          (range (count changes)) changes)))))
