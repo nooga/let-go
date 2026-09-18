@@ -751,7 +751,7 @@
       (destructure* o)
       (let [x (first e)]
         (cond
-          (= x '&) (recur (drop 2 e) i (conj o (second e) (list 'drop i n)))
+          (= x '&) (recur (drop 2 e) i (conj o (second e) (list 'seq (list 'drop i n))))
           (= x :as) (recur (drop 2 e) i (conj o (second e) n))
           :else (recur (next e) (inc i) (conj o x (list 'nth n i nil))))))))
 

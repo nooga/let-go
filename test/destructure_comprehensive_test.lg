@@ -82,3 +82,28 @@
       (is (= 1 a))
       (is (= 2 b))
       (is (= '(3 4 5) rest)))))
+
+;; The dependency-graph reachability loop from weavejester/dependency. It
+;; relies on the rest binding becoming nil once the worklist is exhausted;
+;; an empty-but-truthy () keeps it looping forever.
+(defn- reachable? [neighbors from to]
+  (loop [unexpanded (seq (neighbors from))
+         visited #{}]
+    (if-let [[node & more] unexpanded]
+      (cond
+        (= node to) true
+        (contains? visited node) (recur more visited)
+        :else (recur (concat more (neighbors node))
+                     (conj visited node)))
+      false)))
+
+(deftest rest-binding-is-nil-when-exhausted
+  (testing "& rest is nil, not (), when nothing remains (Clojure's nthnext)"
+    (is (nil? (let [[a & more] [1]] more)))
+    (is (nil? (let [[a & more] nil] more)))
+    (is (nil? (let [[a & more] (list 1)] more)))
+    (is (nil? (loop [[x & xs] [1 2]] (if x (recur xs) xs)))))
+  (testing "an if-let over a rest binding terminates"
+    ;; A regression here loops forever; the timeout turns that into a
+    ;; failure instead of a hung suite.
+    (is (false? (deref (future (reachable? {:b #{:a}} :b :c)) 2000 :timed-out)))))
