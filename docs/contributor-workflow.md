@@ -27,6 +27,7 @@ make generate           # regenerate every generated artifact after editing pkg/
 make check-generated    # content-based freshness check; CI's generated-artifacts job
 make smoke              # correctness + boot-budget smoke
 make ratchets           # bench-ratchet + fanout-ratchet perf gates
+lg scripts/lint.lg      # comment report; report-only, not in CI (docs/comment-lint.md)
 git submodule update --init   # once, for TestClojureTestSuite (test/clojure-test-suite)
 ```
 

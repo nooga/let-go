@@ -9,12 +9,33 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nooga/let-go/pkg/vm"
 	"github.com/zeebo/bencode"
 )
+
+type addrOnlyListener struct{ addr net.Addr }
+
+func (l *addrOnlyListener) Accept() (net.Conn, error) { return nil, net.ErrClosed }
+func (l *addrOnlyListener) Close() error              { return nil }
+func (l *addrOnlyListener) Addr() net.Addr            { return l.addr }
+
+type acceptObservedListener struct {
+	net.Listener
+	entered chan struct{}
+}
+
+func (l *acceptObservedListener) Accept() (net.Conn, error) {
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+	return l.Listener.Accept()
+}
 
 // nsFn looks up a namespace var and returns it as an Fn, following the
 // async_test.go / urlparam_test.go convention for exercising an rt namespace
@@ -361,5 +382,180 @@ func TestNetDialClosedPort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "net/dial") {
 		t.Fatalf("net/dial error missing fn prefix: %v", err)
+	}
+}
+
+// TestNetListen exercises the server half of the namespace: listen on port 0,
+// local-address reports the bound port, accept hands back a connection the
+// existing write!/read! functions understand, closing the listener wakes a
+// pending accept and leaves the accepted connection open, and the argument
+// checks reject bad hosts, ports and non-listener values.
+func TestNetListen(t *testing.T) {
+	listen := nsFn(t, "net", "listen")
+	localAddr := nsFn(t, "net", "local-address")
+	accept := nsFn(t, "net", "accept")
+	write := nsFn(t, "net", "write!")
+	read := nsFn(t, "net", "read!")
+	closeFn := nsFn(t, "net", "close!")
+
+	lV, err := listen.Invoke([]vm.Value{vm.String("127.0.0.1"), vm.Int(0)})
+	if err != nil {
+		t.Fatalf("net/listen: %v", err)
+	}
+	addrV, err := localAddr.Invoke([]vm.Value{lV})
+	if err != nil {
+		t.Fatalf("net/local-address: %v", err)
+	}
+	m, ok := addrV.(*vm.PersistentMap)
+	if !ok {
+		t.Fatalf("net/local-address returned %T, want map", addrV)
+	}
+	if host := m.ValueAt(vm.Keyword("host")); host != vm.String("127.0.0.1") {
+		t.Fatalf("net/local-address :host = %v, want 127.0.0.1", host)
+	}
+	port, ok := m.ValueAt(vm.Keyword("port")).(vm.Int)
+	if !ok || port <= 0 {
+		t.Fatalf("net/local-address :port = %v, want an OS-assigned port", m.ValueAt(vm.Keyword("port")))
+	}
+
+	type acceptResult struct {
+		v   vm.Value
+		err error
+	}
+	ch := make(chan acceptResult, 1)
+	go func() {
+		v, err := accept.Invoke([]vm.Value{lV})
+		ch <- acceptResult{v, err}
+	}()
+	client, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+	if err != nil {
+		t.Fatalf("client dial: %v", err)
+	}
+	defer client.Close()
+	var a acceptResult
+	select {
+	case a = <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("net/accept did not return after the client connected")
+	}
+	if a.err != nil {
+		t.Fatalf("net/accept: %v", a.err)
+	}
+	connV := a.v
+	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("client deadline: %v", err)
+	}
+	acceptedConn, err := unboxNetConn(connV)
+	if err != nil {
+		t.Fatalf("unbox accepted connection: %v", err)
+	}
+	if err := acceptedConn.conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("accepted connection deadline: %v", err)
+	}
+
+	// The accepted connection is the same representation dial returns, so
+	// write!/read! work on it unchanged.
+	if _, err := write.Invoke([]vm.Value{connV, vm.String("hi")}); err != nil {
+		t.Fatalf("net/write! on accepted conn: %v", err)
+	}
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(client, buf); err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	if string(buf) != "hi" {
+		t.Fatalf("client read %q, want %q", buf, "hi")
+	}
+	if _, err := client.Write([]byte("yo")); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+	got, err := read.Invoke([]vm.Value{connV, vm.Int(64)})
+	if err != nil {
+		t.Fatalf("net/read! on accepted conn: %v", err)
+	}
+	gotBytes, ok := asBytes(got)
+	if !ok || !bytes.Equal(gotBytes, []byte("yo")) {
+		t.Fatalf("net/read! on accepted conn got %v, want yo", got)
+	}
+
+	// Closing the listener wakes a blocked accept with an error, is
+	// idempotent, and leaves the accepted connection open: the caller owns
+	// accepted connections and closes them separately.
+	l, err := unboxNetListener(lV)
+	if err != nil {
+		t.Fatalf("unbox listener: %v", err)
+	}
+	acceptEntered := make(chan struct{}, 1)
+	l.listener = &acceptObservedListener{Listener: l.listener, entered: acceptEntered}
+	ch2 := make(chan acceptResult, 1)
+	go func() {
+		v, err := accept.Invoke([]vm.Value{lV})
+		ch2 <- acceptResult{v, err}
+	}()
+	select {
+	case <-acceptEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("net/accept did not enter the listener")
+	}
+	if _, err := closeFn.Invoke([]vm.Value{lV}); err != nil {
+		t.Fatalf("net/close! listener: %v", err)
+	}
+	select {
+	case r := <-ch2:
+		if r.err == nil {
+			t.Fatalf("net/accept after close! returned a connection, want an error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("net/accept did not return after the listener closed")
+	}
+	if _, err := closeFn.Invoke([]vm.Value{lV}); err != nil {
+		t.Fatalf("second net/close! on listener: %v", err)
+	}
+	if _, err := write.Invoke([]vm.Value{connV, vm.String("still")}); err != nil {
+		t.Fatalf("net/write! after listener close: %v", err)
+	}
+	buf5 := make([]byte, 5)
+	if _, err := io.ReadFull(client, buf5); err != nil || string(buf5) != "still" {
+		t.Fatalf("client read after listener close: %q, %v", buf5, err)
+	}
+	if _, err := closeFn.Invoke([]vm.Value{connV}); err != nil {
+		t.Fatalf("net/close! accepted conn: %v", err)
+	}
+
+	// Argument checks.
+	for _, bad := range []struct {
+		name string
+		args []vm.Value
+	}{
+		{"blank host", []vm.Value{vm.String(""), vm.Int(0)}},
+		{"port out of range", []vm.Value{vm.String("127.0.0.1"), vm.Int(65536)}},
+		{"wrong arity", []vm.Value{vm.String("127.0.0.1")}},
+	} {
+		if _, err := listen.Invoke(bad.args); err == nil {
+			t.Errorf("net/listen %s: want an error", bad.name)
+		}
+	}
+	if _, err := accept.Invoke([]vm.Value{vm.String("not a listener")}); err == nil {
+		t.Errorf("net/accept on a non-listener: want an error")
+	}
+	if _, err := localAddr.Invoke([]vm.Value{connV}); err == nil {
+		t.Errorf("net/local-address on a connection: want an error")
+	}
+
+	// IPv6 link-local addresses need their scope zone to remain dialable.
+	zoned := vm.NewBoxed(&netListener{listener: &addrOnlyListener{addr: &net.TCPAddr{
+		IP:   net.ParseIP("fe80::1"),
+		Port: 4321,
+		Zone: "en0",
+	}}})
+	zonedV, err := localAddr.Invoke([]vm.Value{zoned})
+	if err != nil {
+		t.Fatalf("net/local-address on scoped IPv6 listener: %v", err)
+	}
+	zonedMap := zonedV.(*vm.PersistentMap)
+	if host := zonedMap.ValueAt(vm.Keyword("host")); host != vm.String("fe80::1%en0") {
+		t.Errorf("net/local-address scoped IPv6 :host = %v, want fe80::1%%en0", host)
+	}
+	if port := zonedMap.ValueAt(vm.Keyword("port")); port != vm.Int(4321) {
+		t.Errorf("net/local-address scoped IPv6 :port = %v, want 4321", port)
 	}
 }

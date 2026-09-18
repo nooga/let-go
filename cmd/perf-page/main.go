@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -94,6 +95,9 @@ type Chart struct {
 	// e.g. "how much faster aot_native is than ir_bytecode" at each point.
 	Deltas       []ChartDelta
 	DeltaCaption string // footer caption, e.g. "Δ aot_native vs ir_bytecode"
+
+	PointR float64 // dot radius, sized to the room each snapshot gets
+	Dense  bool    // dots close enough that the ring around each one obscures its neighbours
 }
 
 type ChartXTick struct {
@@ -164,6 +168,9 @@ type PageData struct {
 	// ({date, cpu, bench, metric, value} rows) at load time — written as a
 	// separate explorer.json rather than inlined, so the HTML stays small.
 	ExplorerURL string
+	// ViewerURL links the summary to the Timeline explorer. Empty when -viewer-out
+	// was not passed, so the link is not rendered pointing at a page that is absent.
+	ViewerURL string
 }
 
 // explorerDatum is one tidy row: a single metric of one benchmark at one
@@ -314,6 +321,9 @@ func main() {
 		explorerURL    = flag.String("explorer-url", "explorer.json", "URL the page fetches the explorer data from (relative to the page = same-origin; or an absolute https URL, e.g. raw.githubusercontent of the perf-data branch)")
 		logoPath       = flag.String("logo", "meta/logo.svg", "logo SVG to embed")
 		cpuFilter      = flag.String("cpu", "", "keep only timeline snapshots whose machine cpu_model contains this substring (CI runs land on ≥2 CPU tiers whose ratio_to_anchor doesn't normalize across them, so a mixed timeline zig-zags ~2x; filtering to one tier gives a clean series). Empty = all.")
+		viewerOut      = flag.String("viewer-out", "", "also write the Timeline explorer page here (e.g. wasm/static/perf/explore/index.html). Empty = do not emit it.")
+		viewerDataOut  = flag.String("viewer-data-out", "", "path for the explorer's chart data JSON (default: timeline-charts.json next to -viewer-out)")
+		viewerDataURL  = flag.String("viewer-data-url", "timeline-charts.json", "URL the explorer fetches its chart data from, relative to that page")
 		anchorName     = flag.String("anchor", "", "historical baseline to compare against, by file stem (e.g. 'v1.8.0'); empty = newest. Lets the page swap anchors — e.g. a fresh same-machine baseline for the modern suite vs the legacy v1.8.0 (Apple M3, pre-IR) reference.")
 	)
 	flag.Parse()
@@ -336,8 +346,17 @@ func main() {
 		die("load logo: %v", err)
 	}
 
+	if *viewerOut != "" {
+		if err := writeViewer(*viewerOut, *viewerDataOut, *viewerDataURL, *outPath, timeline, logo); err != nil {
+			die("write timeline explorer: %v", err)
+		}
+	}
+
 	page := buildPage(current, reference, referenceName, timeline, logo)
 	page.ExplorerURL = *explorerURL
+	if *viewerOut != "" {
+		page.ViewerURL = relLink(*outPath, *viewerOut)
+	}
 	html, err := renderPage(page)
 	if err != nil {
 		die("render page: %v", err)
@@ -596,15 +615,41 @@ func buildPage(current, reference Baseline, referenceName string, timeline []Sna
 	summary.BenchmarkCount = len(rows)
 	summary.PackageCount = len(packageSet)
 
-	recent := append([]BenchmarkRow(nil), rows...)
+	// Parsing an empty best_since_at yields the zero time, so rows without a
+	// bar date all compare equal and drop the sort through to its name
+	// tiebreak. Skip them rather than order them alphabetically.
+	recent := make([]BenchmarkRow, 0, len(rows))
+	recentAt := make(map[string]time.Time, len(rows))
+	for _, row := range rows {
+		at, err := time.Parse(time.RFC3339, row.BestSinceAt)
+		if err != nil {
+			continue
+		}
+		recent = append(recent, row)
+		recentAt[row.FullName] = at
+	}
 	sort.Slice(recent, func(i, j int) bool {
-		ti, _ := time.Parse(time.RFC3339, recent[i].BestSinceAt)
-		tj, _ := time.Parse(time.RFC3339, recent[j].BestSinceAt)
+		ti, tj := recentAt[recent[i].FullName], recentAt[recent[j].FullName]
 		if !ti.Equal(tj) {
 			return ti.After(tj)
 		}
 		return recent[i].FullName < recent[j].FullName
 	})
+	// One date shared by every row is the same degeneracy with the field
+	// populated: nothing is more recent, so the name tiebreak decides again.
+	if len(recent) > 1 {
+		first := recentAt[recent[0].FullName]
+		same := true
+		for _, row := range recent[1:] {
+			if !recentAt[row.FullName].Equal(first) {
+				same = false
+				break
+			}
+		}
+		if same {
+			recent = nil
+		}
+	}
 	if len(recent) > 8 {
 		recent = recent[:8]
 	}
@@ -718,6 +763,7 @@ func buildCharts(timeline []Snapshot, reference Baseline, referenceName string, 
 		chart := buildChart(timeline, spec.title, spec.subtitle, unit,
 			spec.metric, spec.sample, spec.format, spec.series, refVal, refLabel, budget, spec.relative)
 		if len(chart.Series) > 0 {
+			sizeChartPoints(&chart)
 			charts = append(charts, chart)
 		}
 	}
@@ -1363,6 +1409,36 @@ func median(values []float64) float64 {
 	return (values[mid-1] + values[mid]) / 2
 }
 
+// sizeChartPoints scales the snapshot dots to the room each one has, so a long
+// timeline does not draw every dot several deep into its neighbours.
+func sizeChartPoints(chart *Chart) {
+	// x runs 46..502 inside the chart's viewBox of 0 0 520 210.
+	const plotWidth = 456.0
+	most := 0
+	for _, s := range chart.Series {
+		if len(s.Points) > most {
+			most = len(s.Points)
+		}
+	}
+	if most == 0 {
+		chart.PointR = 3.2
+		return
+	}
+	spacing := plotWidth / float64(most)
+	r := spacing * 0.45
+	if r > 3.2 {
+		r = 3.2
+	}
+	// A dot inside the 2.5-wide line is neither visible nor hoverable, and these
+	// carry the date/SHA/value tooltip, so they clear the line's half-width.
+	if r < 1.76 {
+		r = 1.76
+	}
+	chart.PointR = r
+	// Below a dot's width there is no gap left for a ring to sit in.
+	chart.Dense = spacing < 6.4
+}
+
 func barWidth(ratio, maxRatio float64) float64 {
 	if maxRatio <= 0 || ratio <= 0 {
 		return 0
@@ -1530,13 +1606,288 @@ func formatBar(value float64) string {
 	return fmt.Sprintf("%.2f", value)
 }
 
-const pageTemplate = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Title}} - let-go perf</title>
-  <style>
+// pageStyle is shared verbatim by every page this command emits, so a second
+// page inherits the design system instead of approximating it.
+// ---------------------------------------------------------------------------
+// Timeline explorer: the same timeline the charts above are baked from, handed
+// to the browser so the reader can slice it per CPU tier.
+//
+// The charts on the main page are server-rendered SVG over the whole timeline,
+// so they pool every tier (#597); re-rendering them client-side is what lets
+// the tier filter reach them.
+//
+// This emits its own payload rather than reusing explorer.json: that file
+// carries every metric for every benchmark because the explorer needs it,
+// while a chart needs one metric across a handful of series. On the
+// 2026-09-13 timeline that is 29 MB against ~270 KB.
+
+// viewerSeries is one plotted line: every point across every CPU tier, with the
+// tier on each point so the browser can filter without a second request.
+type viewerSeries struct {
+	Label  string        `json:"label"`
+	Color  string        `json:"color"`
+	Points []viewerPoint `json:"pts"`
+}
+
+type viewerPoint struct {
+	Date string `json:"d"`
+	CPU  string `json:"cpu"`
+	// Go toolchain that produced the measurement. A bump moves every timing
+	// number — the 1.26.4 to 1.26.5 patch bump alone shifted the geomean 3-4%
+	// per tier — so pooling two toolchains mixes two populations the same way
+	// pooling two CPU tiers does.
+	Go    string  `json:"go"`
+	Value float64 `json:"v"`
+	Low   float64 `json:"lo"`
+	High  float64 `json:"hi"`
+}
+
+type viewerChart struct {
+	Title    string         `json:"title"`
+	Subtitle string         `json:"subtitle"`
+	Unit     string         `json:"unit"`
+	Relative bool           `json:"relative"`
+	Series   []viewerSeries `json:"series"`
+}
+
+type viewerData struct {
+	CPUs   []string      `json:"cpus"`
+	Gos    []string      `json:"gos"`
+	Charts []viewerChart `json:"charts"`
+}
+
+// viewerSeriesSpec names a series by the benchmark keys to try, newest first,
+// mirroring chartSeriesSpec: a renamed benchmark stays one logical line
+// instead of splitting into two half-length ones.
+type viewerSeriesSpec struct {
+	label string
+	color string
+	names []string
+}
+
+// buildViewerData assembles the explorer payload from the timeline.
+func buildViewerData(timeline []Snapshot) viewerData {
+	const (
+		suite = "github.com/nooga/let-go/test.BenchmarkClojureTestSuite"
+		run   = "github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun"
+		ir    = "github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile"
+	)
+	// Variant meanings, from test/zz_bench_test.go:
+	//   bytecode     LG_SUITE_IR unset, untagged     — no IR at all
+	//   ir_bytecode  LG_SUITE_IR=1, untagged         — IR passes run as bytecode
+	//   aot_native   LG_SUITE_IR=1, -tags gogen_ir   — IR passes run as native Go
+	// so aot_native and IRCompile's gogen_ir are the same build, each named for
+	// what it measures.
+	specs := []struct {
+		title, subtitle string
+		unit            string
+		// metric picks the number plotted; sample picks it out of a retained
+		// sample for the min/max band. relative plots % against the window
+		// start, matching the summary page's timing charts; the deterministic
+		// metrics are plotted absolute because a percentage of an allocation
+		// count hides the thing you want to see.
+		metric   func(BenchmarkEntry) float64
+		sample   func(BenchmarkSample) float64
+		relative bool
+		series   []viewerSeriesSpec
+	}{
+		{"End-to-end suite", "Execution wall time. Lower is better.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+		{"Suite, compile + run", "Compile and execution together - what each mode costs end to end.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"total_bytecode", "#8a5a9e", []string{run + " [total_bytecode]"}},
+				{"total_ir_bytecode", "#245c73", []string{run + " [total_ir_bytecode]"}},
+				{"total_aot_native", "#167a48", []string{run + " [total_aot_native]"}},
+			}},
+		{"IR compile", "Compile time through the IR pipeline. Lower is better.", "ratio",
+			func(e BenchmarkEntry) float64 { return e.RatioToAnchor },
+			func(x BenchmarkSample) float64 { return x.RatioToAnchor }, true,
+			[]viewerSeriesSpec{
+				{"bytecode", "#245c73", []string{ir + " [bytecode]"}},
+				{"gogen_ir", "#167a48", []string{ir + " [gogen_ir]"}},
+			}},
+		// The deterministic metrics. These do not depend on the host, so a tier
+		// split here would mean something quite different from one on a timing
+		// chart - which is exactly why they are worth having per tier.
+		{"Suite allocations", "Allocations per op. Machine-independent, so tiers should agree.", "allocs/op",
+			func(e BenchmarkEntry) float64 { return float64(e.AllocsPerOp) },
+			func(x BenchmarkSample) float64 { return float64(x.AllocsPerOp) }, false,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+		{"Suite memory", "Heap bytes per op. Machine-independent, so tiers should agree.", "B/op",
+			func(e BenchmarkEntry) float64 { return float64(e.BytesPerOp) },
+			func(x BenchmarkSample) float64 { return float64(x.BytesPerOp) }, false,
+			[]viewerSeriesSpec{
+				{"bytecode", "#8a5a9e", []string{suite + " [bytecode]"}},
+				{"ir_bytecode", "#245c73", []string{suite + " [ir_bytecode]"}},
+				{"aot_native", "#167a48", []string{suite + " [aot_native]", suite + " [gogen_ir]"}},
+			}},
+	}
+
+	cpus := map[string]struct{}{}
+	out := viewerData{}
+	if gm, ok := viewerGeomean(timeline); ok {
+		out.Charts = append(out.Charts, gm)
+	}
+	for _, spec := range specs {
+		chart := viewerChart{Title: spec.title, Subtitle: spec.subtitle, Unit: spec.unit, Relative: spec.relative}
+		for _, ss := range spec.series {
+			// Non-nil: an empty slice marshals as [] where a nil marshals as
+			// null, and the page reads .length on it.
+			s := viewerSeries{Label: ss.label, Color: ss.color, Points: []viewerPoint{}}
+			for _, snap := range timeline {
+				entry, ok := lookupEntry(snap.Baseline.Benchmarks, ss.names)
+				if !ok {
+					continue
+				}
+				value := spec.metric(entry)
+				if value <= 0 {
+					continue
+				}
+				lo, hi, hasBand := sampleSpread(entry.Samples, spec.sample)
+				if !hasBand {
+					lo, hi = value, value
+				}
+				cpu := shortCPUModel(snap.Baseline.Machine.CPUModel)
+				cpus[cpu] = struct{}{}
+				s.Points = append(s.Points, viewerPoint{
+					// RFC3339 verbatim: Date.parse only guarantees that format.
+					// formatDate's "2006-01-02 15:04 UTC" is non-standard and
+					// JavaScriptCore rejects it outright, so a display string
+					// here renders an empty page in Safari.
+					Date: snap.Baseline.CapturedAt, CPU: cpu,
+					Go:    snap.Baseline.Machine.GoVersion,
+					Value: value, Low: lo, High: hi,
+				})
+			}
+			// A series with no points draws nothing and only clutters the
+			// legend; a chart with no series at all is worse, because it
+			// renders an empty card for data this timeline does not have.
+			if len(s.Points) > 0 {
+				chart.Series = append(chart.Series, s)
+			}
+		}
+		if len(chart.Series) > 0 {
+			out.Charts = append(out.Charts, chart)
+		}
+	}
+	// Derive the tier list from what is actually plotted, geomean included.
+	// Deriving it from the named specs alone hides a tier that appears only in
+	// the aggregate: it cannot be selected or excluded, and "All (n)" then
+	// plots more tiers than it counts.
+	gos := map[string]struct{}{}
+	for _, ch := range out.Charts {
+		for _, ser := range ch.Series {
+			for _, pt := range ser.Points {
+				cpus[pt.CPU] = struct{}{}
+				if pt.Go != "" {
+					gos[pt.Go] = struct{}{}
+				}
+			}
+		}
+	}
+	for g := range gos {
+		out.Gos = append(out.Gos, g)
+	}
+	sort.Strings(out.Gos)
+	for c := range cpus {
+		out.CPUs = append(out.CPUs, c)
+	}
+	sort.Strings(out.CPUs)
+	return out
+}
+
+// viewerGeomean builds one aggregate line from a FIXED basket of benchmarks.
+//
+// Geometric mean, because these are anchor-relative ratios: an arithmetic mean
+// of ratios is dominated by whichever benchmark carries the largest number and
+// is not invariant to which way up the ratio is written. The basket is fixed to
+// benchmarks present in EVERY snapshot, because a geomean over a growing set
+// moves when the set moves, which would read as a performance change that never
+// happened.
+func viewerGeomean(timeline []Snapshot) (viewerChart, bool) {
+	if len(timeline) == 0 {
+		return viewerChart{}, false
+	}
+	var basket map[string]struct{}
+	for _, snap := range timeline {
+		present := map[string]struct{}{}
+		for name, e := range snap.Baseline.Benchmarks {
+			if e.RatioToAnchor > 0 {
+				present[name] = struct{}{}
+			}
+		}
+		if len(present) == 0 {
+			return viewerChart{}, false
+		}
+		if basket == nil {
+			basket = present
+			continue
+		}
+		for name := range basket {
+			if _, ok := present[name]; !ok {
+				delete(basket, name)
+			}
+		}
+	}
+	if len(basket) < 2 {
+		return viewerChart{}, false
+	}
+	s := viewerSeries{Label: "geomean", Color: "#8a5a9e", Points: []viewerPoint{}}
+	for _, snap := range timeline {
+		sum := 0.0
+		for name := range basket {
+			sum += math.Log(snap.Baseline.Benchmarks[name].RatioToAnchor)
+		}
+		g := math.Exp(sum / float64(len(basket)))
+		s.Points = append(s.Points, viewerPoint{
+			// RFC3339 verbatim, as above: Date.parse only guarantees that.
+			Date:  snap.Baseline.CapturedAt,
+			CPU:   shortCPUModel(snap.Baseline.Machine.CPUModel),
+			Go:    snap.Baseline.Machine.GoVersion,
+			Value: g, Low: g, High: g,
+		})
+	}
+	return viewerChart{
+		Title:    fmt.Sprintf("Overall (geomean of %d benchmarks)", len(basket)),
+		Subtitle: "One line for the whole suite, over benchmarks present in every snapshot.",
+		Unit:     "ratio",
+		Relative: true,
+		Series:   []viewerSeries{s},
+	}, true
+}
+
+// shortCPUModel collapses a CPU model string to a short tag. Mirrors
+// PERF.shortCPU in the page script so server and browser agree on tier names.
+func shortCPUModel(s string) string {
+	if s == "" {
+		return "(unknown)"
+	}
+	t := cpuNoiseRe.ReplaceAllString(s, " ")
+	if m := cpuFamilyRe.FindStringSubmatch(t); m != nil {
+		t = m[1]
+	}
+	return strings.TrimSpace(spaceRunRe.ReplaceAllString(t, " "))
+}
+
+var (
+	cpuNoiseRe  = regexp.MustCompile(`(?i)\(R\)|\(TM\)|Processor|Platinum|\d+-Core|Core|CPU.*$`)
+	cpuFamilyRe = regexp.MustCompile(`(?i)(EPYC\s+\w+|Xeon[\s\w]*?\d{3,}\w*|Apple\s+M\w+|Ryzen\s+\w+)`)
+	spaceRunRe  = regexp.MustCompile(`\s+`)
+)
+
+const pageStyle = `
     :root {
       color-scheme: light;
       --bg: #f7f7f4;
@@ -1683,11 +2034,15 @@ const pageTemplate = `<!doctype html>
     }
     .section-head {
       display: flex;
-      align-items: end;
+      align-items: start;
       justify-content: space-between;
       gap: 20px;
       margin-bottom: 12px;
     }
+    /* Without a floor, a long description squeezes the heading to a ~115px
+       column; 150px holds the natural two-to-three line wrap. */
+    .section-head h2 { min-width: 150px; }
+    .section-head p .provenance { display: block; margin-top: 4px; }
     h2 {
       margin: 0;
       font-size: 24px;
@@ -1773,6 +2128,16 @@ const pageTemplate = `<!doctype html>
       stroke: var(--paper);
       stroke-width: 1.6;
     }
+    /* Packed together the ring erases more than it separates, so the dots drop
+       it and go translucent instead; the thinner line lets them read as beads
+       on it rather than sinking into it. */
+    .point.dense {
+      stroke-width: 0;
+      fill-opacity: 0.75;
+    }
+    .chart-line.dense {
+      stroke-width: 1.5;
+    }
     .chart-band {
       opacity: 0.16;
       stroke: none;
@@ -1803,6 +2168,12 @@ const pageTemplate = `<!doctype html>
       font-weight: 700;
       text-anchor: middle;
       font-variant-numeric: tabular-nums;
+      /* These sit on top of the series, so they need to carry their own
+         background: stroke first, then fill, gives the glyphs a paper halo. */
+      paint-order: stroke;
+      stroke: var(--paper);
+      stroke-width: 2.6px;
+      stroke-linejoin: round;
     }
     .chart-head {
       display: flex;
@@ -1958,6 +2329,17 @@ const pageTemplate = `<!doctype html>
       th, td { padding: 9px; }
     }
     .explorer-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+    .cpu-filter { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
+    .cpu-filter .cpu-label { font-size: 0.8rem; color: var(--muted); }
+    .cpu-filter .chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+    .cpu-filter .chips button {
+      font: inherit; font-size: 0.78rem; color: inherit; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.6rem; cursor: pointer;
+    }
+    .cpu-filter .chips button:hover { border-color: var(--ink); }
+    .cpu-filter .chips button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .cpu-filter .chips button.all { font-weight: 600; }
+    .cpu-filter .scope { font-size: 0.75rem; color: var(--muted); }
     .explorer-controls label { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
     .explorer-controls select { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); max-width: 420px; }
     .explorer-controls input[type="search"] { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); min-width: 180px; }
@@ -1966,6 +2348,18 @@ const pageTemplate = `<!doctype html>
     .spark-count { font-size: 0.78rem; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
     .explorer-chart { width: 100%; overflow-x: auto; }
     .explorer-chart figure { margin: 0; }
+    .table-wrap { max-height: 620px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    /* An explicit width opts these scrollers out of the macOS overlay scrollbar,
+       which stays hidden until you already know the region scrolls. No
+       scrollbar-width/scrollbar-color alongside: setting either makes Chrome
+       ignore these rules entirely. */
+    .table-wrap::-webkit-scrollbar, .spark-table-wrap::-webkit-scrollbar { width: 14px; height: 14px; }
+    .table-wrap::-webkit-scrollbar-track, .spark-table-wrap::-webkit-scrollbar-track { background: rgba(0,0,0,0.04); border-radius: 8px; }
+    .table-wrap::-webkit-scrollbar-thumb, .spark-table-wrap::-webkit-scrollbar-thumb { background: rgba(36,92,115,0.42); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+    .table-wrap::-webkit-scrollbar-thumb:hover, .spark-table-wrap::-webkit-scrollbar-thumb:hover { background: rgba(36,92,115,0.65); background-clip: content-box; }
+
+    .table-wrap table { border: 0; border-radius: 0; }
+    .table-wrap thead th { position: sticky; top: 0; z-index: 1; }
     .spark-table-wrap { max-height: 620px; overflow: auto; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; background: var(--paper); }
     table.spark-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
     table.spark-table th { position: sticky; top: 0; background: var(--paper); text-align: left; padding: 0.5rem 0.75rem; color: var(--muted); font-weight: 640; border-bottom: 1px solid rgba(0,0,0,0.1); z-index: 1; white-space: nowrap; }
@@ -1974,9 +2368,15 @@ const pageTemplate = `<!doctype html>
     table.spark-table th.num, table.spark-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
     table.spark-table td.num { color: var(--muted); }
     table.spark-table tr:hover td { background: rgba(36,92,115,0.045); }
-    table.spark-table .bench { color: var(--ink); max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+    /* The name is the column worth reading in full; the trend cell is a
+       fixed 160px canvas, so it should not absorb the slack. */
+    table.spark-table .bench { color: var(--ink); max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+    table.spark-table td.spark, table.spark-table th.spark { width: 176px; }
     table.spark-table .delta { min-width: 0; }
     table.spark-table td.scales { white-space: normal; text-align: right; }
+    /* A collapsed family summarises several scales; the underline marks the
+       cells whose detail is on hover. */
+    table.spark-table td.scaled { text-decoration: underline dotted rgba(0,0,0,0.28); text-underline-offset: 3px; cursor: help; }
     .scalepill { display: inline-flex; gap: 0.25rem; align-items: baseline; margin-left: 0.4rem; font-size: 0.72rem; padding: 1px 5px; border-radius: 5px; font-variant-numeric: tabular-nums; }
     .scalepill b { font-weight: 700; opacity: 0.65; }
     .scalepill.good { color: var(--green); background: var(--green-bg); }
@@ -1987,9 +2387,373 @@ const pageTemplate = `<!doctype html>
     .spark-tip .tip-r { display: flex; gap: 10px; align-items: baseline; font-variant-numeric: tabular-nums; }
     .spark-tip .tip-r b { min-width: 26px; opacity: 0.65; font-weight: 700; }
     .spark-tip .tip-r span:nth-of-type(1) { margin-left: auto; }
-    .spark-tip .tip-r .good { color: #7fdca4; }
-    .spark-tip .tip-r .bad { color: #f3a3a3; }
-    .spark-tip .tip-r.muted { opacity: 0.6; }
+    /* The generic .good/.bad carry a light pill background for the table; on
+       the dark tip that leaves pale text on a pale block. Colour only here. */
+    .spark-tip .tip-r .good { color: #7fdca4; background: none; }
+    .spark-tip .tip-r .bad { color: #f3a3a3; background: none; }
+    .spark-tip .tip-r.muted { opacity: 0.6; }`
+
+// viewerStyle is the only CSS the explorer adds on top of pageStyle: controls
+// the summary page has no equivalent for.
+// relLink builds the href from one emitted page to another. Both are local
+// paths at build time and the pages are served from the same tree, so a path
+// relative to the linking page is what the browser needs.
+//
+// It links to the file, not the directory. Assuming an index.html and emitting
+// a bare "dir/" breaks every layout except the nested one the Makefile happens
+// to use — `-out summary.html -viewer-out timeline.html` would link to "./".
+// A server that serves index.html for a directory still resolves the explicit
+// filename, so naming it costs nothing and is right in both layouts.
+func relLink(fromPage, toPage string) string {
+	rel, err := filepath.Rel(filepath.Dir(fromPage), toPage)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+// writeViewer renders the Timeline explorer page and its chart payload.
+func writeViewer(outPath, dataPath, dataURL, summaryPath string, timeline []Snapshot, logo string) error {
+	if dataPath == "" {
+		dataPath = filepath.Join(filepath.Dir(outPath), "timeline-charts.json")
+	}
+	data := buildViewerData(timeline)
+	blob, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal chart data: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dataPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(dataPath, blob, 0o644); err != nil {
+		return err
+	}
+
+	tpl, err := template.New("viewer").Parse(viewerTemplate)
+	if err != nil {
+		return fmt.Errorf("parse viewer template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, struct {
+		LogoDataURI   template.URL
+		ViewerDataURL string
+		SummaryURL    string
+		SnapshotCount int
+	}{template.URL(logo), dataURL, relLink(outPath, summaryPath), len(timeline)}); err != nil {
+		return fmt.Errorf("render viewer: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s (%d charts, %d CPU tiers)\n", outPath, len(data.Charts), len(data.CPUs))
+	fmt.Fprintf(os.Stderr, "  explorer chart data -> %s (%d KB)\n", dataPath, len(blob)/1024)
+	return nil
+}
+
+const viewerStyle = `
+    .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: 0.9rem; }
+    .controls > span, .controls > label { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; }
+    .chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+    .chips button, .legend button {
+      font: inherit; font-size: 0.78rem; color: inherit; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.6rem; cursor: pointer;
+    }
+    .chips button:hover, .legend button:hover { border-color: var(--ink); }
+    .chips button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .chips button.all { font-weight: 600; }
+    .legend button { display: inline-flex; align-items: center; gap: 0.3rem; border-color: transparent; }
+    .legend button[aria-pressed="false"] { opacity: 0.45; text-decoration: line-through; }
+    .legend button[aria-pressed="false"] .swatch { background: var(--muted); }
+    .count { font-size: 0.78rem; color: var(--muted); }
+    /* Hold the chart's box when nothing is drawn, so the legend buttons do not
+       jump out from under the pointer that just hid the last series. */
+    .chart .empty { aspect-ratio: 520 / 210; display: grid; place-items: center; color: var(--muted); font-style: italic; }
+`
+
+const viewerTemplate = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timeline explorer - let-go perf</title>
+  <style>` + pageStyle + viewerStyle + `
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <div class="topline">
+        <div class="brand">
+          {{if .LogoDataURI}}<img alt="" src="{{.LogoDataURI}}">{{end}}
+          <span>let-go perf</span>
+        </div>
+        <nav class="links" aria-label="Links">
+          <a href="{{.SummaryURL}}">Summary</a>
+          <a href="https://github.com/nooga/let-go">GitHub</a>
+          <a href="https://github.com/nooga/let-go/blob/main/docs/perf/ratchet.md">Ratchet docs</a>
+        </nav>
+      </div>
+      <h1>Timeline explorer</h1>
+      <p class="lede">The summary page's timeline charts, redrawn in the browser so they can be cut to one CPU tier,
+        plus the compile+run totals it does not plot. {{.SnapshotCount}} snapshots. <code>ratio_to_anchor</code> only normalizes within a CPU model,
+        so a chart pooling tiers shows runner assignment as much as code: select tiers below to read a real trend.</p>
+      <div class="controls">
+        <span>CPU <span id="cpu" class="chips"></span></span>
+        <span id="gowrap">Go <span id="go" class="chips"></span></span>
+        <label title="Keep the y-axis fixed to all series, so toggling one does not move the scale."><input type="checkbox" id="lock"> Lock scale</label>
+        <span class="count" id="count"></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <div class="chart-grid" id="charts">
+        <div class="empty">Loading timeline data…</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <p>Rendered by <code>cmd/perf-page</code> from the <code>perf-data</code> timeline.
+      The <a href="{{.SummaryURL}}">summary page</a> carries the ratchet baseline and release comparison.</p>
+  </footer>
+
+<script>
+const VIEWER_URL = {{.ViewerDataURL}};
+const W=520,H=210,L=46,R=502,T=22,B=176;
+let DATA=null, lockScale=false, urlCPUs=[], urlGos=[];
+// Selected tiers. Every tier selected is the default and writes no ?cpu=, so a
+// tier added to the data later shows up rather than being excluded by an old link.
+const sel=new Set();
+// Selected Go toolchains, same contract as sel: all selected is the default and
+// writes no ?go=.
+const selGo=new Set();
+// Hidden series, keyed "<chart title>::<series label>" — series labels repeat
+// across charts, so a global key would toggle two unrelated lines at once.
+const hidden=new Set();
+const allSelected=()=>DATA&&sel.size===DATA.cpus.length;
+const allGoSelected=()=>DATA&&(!DATA.gos.length||selGo.size===DATA.gos.length);
+const visible=p=>(allSelected()||sel.has(p.cpu))&&(allGoSelected()||selGo.has(p.go));
+
+function readURL(){
+  const q=new URLSearchParams(location.search);
+  urlCPUs=(q.get("cpu")||"").split(",").map(x=>x.trim()).filter(Boolean);
+  urlGos=(q.get("go")||"").split(",").map(x=>x.trim()).filter(Boolean);
+  lockScale=q.get("lock")==="1";
+  (q.get("hide")||"").split(",").filter(Boolean).forEach(k=>hidden.add(k));
+}
+// Every control lives in the query string, so a view is a link rather than a
+// description: "only on 9V74, and only once you drop gogen_ir" becomes a URL.
+function syncURL(){
+  const u=new URL(location.href), q=u.searchParams;
+  allSelected()?q.delete("cpu"):q.set("cpu",[...sel].join(","));
+  allGoSelected()?q.delete("go"):q.set("go",[...selGo].join(","));
+  lockScale?q.set("lock","1"):q.delete("lock");
+  hidden.size?q.set("hide",[...hidden].join(",")):q.delete("hide");
+  history.replaceState(null,"",u);
+}
+
+fetch(VIEWER_URL).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+  .then(d=>{DATA=d;readURL();initControls();draw();})
+  .catch(e=>{document.getElementById("charts").innerHTML=
+    '<div class="empty">Could not load timeline data ('+e+').</div>';});
+
+function initControls(){
+  // Tiers named in ?cpu= that this payload does not carry are dropped; if that
+  // leaves nothing, fall back to every tier rather than an empty page.
+  const known=urlCPUs.filter(c=>DATA.cpus.includes(c));
+  (known.length?known:DATA.cpus).forEach(c=>sel.add(c));
+  const knownGo=urlGos.filter(g=>DATA.gos.includes(g));
+  (knownGo.length?knownGo:DATA.gos).forEach(g=>selGo.add(g));
+  renderCPU(); renderGo();
+  const lock=document.getElementById("lock");
+  lock.checked=lockScale;
+  lock.onchange=e=>{lockScale=e.target.checked;syncURL();draw();};
+}
+
+function renderCPU(){
+  const host=document.getElementById("cpu");
+  host.innerHTML="";
+  const all=document.createElement("button");
+  all.type="button"; all.className="all"; all.textContent="All ("+DATA.cpus.length+")";
+  all.setAttribute("aria-pressed",String(allSelected()));
+  all.onclick=()=>{DATA.cpus.forEach(c=>sel.add(c));renderCPU();syncURL();draw();};
+  host.append(all);
+  DATA.cpus.forEach(c=>{
+    const b=document.createElement("button");
+    b.type="button"; b.textContent=c;
+    b.setAttribute("aria-pressed",String(sel.has(c)));
+    b.title="Click to toggle this tier. Alt-click to show only this tier.";
+    b.onclick=e=>{
+      if(e.altKey){ sel.clear(); sel.add(c); }
+      else { sel.has(c)?sel.delete(c):sel.add(c); }
+      renderCPU(); syncURL(); draw();
+    };
+    host.append(b);
+  });
+}
+
+function renderGo(){
+  const wrap=document.getElementById("gowrap"), host=document.getElementById("go");
+  // One toolchain is nothing to choose between; the row would be noise.
+  if(!DATA.gos||DATA.gos.length<2){ wrap.hidden=true; return; }
+  wrap.hidden=false; host.innerHTML="";
+  const all=document.createElement("button");
+  all.type="button"; all.className="all"; all.textContent="All ("+DATA.gos.length+")";
+  all.setAttribute("aria-pressed",String(allGoSelected()));
+  all.onclick=()=>{DATA.gos.forEach(g=>selGo.add(g));renderGo();syncURL();draw();};
+  host.append(all);
+  DATA.gos.forEach(g=>{
+    const b=document.createElement("button");
+    b.type="button"; b.textContent=g.replace(/^go/,"");
+    b.setAttribute("aria-pressed",String(selGo.has(g)));
+    b.title="Click to toggle "+g+". Alt-click to show only it. A toolchain bump moves every timing number, so pooling two mixes two populations.";
+    b.onclick=e=>{
+      if(e.altKey){ selGo.clear(); selGo.add(g); }
+      else { selGo.has(g)?selGo.delete(g):selGo.add(g); }
+      renderGo(); syncURL(); draw();
+    };
+    host.append(b);
+  });
+}
+
+// % change against the first point in the visible window, matching the
+// relative charts on the summary page. Recomputed per filter: the window start
+// moves when the tier selection moves, and that is the intent.
+// Relative charts plot % against the window start, matching the summary page.
+// Absolute charts (allocs, bytes) plot the raw number: a percentage of an
+// allocation count hides the very thing you are looking at.
+function project(pts,rel){
+  if(!pts.length) return [];
+  if(!rel) return pts.map(p=>({...p, r:p.v, rlo:p.lo, rhi:p.hi}));
+  const base=pts[0].v;
+  if(!base) return pts.map(p=>({...p, r:0, rlo:0, rhi:0}));
+  return pts.map(p=>({...p, r:(p.v-base)/base*100, rlo:(p.lo-base)/base*100, rhi:(p.hi-base)/base*100}));
+}
+const fmtVal=(v,rel)=> rel ? v.toFixed(1)+"%"
+  : Math.abs(v)>=1000 ? Math.round(v).toLocaleString() : (+v.toFixed(2)).toString();
+
+function draw(){
+  const host=document.getElementById("charts");
+  host.innerHTML="";
+  let shown=0,total=0;
+  DATA.charts.forEach(ch=>{
+    const series=ch.series.map(s=>{
+      const off=hidden.has(ch.title+"::"+s.label);
+      // A payload written by an older build can carry pts:null.
+      const src=s.pts||[];
+      const pts=(allSelected()&&allGoSelected())?src:src.filter(visible);
+      if(!off){ total+=src.length; shown+=pts.length; }
+      return {...s, off, pts:project(pts,ch.relative)};
+    });
+    host.append(chartEl(ch,series));
+  });
+  const n=sel.size;
+  const label = n===0 ? "no tiers selected" : allSelected() ? "all "+n+" tiers"
+              : n===1 ? [...sel][0] : n+" tiers";
+  const goLabel = allGoSelected() ? "" : " · go"+[...selGo].map(g=>g.replace(/^go/,"")).join("/");
+  document.getElementById("count").textContent =
+    (allSelected()&&allGoSelected())
+      ? total.toLocaleString()+" points across "+label
+      : shown.toLocaleString()+" of "+total.toLocaleString()+" points — "+label+goLabel;
+}
+
+const day=t=>String(t).slice(0,10);
+function chartEl(ch,series){
+  const art=document.createElement("article"); art.className="chart";
+  const head='<div class="chart-head"><h3>'+esc(ch.title)+'</h3></div><p>'+esc(ch.subtitle)+
+    (lockScale?" <b>Scale locked</b> to all series.":"")+'</p>';
+  const vis=series.filter(s=>!s.off);
+  // Unlocked: extent from the visible series, so hiding a noisy line makes the
+  // rest readable. Locked: extent from all of them, so the frame holds still
+  // while you toggle. Either way it is taken under the current tier selection —
+  // locking across tiers would squash one tier into the pooled spread that the
+  // filter exists to remove.
+  const extent=(lockScale?series:vis).flatMap(s=>s.pts);
+  const visPts=vis.flatMap(s=>s.pts);
+  if(!visPts.length||!extent.length){
+    art.innerHTML=head+'<div class="empty">'+
+      (series.some(s=>s.off)?"All series hidden — re-enable one below."
+                           :"No points for the selected tiers.")+'</div>'+
+      legendEl(ch.title,series,"click a series to hide it",ch.relative);
+    return art;
+  }
+  const lo=Math.min(...extent.map(p=>p.rlo)), hi=Math.max(...extent.map(p=>p.rhi));
+  const pad=(hi-lo)*0.08||1, yMin=lo-pad, yMax=hi+pad;
+  const times=visPts.map(p=>+new Date(p.d));
+  const tMin=Math.min(...times), tMax=Math.max(...times);
+  const x=t=>L+((+new Date(t)-tMin)/((tMax-tMin)||1))*(R-L);
+  const y=v=>B-((v-yMin)/((yMax-yMin)||1))*(B-T);
+
+  let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(ch.title)+' trend chart">';
+  // The 0% guide only means something on a relative chart.
+  if(ch.relative && yMin<=0 && yMax>=0){
+    svg+='<line class="ref-line" x1="'+L+'" y1="'+y(0).toFixed(2)+'" x2="'+R+'" y2="'+y(0).toFixed(2)+'"></line>';
+  }
+  svg+='<line class="axis" x1="'+L+'" y1="'+T+'" x2="'+L+'" y2="'+B+'"></line>';
+  svg+='<line class="axis" x1="'+L+'" y1="'+B+'" x2="'+R+'" y2="'+B+'"></line>';
+  svg+='<text class="axis-label" x="42" y="26" text-anchor="end">'+fmtVal(yMax,ch.relative)+'</text>';
+  svg+='<text class="axis-label" x="42" y="173" text-anchor="end">'+fmtVal(yMin,ch.relative)+'</text>';
+  for(let i=0;i<5;i++){
+    const t=tMin+(tMax-tMin)*i/4, px=x(new Date(t));
+    svg+='<line class="tick" x1="'+px.toFixed(2)+'" y1="'+B+'" x2="'+px.toFixed(2)+'" y2="'+(B+3)+'"></line>';
+    svg+='<text class="tick-label" x="'+px.toFixed(2)+'" y="188" text-anchor="middle">'+
+         new Date(t).toISOString().slice(5,10)+'</text>';
+  }
+  vis.forEach(s=>{
+    if(!s.pts.length) return;
+    const up=s.pts.map(p=>x(p.d).toFixed(2)+","+y(p.rhi).toFixed(2));
+    const dn=s.pts.slice().reverse().map(p=>x(p.d).toFixed(2)+","+y(p.rlo).toFixed(2));
+    svg+='<path class="chart-band" fill="'+s.color+'" d="M'+up.concat(dn).join("L")+'Z"></path>';
+    svg+='<path class="chart-line" stroke="'+s.color+'" d="M'+
+         s.pts.map(p=>x(p.d).toFixed(2)+","+y(p.r).toFixed(2)).join("L")+'"></path>';
+    s.pts.forEach(p=>{
+      svg+='<circle class="point" fill="'+s.color+'" cx="'+x(p.d).toFixed(2)+'" cy="'+y(p.r).toFixed(2)+
+           '" r="2.4"><title>'+esc(day(p.d)+" · "+p.cpu+(p.go?" · "+p.go:"")+"\n"+s.label+": "+fmtVal(p.r,ch.relative))+'</title></circle>';
+    });
+  });
+  svg+='</svg>';
+  const span=visPts.length?(day(visPts[0].d)+" to "+day(visPts[visPts.length-1].d)):"";
+  art.innerHTML=head+svg+legendEl(ch.title,series,
+    (ch.relative?"% vs window start":ch.unit)+" · "+span+" · click a series to hide it", ch.relative);
+  return art;
+}
+
+// The legend doubles as the series toggle: it is already the key, and a
+// separate row of checkboxes would say the same thing twice.
+function legendEl(title,series,meta,rel){
+  return '<div class="chart-foot"><p class="chart-meta">'+esc(meta||"")+'</p><div class="legend">'+
+    series.map(s=>'<button type="button" data-key="'+esc(title+"::"+s.label)+
+      '" aria-pressed="'+(!s.off)+'"><i class="swatch" style="--series: '+s.color+'"></i>'+
+      esc(s.label)+" ("+s.pts.length+")</button>").join("")+
+    (rel?'<span><i class="swatch dash"></i>window start = 0%</span>':"")+'</div></div>';
+}
+
+document.addEventListener("click",e=>{
+  const b=e.target.closest(".legend button"); if(!b) return;
+  const k=b.dataset.key;
+  hidden.has(k)?hidden.delete(k):hidden.add(k);
+  syncURL(); draw();
+});
+
+function esc(s){ return String(s).replace(/[&<>"']/g,c=>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+</script>
+</body>
+</html>
+`
+
+const pageTemplate = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} - let-go perf</title>
+  <style>` + pageStyle + `
   </style>
 </head>
 <body>
@@ -2002,7 +2766,8 @@ const pageTemplate = `<!doctype html>
         </div>
         <nav class="links" aria-label="Links">
           <a href="../">WASM repl</a>
-          <a href="https://github.com/nooga/let-go">GitHub</a>
+          {{if .ViewerURL}}<a href="{{.ViewerURL}}">Timeline explorer</a>
+          {{end}}<a href="https://github.com/nooga/let-go">GitHub</a>
           <a href="https://github.com/nooga/let-go/blob/main/docs/perf/ratchet.md">Ratchet docs</a>
         </nav>
       </div>
@@ -2044,11 +2809,12 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Timeline</h2>
-        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in.</p>
+        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts are drawn server-side from the whole timeline, so they pool every CPU tier and the CPU chips below cannot reach them; <code>-cpu</code> cuts them at build time. The baseline sections further down are a different case again: they render one machine profile picked at build time, which neither the filter nor <code>-cpu</code> changes.</p>
       </div>
       {{if .Charts}}
       <div class="chart-grid">
         {{range .Charts}}
+        {{$chart := .}}
         <article class="chart">
           <div class="chart-head">
             <h3>{{.Title}}</h3>
@@ -2069,9 +2835,9 @@ const pageTemplate = `<!doctype html>
             {{range .Series}}
             {{$color := .Color}}
             {{if .BandPath}}<path class="chart-band" fill="{{$color}}" d="{{.BandPath}}"></path>{{end}}
-            <path class="chart-line" stroke="{{$color}}" d="{{.Path}}"></path>
+            <path class="chart-line{{if $chart.Dense}} dense{{end}}" stroke="{{$color}}" d="{{.Path}}"></path>
             {{range .Points}}
-            <circle class="point" fill="{{$color}}" cx="{{printf "%.2f" .X}}" cy="{{printf "%.2f" .Y}}" r="3.2">
+            <circle class="point{{if $chart.Dense}} dense{{end}}" fill="{{$color}}" cx="{{printf "%.2f" .X}}" cy="{{printf "%.2f" .Y}}" r="{{printf "%.2f" $chart.PointR}}">
               <title>{{.Date}} @ {{.SHA}}: {{.Text}}{{if .HasBand}} ({{.Spread}}){{end}}</title>
             </circle>
             {{end}}
@@ -2096,17 +2862,25 @@ const pageTemplate = `<!doctype html>
       {{end}}
     </section>
 
+    <!-- The filter sits here, not in the header, because here is where its
+         effect starts. Everything above is rendered at build time from one
+         committed profile and cannot react to it; a control that appears to do
+         nothing where it sits reads as broken. Mounted by the first timeline
+         view that loads, and hidden when the timeline carries fewer than two
+         tiers. -->
+    <div class="cpu-filter" id="perf-cpu-filter" hidden></div>
+
     <section>
       <div class="section-head">
         <h2>Explore metrics over time</h2>
-        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them.</p>
+        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them — use the CPU chips just above to cut this chart and the sparklines below to one tier.</p>
       </div>
       <div id="perf-explorer" style="width:100%;min-height:420px"></div>
     </section>
 
     <section>
       <div class="section-head">
-        <h2>Trend sparklines (first → last)</h2>
+        <h2>Trend sparklines</h2>
         <p>One row per benchmark × CPU. Benchmarks that differ only by a scaling factor (…/10, /100, /1000) are merged into a single row: their lines are overlaid and each is indexed to its own first value (% change from a shared 0% baseline) so you can compare how each scale moved — darker line = larger scale — with the per-scale Δ shown at right. Un-scaled benchmarks show one absolute sparkline (every sample a faint dot; hollow ring = first snapshot, filled = last) plus first/last/Δ. Slope reads direction; green = improvement, red = regression. Sorted by the largest endpoint change — click Δ to flip; use the filters to hide single-point or unchanged series.</p>
       </div>
       <div id="perf-sparklines" style="width:100%"></div>
@@ -2155,6 +2929,7 @@ const pageTemplate = `<!doctype html>
         <h2>Recently tightened</h2>
         <p>Most recently lowered ratchet bars. × anchor normalizes wall time across machines; the last column is the change vs {{.ReferenceName}}.</p>
       </div>
+      {{if .RecentlyTightened}}
       <table>
         <thead><tr><th>Benchmark</th><th>Bar set</th><th>× anchor</th><th>Wall</th><th>Allocs</th><th>vs {{.ReferenceName}}</th></tr></thead>
         <tbody>
@@ -2170,13 +2945,15 @@ const pageTemplate = `<!doctype html>
           {{end}}
         </tbody>
       </table>
+      {{else}}<div class="empty">This machine profile carries no bar-set dates, so there is nothing to order by recency.</div>{{end}}
     </section>
 
     <section>
       <div class="section-head">
         <h2>Current baseline</h2>
-        <p>Sorted by package and benchmark. Lower anchor ratio is faster.</p>
+        <p>Sorted by package and benchmark. Lower anchor ratio is faster; Scale plots that ratio on a log scale against the slowest row here.<span class="provenance">Captured {{date .Current.CapturedAt}} at {{shortSHA .Current.CapturedAtSHA}} on {{.Current.Machine.CPUModel}} / {{.Current.Machine.GoVersion}} — one machine profile, picked at build time. Rows absent from {{.ReferenceName}} read &ldquo;new&rdquo;.</span></p>
       </div>
+      <div class="table-wrap">
       <table>
         <thead>
           <tr>
@@ -2185,7 +2962,7 @@ const pageTemplate = `<!doctype html>
             <th>Wall</th>
             <th>Alloc</th>
             <th>Bytes</th>
-            <th>Delta</th>
+            <th>vs {{.ReferenceName}}</th>
             <th>Scale</th>
           </tr>
         </thead>
@@ -2203,6 +2980,7 @@ const pageTemplate = `<!doctype html>
           {{end}}
         </tbody>
       </table>
+      </div>
     </section>
   </main>
 
@@ -2247,10 +3025,108 @@ const pageTemplate = `<!doctype html>
         fmt: function (v) {
           if (v == null || isNaN(v)) return "—";
           const a = Math.abs(v);
+          // Three significant figures past 10k: full digits are compared by
+          // counting commas, not read.
+          if (a >= 1e9) return (v / 1e9).toFixed(2) + "B";
+          if (a >= 1e6) return (v / 1e6).toFixed(2) + "M";
+          if (a >= 1e4) return (v / 1e3).toFixed(1) + "k";
           if (a >= 1000) return Math.round(v).toLocaleString();
           if (a >= 10) return v.toFixed(1);
           return v.toPrecision(3);
         },
+        // Page-wide CPU selection, shared by every timeline-driven view. The
+        // tiers are not comparable to each other; see filterTimelineByCPU.
+        //
+        // Views register independently (they fetch the same payload but do not
+        // know about each other), so the control mounts on first registration
+        // and later registrations only add CPUs they contribute.
+        cpu: (function () {
+          const subs = [];
+          let cpus = [];
+          // Selected tiers. Every tier selected is the default and writes no
+          // ?cpu=, so a tier that appears in the data later shows up rather
+          // than being excluded by an old link.
+          const sel = new Set();
+          let seeded = false;
+          const params = new URLSearchParams(location.search);
+          const wanted = (params.get("cpu") || "").split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+
+          const allSelected = function () { return sel.size === cpus.length; };
+          function notify() { subs.forEach(function (fn) { fn(); }); }
+
+          function sync() {
+            const u = new URL(location.href);
+            if (allSelected()) { u.searchParams.delete("cpu"); }
+            else { u.searchParams.set("cpu", Array.from(sel).join(",")); }
+            history.replaceState(null, "", u);
+          }
+
+          function mount() {
+            const host = document.getElementById("perf-cpu-filter");
+            if (!host) return;
+            // One tier is nothing to choose between.
+            if (cpus.length < 2) { host.hidden = true; return; }
+            host.hidden = false;
+            host.innerHTML = "";
+            const label = document.createElement("span");
+            label.className = "cpu-label";
+            label.textContent = "CPU";
+            host.append(label);
+            const chips = document.createElement("span");
+            chips.className = "chips";
+            const all = document.createElement("button");
+            all.type = "button";
+            all.className = "all";
+            all.textContent = "All (" + cpus.length + ")";
+            all.setAttribute("aria-pressed", String(allSelected()));
+            all.onclick = function () { cpus.forEach(function (c) { sel.add(c); }); mount(); sync(); notify(); };
+            chips.append(all);
+            cpus.forEach(function (c) {
+              const b = document.createElement("button");
+              b.type = "button";
+              b.textContent = c;
+              b.setAttribute("aria-pressed", String(sel.has(c)));
+              b.title = "Click to toggle this tier. Alt-click to show only this tier.";
+              b.onclick = function (e) {
+                if (e.altKey) { sel.clear(); sel.add(c); }
+                else if (sel.has(c)) { sel.delete(c); }
+                else { sel.add(c); }
+                mount(); sync(); notify();
+              };
+              chips.append(b);
+            });
+            host.append(chips);
+            const scope = document.createElement("span");
+            scope.className = "scope";
+            scope.textContent = "applies to this chart and the sparklines below";
+            host.append(scope);
+          }
+
+          return {
+            register: function (list) {
+              list.forEach(function (c) { if (c && cpus.indexOf(c) < 0) cpus.push(c); });
+              cpus.sort();
+              // Seed once, from ?cpu= when it names tiers this build carries.
+              // Tiers it does not carry are dropped; if that leaves nothing,
+              // fall back to every tier rather than an empty page.
+              if (!seeded) {
+                seeded = true;
+                const known = wanted.filter(function (c) { return cpus.indexOf(c) >= 0; });
+                (known.length ? known : cpus).forEach(function (c) { sel.add(c); });
+                if (known.length !== wanted.length) { sync(); }
+              } else {
+                cpus.forEach(function (c) { if (!wanted.length) { sel.add(c); } });
+              }
+              mount();
+            },
+            onChange: function (fn) { subs.push(fn); },
+            // Rows carry the full CPU model; chips show the short tag.
+            apply: function (rows, shortOf) {
+              if (allSelected()) { return rows; }
+              return rows.filter(function (r) { return sel.has(shortOf(r.cpu)); });
+            }
+          };
+        })(),
         // Build the bench + metric <select> controls; calls onChange() on input.
         controls: function (host, opts) {
           const bar = d3.select(host).append("div").attr("class", "explorer-controls");
@@ -2289,6 +3165,8 @@ const pageTemplate = `<!doctype html>
           return;
         }
         rows.forEach(function (r) { r._t = new Date(r.date); });
+        PERF.cpu.register(Array.from(new Set(rows.map(function (r) { return PERF.shortCPU(r.cpu); }))));
+        PERF.cpu.onChange(function () { draw(); });
         const benches = Array.from(new Set(rows.map(function (r) { return r.bench; }))).sort();
         const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
         let curBench = benches.find(function (b) { return b.indexOf("ClojureTestSuite [aot_native]") >= 0; }) || benches[0];
@@ -2306,7 +3184,8 @@ const pageTemplate = `<!doctype html>
 
         function draw() {
           const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
-          const sub = rows.filter(function (r) { return r.bench === curBench && r.metric === curMetric; })
+          const sub = PERF.cpu.apply(rows, PERF.shortCPU)
+            .filter(function (r) { return r.bench === curBench && r.metric === curMetric; })
             .map(function (r) { return { _t: r._t, cpu: PERF.shortCPU(r.cpu), value: r.value, lo: r.lo, hi: r.hi, samples: r.samples }; });
           chart.selectAll("*").remove();
           if (!sub.length) { chart.append("div").attr("class", "empty").text("No data for this selection."); return; }
@@ -2362,6 +3241,8 @@ const pageTemplate = `<!doctype html>
           return;
         }
         rows.forEach(function (r) { r._t = +new Date(r.date); });
+        PERF.cpu.register(Array.from(new Set(rows.map(function (r) { return PERF.shortCPU(r.cpu); }))));
+        PERF.cpu.onChange(function () { draw(); });
         const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
         let curMetric = metrics.indexOf("ratio_to_anchor") >= 0 ? "ratio_to_anchor" : metrics[0];
         let sortDesc = true;   // by |Δ| descending
@@ -2418,6 +3299,24 @@ const pageTemplate = `<!doctype html>
           tip.style("left", lx + "px").style("top", ly + "px");
         }
 
+        // The per-scale detail behind a collapsed family row. Not a native
+        // title: that waits out a hover delay and never appears at all while
+        // the pointer is moving across a dense table.
+        function showScaleTip(ev, d) {
+          const lib = (meta[curMetric] || {}).lower_is_better;
+          let html = '<div class="tip-h">' + esc(d.base) + '</div><div class="tip-sub">' + esc(d.cpu) + ' · ' + d.series.length + ' scales</div>';
+          d.series.forEach(function (se) {
+            const cls = se.deltaPct === 0 ? "" : ((lib ? se.deltaPct < 0 : se.deltaPct > 0) ? "good" : "bad");
+            html += '<div class="tip-r"><b>' + fmtScale(se.scale) + '</b><span>' + PERF.fmt(se.first) + " \u2192 " + PERF.fmt(se.last) + '</span><span class="' + cls + '">' + deltaStr(se.deltaPct) + '</span></div>';
+          });
+          tip.html(html).style("opacity", 1);
+          const tw = tip.node().offsetWidth, th = tip.node().offsetHeight, gap = 14;
+          let lx = ev.clientX + gap, ly = ev.clientY + gap;
+          if (lx + tw > window.innerWidth - 8) lx = ev.clientX - tw - gap;
+          if (ly + th > window.innerHeight - 8) ly = ev.clientY - th - gap;
+          tip.style("left", lx + "px").style("top", ly + "px");
+        }
+
         // Split a benchmark name into its base and scaling factor: a trailing
         // /<digits> size (before any [mode] suffix). MapAssoc/HAMT-Assoc/01000
         // [bytecode] → base "MapAssoc/HAMT-Assoc [bytecode]", scale 1000.
@@ -2430,17 +3329,43 @@ const pageTemplate = `<!doctype html>
           if (sm) { return { base: sm[1] + mode, scale: +sm[2] }; }
           return { base: bench, scale: null };
         }
+        // Range across a family's scales; a single value when they agree once
+        // formatted, which is the common case.
+        function fmtRange(series, key) {
+          const vs = series.map(function (se) { return se[key]; }).filter(function (v) { return v != null && !isNaN(v); });
+          if (!vs.length) { return "—"; }
+          const lo = PERF.fmt(Math.min.apply(null, vs)), hi = PERF.fmt(Math.max.apply(null, vs));
+          return lo === hi ? lo : lo + "–" + hi;
+        }
+
+        function geoDelta(series) {
+          let sum = 0, n = 0;
+          series.forEach(function (se) {
+            const m = 1 + se.deltaPct / 100;
+            if (m > 0) { sum += Math.log(m); n++; }
+          });
+          if (!n) { return 0; }
+          return (Math.exp(sum / n) - 1) * 100;
+        }
+
         function fmtScale(n) {
           if (n == null) return "";
           if (n >= 1000000) return (n / 1000000) + "M";
           if (n >= 1000) return (n / 1000) + "k";
           return "" + n;
         }
-        function deltaStr(p) { return (p >= 0 ? "+" : "") + p.toFixed(1) + "%"; }
+        // Percent holds while the change is the same order as the value; past
+        // a doubling the multiple is what gets compared (+1012.3% is 11.1x).
+        function deltaStr(p) {
+          if (p >= 100) { return (1 + p / 100).toFixed(1) + "\u00d7"; }
+          if (p <= -50) { return "1/" + (1 / (1 + p / 100)).toFixed(1) + "\u00d7"; }
+          return (p >= 0 ? "+" : "") + p.toFixed(1) + "%";
+        }
 
         function draw() {
           const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
-          const sub = rows.filter(function (r) { return r.metric === curMetric; });
+          const sub = PERF.cpu.apply(rows, PERF.shortCPU)
+            .filter(function (r) { return r.metric === curMetric; });
           // Group by (base benchmark, CPU); scaling-factor variants collapse into
           // one row carrying a SET of per-scale series.
           const byKey = d3.group(sub, function (d) {
@@ -2482,7 +3407,7 @@ const pageTemplate = `<!doctype html>
           const htr = table.append("thead").append("tr");
           htr.append("th").text("Benchmark");
           htr.append("th").text("CPU");
-          htr.append("th").text("Trend (scale variants overlaid, indexed to % change)");
+          htr.append("th").attr("class", "spark").text("Trend");
           htr.append("th").attr("class", "num").text("First");
           htr.append("th").attr("class", "num").text("Last");
           htr.append("th").attr("class", "num").style("cursor", "pointer").text("Δ " + (sortDesc ? "▼" : "▲"))
@@ -2495,12 +3420,20 @@ const pageTemplate = `<!doctype html>
             row.append("td").text(d.cpu);
             row.append("td").attr("class", "spark").each(function () { drawSpark(this, d); });
             if (d.grouped) {
-              // Scale family: per-scale Δ pills span the First/Last/Δ columns.
-              const cell = row.append("td").attr("colspan", 3).attr("class", "scales");
-              d.series.forEach(function (se) {
-                const pill = cell.append("span").attr("class", "scalepill " + (se.good ? "good" : "bad"));
-                pill.append("b").text(fmtScale(se.scale));
-                pill.append("span").text(deltaStr(se.deltaPct));
+              // Scale family: one summary per column, individuals on hover.
+              // Geometric, because these are multipliers: an arithmetic mean of
+              // ratios follows whichever scale carries the largest one.
+              const geo = geoDelta(d.series);
+              const cells = [
+                row.append("td").attr("class", "num scaled").text(fmtRange(d.series, "first")),
+                row.append("td").attr("class", "num scaled").text(fmtRange(d.series, "last")),
+                row.append("td").attr("class", "num scaled delta " + (d.series[0].good ? "good" : "bad"))
+                  .text(deltaStr(geo) + " \u00b7 " + d.series.length)
+              ];
+              cells.forEach(function (c) {
+                c.on("mouseenter", function (ev) { showScaleTip(ev, d); })
+                  .on("mousemove", function (ev) { showScaleTip(ev, d); })
+                  .on("mouseleave", hideTip);
               });
             } else {
               const se = d.series[0];
