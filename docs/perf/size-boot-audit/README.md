@@ -34,8 +34,8 @@ number here is reproducible with the scripts in `scripts/` (see
   after the peak. The dashboard's boot series effectively starts post-fix.
 - **fib/tak are slower.** A corrected, paired A/B run alternating `AB`/`BA`
   order shows `ed4ecc2` **+12.8%** on fib and **+17.6%** on tak by paired median.
-- **The audited ratchet gated boot timing but not allocations.** That gap was
-  subsequently fixed by #780; current `main` gates deterministic allocs/B too.
+- **The audit misread the ratchet.** It reported boot gated on timing alone; the
+  deterministic allocs/B gate was already present at the audited ref (#362). See §4.
 - **Available lever:** tagging `gogen` out of the default build saves **696 KiB
   (5.4%)** — with a trade-off (see §1).
 
@@ -156,23 +156,42 @@ round order are stored in `data/ab-fib.json` and `data/ab-tak.json`.
 
 ---
 
-## 4. The ratchet — audited state and current state
+## 4. The ratchet — what the audit got wrong
 
-- At the audited ref (`ed4ecc2`), `InitFromLGB` was gated (since #355) in the
-  `pr-fast` + `full` profiles, but pass/fail used only the anchor-normalized
-  **ns/op** ratio. `AllocsPerOp` and `BytesPerOp` were captured but not gated.
-- **Current `main`: fixed by #780 on 2026-09-02.** `bench-ratchet check` now
-  builds a machine-independent global-min bar and calls `compareDeterministic`
-  with a 2% budget for allocs/op and bytes/op, even when the machine has no
-  timing profile. The timing gate remains anchor-normalized and machine-scoped.
+The audit reported that `InitFromLGB` was gated only on the anchor-normalized
+**ns/op** ratio, with `AllocsPerOp` and `BytesPerOp` captured but not gated, and
+concluded that boot was guarded by the less robust of the two mechanisms the
+project had built.
+
+That was wrong at the audited ref itself. `ed4ecc21` already carries, in
+`writeOrCheck`:
+
+```go
+// cmd/bench-ratchet/main.go:412
+if compareDeterministic(machineIndependentBar(baseline), current, allocBudget) > 0 {
+    exit = 1
+}
+```
+
+`compareDeterministic` gates `allocs/op` and `bytes/op` for every benchmark in
+the baseline, `BenchmarkInitFromLGB` included, at `allocBudget = 0.02` — tighter
+than the 5% timing budget, and against a global-min bar across every machine
+profile rather than only the local one. It landed in #362 on 2026-06-30, two
+weeks before `ed4ecc2`. Boot was guarded by both mechanisms, not the weaker one.
+
+The mistake came from reading `compareAndReport`, which handles timing only. The
+deterministic check is a sibling call one level up, in `writeOrCheck`.
+
+The gate does have a weakness, but a different one: `machineIndependentBar` takes
+minima across profiles captured at different commits, tracked in #883.
 
 ---
 
 ## 5. Recommendations
 
-1. **Shipped in #780 (2026-09-02): gate init on allocs/B**, not just the
-   ns-ratio. This now catches the eager-bundling class with deterministic
-   metrics as well as timing.
+1. **Tighten the deterministic bar (#883).** The allocs/B gate already exists and
+   predates this audit (§4); its weakness is that `machineIndependentBar` takes
+   minima across profiles captured at different commits.
 2. **Add a bundle-size + binary-size ratchet.** Boot is guarded now; the *size*
    half isn't a benchmark at all, so the +2.57 MiB Go growth is ungated. By the
    audited ref, the bundle had already crept 228 → 242 KiB.
