@@ -9,6 +9,14 @@
   (testing "a fresh program is not interrupted"
     (is (= false (.isInterrupted (Thread/currentThread))))))
 
+(deftest interrupt-root-scope-refused-test
+  (testing ".interrupt outside with-scope refuses rather than cancelling the process-wide root scope"
+    (let [msg (try (.interrupt (Thread/currentThread)) nil
+                   (catch Exception e (ex-message e)))]
+      (is (string? msg))
+      (is (clojure.string/includes? msg "root scope"))
+      (is (= false (.isInterrupted (Thread/currentThread)))))))
+
 (deftest interrupt-cancels-scope-test
   (testing ".interrupt cancels the current scope and .isInterrupted agrees"
     (with-scope [s]

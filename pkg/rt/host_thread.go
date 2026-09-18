@@ -51,9 +51,13 @@ func (h *hostThread) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, er
 		if len(args) == 0 {
 			// Cancel is terminal for the scope (it does not install a fresh
 			// context generation the way CancelAll does), which is what keeps
-			// isInterrupted true afterwards. Inside with-scope that is bounded;
-			// at the root scope it cancels every tracked goroutine's context for
-			// the rest of the process — what interrupting the main thread means.
+			// isInterrupted true afterwards. Inside with-scope that is bounded.
+			// The root scope is process-wide and shared by every tracked
+			// goroutine, so cancelling it would poison all current and future
+			// work for the rest of the process; refuse instead of doing that.
+			if h.scope == vm.Goroutines {
+				return vm.NIL, fmt.Errorf("java.lang.Thread .interrupt is not supported on the root scope under let-go; call it inside with-scope")
+			}
 			h.scope.Cancel()
 			return vm.NIL, nil
 		}

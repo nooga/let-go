@@ -6808,7 +6808,9 @@ func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
 		}
 		vi++
 	}
-	return vm.String(fmt.Sprintf(fmts, args...)), nil
+	// Java's Formatter ignores surplus arguments; Go would append an
+	// "%!(EXTRA ...)" diagnostic for every slot the scan left unconsumed.
+	return vm.String(fmt.Sprintf(fmts, args[:vi]...)), nil
 }
 
 //lg:native

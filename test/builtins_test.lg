@@ -19,7 +19,11 @@
     (is (= "a\nb" (format "a%nb")))
     (is (= "100%\n" (format "%d%%%n" 100)))
     (is (= "%n" (format "%%n")))
-    (is (= "a\nb" (format "%s%n%s" "a" "b")))))
+    (is (= "a\nb" (format "%s%n%s" "a" "b"))))
+  (testing "format ignores surplus arguments like Java's Formatter"
+    (is (= "\n" (format "%n" 42)))
+    (is (= "a\n" (format "%s%n" "a" "b")))
+    (is (= "plain" (format "plain" 1 2)))))
 
 (deftest re-find-test
   (testing "re-find finds first match"
