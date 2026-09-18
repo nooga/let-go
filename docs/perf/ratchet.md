@@ -161,7 +161,12 @@ The command:
 
 `captured_at_sha` names the newest *surviving* snapshot in the window, which is
 the identity of the profile rather than the sole source of its numbers. The seed
-log prints the window size and how many snapshots contributed.
+log prints the window size and how many snapshots contributed. Every seeded
+entry is stamped with that same identity as its `best_since_sha` /
+`best_since_at`: a deterministic floor with no commit attached is one the
+[deterministic gate](#the-deterministic-gate-allocsop-bytesop) cannot place in
+time, and a tier that later stops reporting would leave an unattributable row
+behind.
 
 Future work (#597, separate) will backfill per-tier v1.8.0 release-reference
 snapshots.
@@ -279,6 +284,31 @@ The default budget is **5%**. Raise it for noisy benchmarks via
 `-budget`. Lower it once you've improved benchmark stability (e.g.
 `-benchtime 5s -count 5`).
 
+### The deterministic gate (allocs/op, bytes/op)
+
+`allocs/op` and `bytes/op` carry no CPU-dependent noise, so they are gated
+separately from timing, at a tight 2% budget, and on every machine — including
+one with no timing profile of its own.
+
+They are a property of **the code at a commit**, not of a machine. That is what
+makes them portable across profiles, and it is also why the reference is **not**
+a minimum across profiles. Each profile is captured at whatever commit its
+machine last ran at, and a tier keeps its last numbers indefinitely once its
+runner stops reporting — so the profiles present at any moment describe several
+different code states. A minimum over them answers "the least anyone has ever
+measured", which is a fact about the fleet's history rather than about any one
+commit, and gates current code against whichever code state happened to allocate
+least.
+
+So for each benchmark the reference is **the entry with the newest provenance
+among the profiles that carry it** — the most recent commit anyone measured it
+at — with ties broken by the minimum, so the bar still ratchets across rows
+measured at the same commit. Provenance is the entry's `best_since_sha` /
+`best_since_at` when it has one, else the profile's `captured_at_sha` /
+`captured_at`; an entry with neither sorts oldest and is the reference only when
+nothing better exists. The reported regression line names the commit the
+reference came from, so a surprising bar can be traced to the run that set it.
+
 ## Running the check on a PR (the `perf` label)
 
 CI runs the A/B on a pull request only when the PR carries the **`perf`**
@@ -390,10 +420,13 @@ run.
 ### `-force`
 
 `go run ./cmd/bench-ratchet -force update` bypasses the ratchet and
-writes current numbers as-is, including any regressions. It replaces the
-measured entries in the current machine's timing profile and copies their
-accepted allocation/byte metrics across existing profiles, because those
-deterministic metrics are gated against the global minimum. Unmeasured entries
+writes current numbers as-is, including any regressions. It replaces the measured
+entries in the current machine's profile, stamped with this run's commit, and
+writes no other profile: the accepted allocation/byte metrics reach the
+[deterministic gate](#the-deterministic-gate-allocsop-bytesop) by being the
+newest measurement of them, so no other tier has to be told. Copying them into
+the other profiles would record one machine's local capture as those tiers'
+stored floor under a commit they never ran. Unmeasured entries
 are retained, so a fast-gate rebaseline cannot erase full-profile history. Use
 only when:
 

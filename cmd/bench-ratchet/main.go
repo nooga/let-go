@@ -413,12 +413,11 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 			die("unknown -format %q (want text / markdown / json)", format)
 		}
 	case "update":
-		// Ratchet semantics are scoped to THIS machine's timing profile: metrics
-		// only move toward faster / fewer-allocs / fewer-bytes, and an M1 run
-		// never tightens an M3 timing bar. -force replaces this timing profile
-		// for measured benchmarks and rebases their machine-independent
-		// deterministic bar across profiles. The six known-unstable b.N=1 suite
-		// variants remain observational only, matching seed-baseline policy.
+		// Ratchet semantics are scoped to THIS machine's profile: metrics only
+		// move toward faster / fewer-allocs / fewer-bytes, an M1 run never
+		// tightens an M3 timing bar, and -force replaces only this profile. The
+		// six known-unstable b.N=1 suite variants remain observational only,
+		// matching seed-baseline policy.
 		current = filterUnstableBenchmarks(current)
 		key := perfdata.MachineKey(current.Machine)
 		existing, err := readBaseline(baselinePath)
@@ -455,8 +454,8 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 				baselinePath, err)
 		}
 		exit := 0
-		// Machine-independent gate: allocs/bytes are deterministic, so check
-		// them against the global-min across ALL profiles — this catches an
+		// Machine-independent gate: allocs/bytes are deterministic, so they are
+		// checked against the newest row any profile carries — catching an
 		// allocation regression on any machine, even one with no timing bar.
 		if compareDeterministic(machineIndependentBar(baseline), current, allocBudget) > 0 {
 			exit = 1
@@ -478,43 +477,25 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 }
 
 // forceRebaseline replaces every measured metric in the current machine's
-// profile and copies the accepted deterministic metrics into every other
-// profile that already has the same benchmark. Unmeasured entries are retained:
-// a fast-gate rebaseline must not erase the full-profile benchmark history.
+// profile with the accepted numbers, stamped with this run's commit. Entries the
+// run did not measure are retained: a fast-gate rebaseline must not erase the
+// full-profile benchmark history.
 //
-// The schema stores allocs/bytes beside machine-specific timing, while the check
-// gate takes their global minimum across all profiles. Without replication, a
-// forced accepted regression would remain pinned by an older profile and
-// `check` would stay permanently red.
+// It writes only this profile. The accepted deterministic metrics become the
+// gate's reference by being the newest measurement of them, which
+// machineIndependentBar selects on its own — so no other profile needs to be
+// told. Copying them into the other profiles would record one machine's local
+// capture as every other tier's stored floor under this run's commit, which is
+// both untrue of those tiers and outside the window discipline their numbers are
+// otherwise held to.
 func forceRebaseline(existing *Baseline, key string, current MachineBaseline) {
 	stampAll(&current)
-	accepted := make(map[string]BenchmarkEntry, len(current.Benchmarks))
-	for name, entry := range current.Benchmarks {
-		accepted[name] = entry
-	}
 	if previous, ok := existing.Machines[key]; ok {
 		for name, entry := range previous.Benchmarks {
 			if _, measured := current.Benchmarks[name]; !measured {
 				current.Benchmarks[name] = entry
 			}
 		}
-	}
-	for profileKey, profile := range existing.Machines {
-		if profileKey == key {
-			continue
-		}
-		for name, accepted := range accepted {
-			entry, ok := profile.Benchmarks[name]
-			if !ok {
-				continue
-			}
-			entry.AllocsPerOp = accepted.AllocsPerOp
-			entry.BytesPerOp = accepted.BytesPerOp
-			entry.BestSinceSHA = current.CapturedAtSHA
-			entry.BestSinceAt = current.CapturedAt
-			profile.Benchmarks[name] = entry
-		}
-		existing.Machines[profileKey] = profile
 	}
 	existing.Machines[key] = current
 }
@@ -1434,35 +1415,95 @@ func canonicalizeBenchmarks(bm map[string]BenchmarkEntry) map[string]BenchmarkEn
 	return out
 }
 
+// entryProvenance returns the commit identity and time the deterministic
+// metrics of one entry were measured at: the entry's own best_since stamp when
+// it has one, else the profile's capture identity.
+//
+// The entry stamp is the more precise of the two — within a profile,
+// ratchetMerge keeps entries whose bar was set at an older commit alongside
+// freshly measured ones, so the profile's captured_at describes the run, not
+// necessarily this number.
+func entryProvenance(prof MachineBaseline, e BenchmarkEntry) (sha, at string) {
+	if e.BestSinceAt != "" || e.BestSinceSHA != "" {
+		return e.BestSinceSHA, e.BestSinceAt
+	}
+	return prof.CapturedAtSHA, prof.CapturedAt
+}
+
 // machineIndependentBar collapses every machine profile into one bar of the
-// DETERMINISTIC metrics (allocs/op, bytes/op) per benchmark, taking the global
-// minimum across profiles. allocs/bytes don't depend on the CPU, so this bar is
-// valid to gate against on any machine — including one with no timing profile.
+// DETERMINISTIC metrics (allocs/op, bytes/op) per benchmark.
+//
+// allocs/op and bytes/op are a property of the CODE at a commit, not of the CPU
+// — which is why they can be gated on any machine, including one with no timing
+// profile. That same fact is why a minimum ACROSS profiles is the wrong
+// reduction. Profiles are captured at whatever commit their machine last ran at,
+// and a tier keeps its last numbers indefinitely once its runner stops
+// reporting, so the profiles present at any moment describe several different
+// code states. A minimum over them answers "the least anyone has ever measured",
+// which is a fact about the fleet's history rather than about any one commit,
+// and gates current code against whichever code state happened to allocate
+// least.
+//
+// So the reference for each benchmark is the entry with the NEWEST provenance
+// among the profiles that carry it — the most recent commit anyone measured it
+// at — with ties broken by the minimum, so the bar still ratchets across rows
+// measured at the same commit. An entry with no provenance at all sorts oldest:
+// it is only the reference when nothing better exists.
+//
+// "Newest" is by the recorded timestamp, not by commit topology — a SHA alone
+// cannot be ordered without the repository, and a baseline is read on machines
+// that may not have the history. Every timestamp this tool writes is
+// time.RFC3339 in UTC, so a string compare orders them.
 func machineIndependentBar(b Baseline) map[string]BenchmarkEntry {
-	bar := map[string]BenchmarkEntry{}
-	for _, prof := range b.Machines {
+	type barEntry struct {
+		entry BenchmarkEntry
+		at    string
+	}
+	best := map[string]barEntry{}
+	for _, key := range profileKeys(b) {
+		prof := b.Machines[key]
 		for name, e := range prof.Benchmarks {
-			if cur, ok := bar[name]; ok {
-				cur.AllocsPerOp = minI(cur.AllocsPerOp, e.AllocsPerOp)
-				cur.BytesPerOp = minI(cur.BytesPerOp, e.BytesPerOp)
-				bar[name] = cur
-			} else {
-				bar[name] = BenchmarkEntry{AllocsPerOp: e.AllocsPerOp, BytesPerOp: e.BytesPerOp}
+			sha, at := entryProvenance(prof, e)
+			cand := barEntry{
+				entry: BenchmarkEntry{
+					AllocsPerOp:  e.AllocsPerOp,
+					BytesPerOp:   e.BytesPerOp,
+					BestSinceSHA: sha,
+					BestSinceAt:  at,
+				},
+				at: at,
+			}
+			cur, ok := best[name]
+			switch {
+			case !ok || cand.at > cur.at:
+				best[name] = cand
+			case cand.at == cur.at:
+				// Same commit: two measurements of one code state, so the
+				// tightest is the honest floor.
+				cur.entry.AllocsPerOp = minI(cur.entry.AllocsPerOp, cand.entry.AllocsPerOp)
+				cur.entry.BytesPerOp = minI(cur.entry.BytesPerOp, cand.entry.BytesPerOp)
+				best[name] = cur
 			}
 		}
+	}
+	bar := make(map[string]BenchmarkEntry, len(best))
+	for name, b := range best {
+		bar[name] = b.entry
 	}
 	return bar
 }
 
 // compareDeterministic gates the machine-independent allocs/op and bytes/op of
-// current against the global-min bar, with allocBudget tolerance. Prints any
-// regressions and returns their count. Runs regardless of whether a timing
-// profile exists for this machine.
+// current against the bar machineIndependentBar selected — the value measured
+// at the newest commit that has each benchmark — with allocBudget tolerance.
+// Prints any regressions and returns their count. Runs regardless of whether a
+// timing profile exists for this machine.
 func compareDeterministic(bar map[string]BenchmarkEntry, current MachineBaseline, budget float64) int {
 	type reg struct {
 		name, metric string
 		base, cur    int64
 		delta        float64
+		sinceSHA     string
 	}
 	var regs []reg
 	names := make([]string, 0, len(current.Benchmarks))
@@ -1481,19 +1522,20 @@ func compareDeterministic(bar map[string]BenchmarkEntry, current MachineBaseline
 				return
 			}
 			if d := float64(c-b) / float64(b); d > budget {
-				regs = append(regs, reg{n, metric, b, c, d})
+				regs = append(regs, reg{n, metric, b, c, d, base.BestSinceSHA})
 			}
 		}
 		check("allocs/op", base.AllocsPerOp, cur.AllocsPerOp)
 		check("bytes/op", base.BytesPerOp, cur.BytesPerOp)
 	}
 	if len(regs) == 0 {
-		fmt.Printf("deterministic (allocs/bytes, machine-independent): OK — within %.0f%% of global min\n", budget*100)
+		fmt.Printf("deterministic (allocs/bytes, machine-independent): OK — within %.0f%% of the newest measured row\n", budget*100)
 		return 0
 	}
-	fmt.Printf("\ndeterministic regressions (machine-independent, > %.0f%% of global min):\n", budget*100)
+	fmt.Printf("\ndeterministic regressions (machine-independent, > %.0f%% of the newest measured row):\n", budget*100)
 	for _, r := range regs {
-		fmt.Printf("  %-55s %-10s %d -> %d  (%+.1f%%)\n", short(r.name, 55), r.metric, r.base, r.cur, r.delta*100)
+		fmt.Printf("  %-55s %-10s %d -> %d  (%+.1f%%)  since %s\n",
+			short(r.name, 55), r.metric, r.base, r.cur, r.delta*100, shortSHA(r.sinceSHA))
 	}
 	return len(regs)
 }
