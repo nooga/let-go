@@ -31,10 +31,12 @@ jobs:
       # binary from GitHub Releases instead of `go install`-ing it through
       # proxy.golang.org, which intermittently drops the HTTP/2 stream
       # mid-download and fails the job (INTERNAL_ERROR received from peer).
+      # No `version:` on purpose -- with it unset the action reads the version
+      # from the go.mod `tool` directive, so go.mod is the only place
+      # golangci-lint is pinned. Setting it here would silently win over go.mod.
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12
           args: --timeout=5m
 
   # Enforce the "no test files at the repo root" guard. The pre-commit hook of
