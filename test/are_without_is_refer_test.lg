@@ -1,0 +1,12 @@
+(ns test.are-without-is-refer-test
+  (:require [test :refer [deftest are testing]]))
+
+;; A namespace that refers `are` but not `is` (the jank suite's predicate files
+;; do exactly this). The one-arity `is` used to expand to a bare `is`, which
+;; only resolves when the caller happened to refer it.
+(deftest are-expands-to-a-qualified-is
+  (are [x y] (= x y)
+    1 1
+    2 2)
+  (testing "nested under testing"
+    (are [x] (pos? x) 1 2 3)))
