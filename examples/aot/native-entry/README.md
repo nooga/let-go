@@ -26,7 +26,10 @@ On a typical machine fib(34) is ~0.07–0.08s native vs ~1.1–1.4s on the lg VM
 - summary line: `2 fns lowered; native entry: Main ✓`
 
 `program.lgb` is owned by the orchestrator (this `build.sh`, or gloat) — not
-by lg-compile — and must sit next to `main.go` for the `//go:embed`.
+by lg-compile — and must sit next to `main.go` for the `//go:embed`. Build it
+with `lg -c out/program.lgb -entry-frame-entry fib/-main fib.lg`, as the script
+does. This leaves the selected top-level entry call out of the bytecode; the
+frame invokes it after replaying the other runtime initialization.
 
 ## Arity / privacy coverage
 
