@@ -1,0 +1,23 @@
+;; Regression fixture for #796: the documented top-level guard must not enter
+;; the program a second time inside an entry-frame binary.
+;;
+;; `(when-not *compiling-aot* (-main))` is the idiom docs/guide/usage.md tells
+;; you to write, and it is exactly the shape that broke. The frame calls the
+;; lowered entry itself, but the guard also passed during main-chunk replay —
+;; *compiling-aot* is false at runtime by design — so the binary ran -main once
+;; on the VM and once natively and printed 42 twice, at a total cost worse than
+;; running the program on the VM alone.
+;;
+;; The frame now replays under rt.RunProgramMainChunkForEntryFrame, which sets
+;; *compiling-aot* for the duration of the replay. The byte-exact .expect below
+;; is one line; restore the bare rt.RunProgramMainChunk call in
+;; pkg/rt/core/ir/passes/entry_frame.lg and this fixture fails with two.
+(ns guardedentry)
+
+(defn bump [a]
+  (+ a 41))
+
+(defn -main []
+  (println (bump 1)))
+
+(when-not *compiling-aot* (-main))

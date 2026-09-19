@@ -231,3 +231,51 @@ func TestRunExecUnitReplayOrderAndMainOnce(t *testing.T) {
 		}
 	})
 }
+
+// TestRunProgramMainChunkForEntryFrameBracketsCompilingAOT pins the #796 fix at
+// the unit level: the replay a native-entry frame performs sees
+// *compiling-aot* set (so the documented top-level guard does not enter the
+// program a second time), and the previous root is back before the frame calls
+// the entry. The end-to-end proof is the guarded_entry fixture under
+// test/native-entry/, which fails with a doubled line if either half regresses.
+func TestRunProgramMainChunkForEntryFrameBracketsCompilingAOT(t *testing.T) {
+	if _, err := BootCore(); err != nil {
+		t.Fatalf("BootCore: %v", err)
+	}
+	v := CoreNS.LookupLocal(vm.Symbol("*compiling-aot*"))
+	if v == nil {
+		t.Fatal("*compiling-aot* missing from core")
+	}
+	before := v.Root()
+
+	const nsName = "entryframeguard"
+	nsMu.Lock()
+	delete(nsRegistry, nsName)
+	nsMu.Unlock()
+	_ = DefNSBare(nsName)
+
+	var seen vm.Value
+	probe, err := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+		seen = v.Deref()
+		return vm.NIL, nil
+	})
+	if err != nil {
+		t.Fatalf("wrap probe: %v", err)
+	}
+
+	// MainChunk deliberately absent from NSOrder so the replay actually runs;
+	// that is the shape `lg -c` produces (empty NS table).
+	chunk := mkLogChunk(probe, vm.String("replay"))
+	unit := &bytecode.ExecUnit{MainChunk: chunk}
+
+	if err := RunProgramMainChunkForEntryFrame(unit); err != nil {
+		t.Fatalf("RunProgramMainChunkForEntryFrame: %v", err)
+	}
+
+	if seen != vm.TRUE {
+		t.Fatalf("*compiling-aot* during replay = %v, want true — the guard would run the entry twice", seen)
+	}
+	if after := v.Root(); after != before {
+		t.Fatalf("*compiling-aot* after replay = %v, want the prior root %v", after, before)
+	}
+}

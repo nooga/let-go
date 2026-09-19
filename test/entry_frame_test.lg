@@ -66,11 +66,15 @@
   ;; main chunk — after SetCommandLineArgs (top-level forms see real argv)
   ;; and after LoadProgramNamespaces (dependency replay order + the early
   ;; return that keeps top-level side effects running exactly once).
+  ;;
+  ;; The frame calls ...ForEntryFrame, not the bare RunProgramMainChunk: the
+  ;; frame owns the entry call, so the replay runs with *compiling-aot* set and
+  ;; the documented guard does not enter the program twice (#796).
   (let [raw  (ef/find-program-entry '[(defn -main [] 1)])
         e    (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
                                          :needs-error? true :arity 0}})
         src  (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})
-        i-mc (str/index-of src "rt.RunProgramMainChunk(unit)")]
+        i-mc (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")]
     (is (some? i-mc) "frame must replay the program main chunk")
     (when i-mc
       (let [i-cl (str/index-of src "rt.SetCommandLineArgs(")
@@ -79,9 +83,9 @@
         (is (< i-cl i-ns) "*command-line-args* must be published before replay")
         (is (< i-ns i-mc) "main-chunk replay must follow LoadProgramNamespaces")
         (is (< i-mc i-en) "main-chunk replay must precede the entry call")))
-    (is (= 1 (count-lines-with src "rt.RunProgramMainChunk(unit)"))
+    (is (= 1 (count-lines-with src "rt.RunProgramMainChunkForEntryFrame(unit)"))
         "emit the replay call exactly once")
-    (is (str/includes? src "if err := rt.RunProgramMainChunk(unit); err != nil")
+    (is (str/includes? src "if err := rt.RunProgramMainChunkForEntryFrame(unit); err != nil")
         "replay uses the existing exit-on-err shape")))
 
 (deftest vm-fallback-frame-also-replays-main-chunk
@@ -90,8 +94,8 @@
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})]
     (is (false? (:lowered? e)))
     (is (< (str/index-of src "rt.LoadProgramNamespaces(unit)")
-           (str/index-of src "rt.RunProgramMainChunk(unit)")))
-    (is (< (str/index-of src "rt.RunProgramMainChunk(unit)")
+           (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")))
+    (is (< (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")
            (str/index-of src "rt.InvokeProgramEntry(")))))
 
 (deftest emit-private-bridge
