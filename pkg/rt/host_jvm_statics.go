@@ -123,13 +123,28 @@ func installJVMStatics(ns *vm.Namespace) {
 		if !ok {
 			return vm.NIL, fmt.Errorf("parseLong expects a string")
 		}
-		// strconv.Atoi (returns int) + MakeInt matches let-go's own parse-long
-		// and avoids an int64->int conversion (CodeQL "incorrect conversion").
-		n, err := strconv.Atoi(string(s))
+		// ParseInt(..., 64) + MakeInt64 keeps the full 64-bit range on hosts
+		// where Go's int is 32 bits (TinyGo's wasm target). Atoi returns int
+		// and silently lost that range there. There is no narrowing conversion
+		// here, so CodeQL's "incorrect conversion" check stays satisfied.
+		n, err := strconv.ParseInt(string(s), 10, 64)
 		if err != nil {
 			return vm.NIL, err
 		}
-		return vm.MakeInt(n), nil
+		return vm.MakeInt64(n), nil
+	})
+	parseInteger := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("parseInt expects a string")
+		}
+		// java.lang.Integer/parseInt always enforces a signed 32-bit range,
+		// even when the host's int can hold a larger value.
+		n, err := strconv.ParseInt(string(s), 10, 32)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.MakeInt64(n), nil
 	})
 	parseFloat := mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		s, ok := vs[0].(vm.String)
@@ -143,7 +158,7 @@ func installJVMStatics(ns *vm.Namespace) {
 		return vm.Float(f), nil
 	})
 	defStaticNS("Long").Def("parseLong", parseLong)
-	defStaticNS("Integer").Def("parseInt", parseLong)
+	defStaticNS("Integer").Def("parseInt", parseInteger)
 	defStaticNS("Float").Def("parseFloat", parseFloat)
 	defStaticNS("Double").Def("parseDouble", parseFloat)
 
@@ -294,7 +309,7 @@ func installMathStatics() {
 			}
 			if i, ok := vs[0].(vm.Int); ok {
 				if int64(i) < 0 {
-					return vm.MakeInt(int(-int64(i))), nil
+					return vm.MakeInt64(-int64(i)), nil
 				}
 				return i, nil
 			}
