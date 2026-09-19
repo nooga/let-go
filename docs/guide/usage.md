@@ -92,8 +92,8 @@ emulation via xterm.js: ANSI colors, cursor positioning, raw keyboard input.
 
 ## Compile-time vars
 
-`*compiling-aot*` is `true` during `-c`/`-b`/`-w` compilation and `false` at
-runtime, useful for keeping side effects out of compile time:
+`*compiling-aot*` is `true` during `-c`/`-b`/`-w` compilation and `false` during
+ordinary runtime execution, useful for keeping side effects out of compile time:
 
 ```clojure
 (defn -main []
@@ -102,6 +102,13 @@ runtime, useful for keeping side effects out of compile time:
 (when-not *compiling-aot*
   (-main))
 ```
+
+It is also `true` while an AOT native-entry binary (`lg-compile
+--entry-frame`) replays the program's top level. That frame calls the entry
+itself, so the guard above skips the top-level call instead of letting the
+program run twice — once on the VM, then once natively. Under `lg`,
+`lg-runtime` and `-b` bundles the guarded call is the entry and runs as
+written.
 
 `*in-wasm*` is `true` when running inside a WASM build.
 

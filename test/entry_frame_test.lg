@@ -53,7 +53,7 @@
     (is (str/includes? src "prog.Main(ec, argv...)"))
     (is (str/includes? src "rt.BootCore()"))
     (is (str/includes? src "defer rt.ShutdownAllPods()"))
-    (is (str/includes? src "rt.LoadProgramNamespaces(unit)"))
+    (is (str/includes? src "rt.LoadProgramNamespacesForEntryFrame(unit)"))
     (is (str/includes? (ef/entry-summary-line 2 e) "Main ✓"))))
 
 (defn- count-lines-with [src needle]
@@ -66,22 +66,26 @@
   ;; main chunk — after SetCommandLineArgs (top-level forms see real argv)
   ;; and after LoadProgramNamespaces (dependency replay order + the early
   ;; return that keeps top-level side effects running exactly once).
+  ;;
+  ;; The frame calls ...ForEntryFrame, not the bare RunProgramMainChunk: the
+  ;; frame owns the entry call, so the replay runs with *compiling-aot* set and
+  ;; the documented guard does not enter the program twice (#796).
   (let [raw  (ef/find-program-entry '[(defn -main [] 1)])
         e    (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
                                          :needs-error? true :arity 0}})
         src  (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})
-        i-mc (str/index-of src "rt.RunProgramMainChunk(unit)")]
+        i-mc (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")]
     (is (some? i-mc) "frame must replay the program main chunk")
     (when i-mc
       (let [i-cl (str/index-of src "rt.SetCommandLineArgs(")
-            i-ns (str/index-of src "rt.LoadProgramNamespaces(unit)")
+            i-ns (str/index-of src "rt.LoadProgramNamespacesForEntryFrame(unit)")
             i-en (str/index-of src "prog.Main(ec)")]
         (is (< i-cl i-ns) "*command-line-args* must be published before replay")
         (is (< i-ns i-mc) "main-chunk replay must follow LoadProgramNamespaces")
         (is (< i-mc i-en) "main-chunk replay must precede the entry call")))
-    (is (= 1 (count-lines-with src "rt.RunProgramMainChunk(unit)"))
+    (is (= 1 (count-lines-with src "rt.RunProgramMainChunkForEntryFrame(unit)"))
         "emit the replay call exactly once")
-    (is (str/includes? src "if err := rt.RunProgramMainChunk(unit); err != nil")
+    (is (str/includes? src "if err := rt.RunProgramMainChunkForEntryFrame(unit); err != nil")
         "replay uses the existing exit-on-err shape")))
 
 (deftest vm-fallback-frame-also-replays-main-chunk
@@ -89,9 +93,9 @@
         e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "app")
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})]
     (is (false? (:lowered? e)))
-    (is (< (str/index-of src "rt.LoadProgramNamespaces(unit)")
-           (str/index-of src "rt.RunProgramMainChunk(unit)")))
-    (is (< (str/index-of src "rt.RunProgramMainChunk(unit)")
+    (is (< (str/index-of src "rt.LoadProgramNamespacesForEntryFrame(unit)")
+           (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")))
+    (is (< (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")
            (str/index-of src "rt.InvokeProgramEntry(")))))
 
 (deftest emit-private-bridge
@@ -243,7 +247,7 @@
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})
         boot-i (index-of-substr src "rt.BootCore()")
         args-i (index-of-substr src "rt.SetCommandLineArgs(os.Args[1:])")
-        load-i (index-of-substr src "rt.LoadProgramNamespaces(unit)")]
+        load-i (index-of-substr src "rt.LoadProgramNamespacesForEntryFrame(unit)")]
     (is (>= boot-i 0))
     (is (>= args-i 0))
     (is (>= load-i 0))
