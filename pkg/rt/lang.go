@@ -2818,11 +2818,13 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("parse-int expected String")
 		}
-		i, err := strconv.Atoi(string(s))
+		// ParseInt(..., 64), not Atoi: Go's int is 32 bits on TinyGo's wasm
+		// target, where Atoi reported valid 64-bit literals as unparseable.
+		i, err := strconv.ParseInt(string(s), 10, 64)
 		if err != nil {
 			return vm.NIL, nil // Clojure returns nil for unparseable
 		}
-		return vm.MakeInt(i), nil
+		return vm.MakeInt64(i), nil
 	})
 
 	// compareValues delegates to the vm package's DefaultCompare
@@ -8872,7 +8874,7 @@ func CoreHashf(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	return vm.MakeInt(int(vm.HashValue(vs[0]))), nil
+	return vm.MakeInt64(int64(vm.HashValue(vs[0]))), nil
 }
 
 //lg:native
