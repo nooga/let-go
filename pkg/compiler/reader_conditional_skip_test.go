@@ -34,6 +34,15 @@ func TestReaderConditionalSkipsGnarlyBranches(t *testing.T) {
 		"#?(:clj #_ x :default 13) 14":                {vm.Int(13), vm.Int(14)}, // discard
 		"#?(:clj (a \\) b) :default 15) 16":           {vm.Int(15), vm.Int(16)}, // char literal ) inside list
 		"#?(:clj (a ; )\n b) :default 17) 18":         {vm.Int(17), vm.Int(18)}, // comment ) inside list
+		// `#` is not a terminating macro here, so it can sit INSIDE a symbol
+		// (auto-gensym foo#) and `##Inf` is a symbolic-value atom. The skipper
+		// must recurse on `#` only where it begins a token, or the following
+		// cases desync at the `]`.
+		"#?(:clj [foo#] :default 19) 20":    {vm.Int(19), vm.Int(20)}, // auto-gensym symbol inside a vector
+		"#?(:clj [foo#bar] :default 21) 22": {vm.Int(21), vm.Int(22)}, // # mid-symbol
+		"#?(:clj [##Inf] :default 23) 24":   {vm.Int(23), vm.Int(24)}, // ##Inf inside a vector
+		"#?(:clj ##NaN :default 25) 26":     {vm.Int(25), vm.Int(26)}, // ##NaN as the branch value itself
+		"#?(:clj ['#{1 2}] :default 27) 28": {vm.Int(27), vm.Int(28)}, // quote prefix, then a real set dispatch
 	}
 	for p, e := range cases {
 		r := NewLispReader(strings.NewReader(p), "<reader>")
