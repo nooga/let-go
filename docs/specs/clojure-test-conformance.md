@@ -131,6 +131,8 @@ The work lands as three pull requests, each independently valuable and each leav
 
 Slice 2 depends on slice 1 for `:file` and `:line`. Slice 3 depends on slice 2 for the `report` seam. The Definition of Done subsections map onto the slices by the section numbers above.
 
+Section 13's `test/tap/tap-example.lg` carries `^:expected-failure` (Section 1.7). Summary mode has no per-var attribution and cannot honor that marker (Section 12.2), so this one file ships with Slice 3, once the bridge exists, rather than with the rest of Slice 2's migration.
+
 ---
 
 ## 2. Architecture
@@ -441,9 +443,9 @@ Granularity is per supported list/cons form. An `ERROR` resolves to the throwing
 
 A dynamic var `*file*` in `clojure.core` is bound to the path being loaded during `load`, `require`, and the CLI file runner, and to `"NO_SOURCE_PATH"` at the REPL, matching the Clojure 1.12.5 REPL oracle. The compiler already knows the path via `SetSource`; this exposes it.
 
-### 4.4 `def` Metadata
+### 4.4 `def` Metadata (existing)
 
-`def` attaches `:ns`, `:name`, and, when the def form has a `FormSource` entry, `:file`, `:line`, and `:column` to the var.
+No change. `def` already attaches `:ns`, `:name`, `:file`, `:line`, and `:column` to the var — the position keys when the def form has a `FormSource` entry — so the test port's namespace grouping and source-position reporting (Section 3.4) need no new runtime work here.
 
 ### 4.5 `*out*` Handle Coercion
 
@@ -461,7 +463,7 @@ No change. `catch-matches?` in `pkg/rt/exceptions.go` (#476) already dispatches 
 
 Go code can push a binding of a let-go var for the duration of a call. `with-out-str*` already does this via `PushBinding` and a deferred `PopBinding` on the caller's `ExecContext`. Expose the pair as `rt.WithBinding(ec, v, value, fn)` so the harness bridge (Section 12.3) avoids reaching into `ExecContext` internals. The helper pops the binding on every exit path, including panics.
 
-### 4.9 `clojure.string/split` Conformance
+### 4.9 `clojure.string/split` Conformance (existing)
 
 Clojure's `clojure.string/split` is a thin wrapper over `java.util.regex.Pattern.split`, and `clojure.test.tap` calls `String.split` on the same path. Both are the one-argument form, which the Javadoc defines as the two-argument form with a limit of zero:
 
@@ -469,7 +471,7 @@ Clojure's `clojure.string/split` is a thin wrapper over `java.util.regex.Pattern
 >
 > — `java.lang.String#split(String, int)`, https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html#split(java.lang.String,int)
 
-The current let-go `split` in `pkg/rt/lang.go` wraps Go's `strings.Split`/`Regexp.Split`, which keep trailing empty strings, returns a list rather than a vector, and has no limit arity. It is brought to Clojure's contract:
+No change. `clojure.string/split` in `pkg/rt/core/string.lg` already meets Clojure's contract:
 
 ```
 FUNCTION string_split(s : String, re : Regex, limit : Integer = 0) -> Vector<String>:
@@ -480,7 +482,7 @@ FUNCTION string_split(s : String, re : Regex, limit : Integer = 0) -> Vector<Str
     RETURN vector(fields)                            -- limit < 0 keeps every field
 ```
 
-A leading empty field is kept whenever the first match is at index zero and the match is non-empty, exactly as Java does. Only the pattern form is specified; whether a string delimiter continues to be accepted is unchanged by this document.
+A leading empty field is kept whenever the first match is at index zero and the match is non-empty, exactly as Java does. `core/split`, the raw primitive `string_split` calls in `pkg/rt/lang.go`, is a different contract that stays as it is: it returns a list rather than a vector, and its own optional limit argument is Go's `SplitN` count, not Java's; `string_split` is what already brings the public function to Clojure's contract, vectorizing and applying the limit-zero rule on top. Only the pattern form is specified; whether a string delimiter continues to be accepted is unchanged by this document. The evidence below guards this existing behavior against regression rather than proving new work.
 
 `clojure.string/split` returns a vector and follows the limit-zero rule. [R-string-split-limit-zero]
 
@@ -514,7 +516,7 @@ IF err != nil:
 
 `<fn>` is the callee's name and `<kind>` is `CALL_LG` for a direct Go call to a lowered function, known statically at emission, or, for a dynamic call through `rt.InvokeValue*`, the callee's origin read at the wrap (LG-origin or native-origin, below).
 
-**Specialized opcodes wrap on the error path too.** `OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_INC`, the bit operations (`OP_BIT_AND`, `OP_BIT_OR`, `OP_BIT_XOR`, `OP_BIT_AND_NOT`, `OP_BIT_SHIFT_LEFT`, `OP_BIT_SHIFT_RIGHT`, `OP_BIT_NOT`), and the comparisons (`OP_LT`, `OP_LTE`, `OP_GT`, `OP_GTE`) are fast paths the compiler emits for a known binary call to a core arithmetic/comparison native, avoiding `NativeFn.Invoke`, interface boxing, and `RecoverPanic` (`pkg/vm/vm.go`). Today, on failure, each calls `f.handleError` directly with the bare error from `checkedAddInt`/`checkedSubInt`/`checkedMulInt`, `errIntOverflow`, `errBitOpType`, or the shared `NumAdd`/`NumSub`/`NumMul`/`NumLt`/`NumLe`/`NumGt`/`NumGe` helpers, without going through `wrapCallErr` first, so `frames_of` sees a kind-less host error and produces no frame for that link. The design adds the same wrap `wrapCallErr` already gives a native call: before `f.handleError` runs, the opcode's error path wraps the error in a `CALL_NATIVE` link named for the operator it specializes (`+`, `-`, `*`, `inc`, `<`, `bit-and`, ...) at the form's own `SourceInfo` (Section 4.2), exactly as a call to that operator would have. The lowered-Go backend's emitter wraps its numeric-op helper's error path the same way, so a specialized-operation failure produces the identical first frame on both backends.
+**Specialized opcodes wrap on the error path too.** The rule covers every specialized opcode whose VM error path reports an error without going through a call: fast paths the compiler emits for a known binary or unary call to a core arithmetic/comparison native, avoiding `NativeFn.Invoke`, interface boxing, and `RecoverPanic` (`pkg/vm/vm.go`). `OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_INC`, `OP_DEC`, the unchecked arithmetic ops (`OP_UNCHECKED_ADD`, `OP_UNCHECKED_SUB`, `OP_UNCHECKED_MUL`), the bit operations (`OP_BIT_AND`, `OP_BIT_OR`, `OP_BIT_XOR`, `OP_BIT_AND_NOT`, `OP_BIT_SHIFT_LEFT`, `OP_BIT_SHIFT_RIGHT`, `OP_UNSIGNED_BIT_SHIFT_RIGHT`, `OP_BIT_NOT`), and the comparisons (`OP_LT`, `OP_LTE`, `OP_GT`, `OP_GTE`) are examples, not the whole list. Today, on failure, each calls `f.handleError` directly with the bare error from `checkedAddInt`/`checkedSubInt`/`checkedMulInt`, `errIntOverflow`, `errBitOpType`, or the shared `NumAdd`/`NumSub`/`NumMul`/`NumLt`/`NumLe`/`NumGt`/`NumGe`/`numUnchecked` helpers, without going through `wrapCallErr` first, so `frames_of` sees a kind-less host error and produces no frame for that link. The design adds the same wrap `wrapCallErr` already gives a native call: before `f.handleError` runs, the opcode's error path wraps the error in a `CALL_NATIVE` link named for the operator it specializes (`+`, `-`, `*`, `inc`, `dec`, `unchecked-add`, `<`, `bit-and`, `unsigned-bit-shift-right`, ...) at the form's own `SourceInfo` (Section 4.2), exactly as a call to that operator would have. The lowered-Go backend's emitter wraps its numeric-op helper's error path the same way, so a specialized-operation failure produces the identical first frame on both backends.
 
 **`throw` is an ordinary call on both backends.** `(throw ...)` has no dedicated instruction or IR op on either backend: the reader and the IR builder resolve `throw` as an ordinary symbol, and the compiler and `lower_go.lg` each lower a call to it exactly like a call to any other native. The wrap above already covers it. Because `throw` is a hand-written native (`CoreThrowf`, `pkg/rt/lang.go`) with no `SourceInfo`, its call-site link is `CALL_NATIVE`, `fn = "throw"`, positioned at the throw form — the same rule Section 5.2(2) gives for `nth`. A throw caught in the same function therefore still has its throw form as the innermost frame, with no separate mechanism needed: the bytecode VM already wraps the native's error at `OP_INVOKE` before the enclosing frame's handler runs (`wrapCallErr`), and Section 4.2 is what makes the position resolved there the throw form's own rather than its last argument's.
 
@@ -1289,12 +1291,14 @@ FUNCTION classify_loaded(initial_ns, before) -> Loaded:
         RETURN Loaded(LOAD_ONLY, [])       -- no namespace gained a test; any assertions ran at load time
     RETURN Loaded(TESTS, touched)
 
-FUNCTION expected_failures(namespaces) -> Integer:
-    -- added: count of vars, across `namespaces`, whose metadata carries
-    -- :expected-failure true. Walks the same ns-interns + meta path as
-    -- test_snapshot; needs no new discovery mechanism.
+FUNCTION any_expected_failure(namespaces) -> Boolean:
+    -- added: true when any var, across `namespaces`, carries :expected-failure
+    -- true. Walks the same ns-interns + meta path as test_snapshot; needs no
+    -- new discovery mechanism. A summary has no per-var attribution (below),
+    -- so this boolean is all the summary path can ever know about the marker:
+    -- whether one is present, not which var or how many times it failed.
 
-FUNCTION run_file_tests(path) -> Boolean:
+FUNCTION run_file_tests(t, path) -> Boolean:
     initial_ns = CurrentNS       -- the harness resets *ns* to clojure.core before every file (test/language_test.go)
     before = test_snapshot()
     load_error = load_file(path)
@@ -1303,11 +1307,14 @@ FUNCTION run_file_tests(path) -> Boolean:
         Loaded(STRAY_DEFTEST, _): FAIL file with "deftest outside a namespace"
         Loaded(LOAD_ONLY, _):     RETURN true
         Loaded(TESTS, namespaces):
+            IF any_expected_failure(namespaces):                 -- added
+                SKIP file with "expected-failure requires the report bridge"   -- t.Skip; nothing is run
             -- Step 2: run every touched namespace through the public API, one call
             summary, run_error = invoke(test, "run-tests", namespaces...) -- rt.LookupVar + rt.InvokeValue
             IF run_error IS NOT None: FAIL file with copied error text
-            expected = expected_failures(namespaces)   -- added
-            RETURN (summary.fail + summary.error) == expected
+            ok, check_error = invoke(test, "successful?", summary)     -- rt.LookupVar + rt.InvokeValue
+            IF check_error IS NOT None: FAIL file with copied error text
+            RETURN ok
 
 -- Behavior:
 --   - The harness compiles no source strings.
@@ -1351,10 +1358,14 @@ FUNCTION run_file_tests(path) -> Boolean:
 --   - Cost: the snapshot walks every namespace's interns once before each file.
 --     It runs on the test path only.
 --   - A `run-tests` summary carries no per-var attribution, so `run_file_tests` cannot
---     tell which var produced a `:fail` or `:error`. It accepts any combination: the
---     file passes when `fail + error` equals the number of `:expected-failure` vars
---     across the touched namespaces, however that total is reached. The report bridge
---     (12.3), which does see every event's originating var, is exact.
+--     tell which var produced a `:fail` or `:error`, and so cannot honor
+--     `:expected-failure`. An unmarked file keeps the original rule,
+--     `(successful? summary)`. A file whose touched namespaces hold any marked var is
+--     skipped through `t.Skip` with `expected-failure requires the report bridge`, and
+--     none of its tests run: a verdict built from aggregate counts would be a guess,
+--     and handing the file to the bridge from here would load it a second time and
+--     repeat its load-time effects. Only the bridge (Section 12.3), which sees each
+--     event's originating var, runs marked files.
 ```
 
 ### 12.3 Fast Follow: The Report Bridge
@@ -1384,7 +1395,6 @@ ENUM TerminalKind: NORMAL, INVOKE_ERROR, PANIC, ABORTED, CANCELLED
 
 RECORD Terminal:
     kind        : TerminalKind
-    successful  : Boolean
     summary     : copied integer fields | None
     error_text  : String
     panic_text  : String
@@ -1428,13 +1438,18 @@ FUNCTION bridge_report(ec, events, cancel) -> NativeFn:
 RECORD ConsumerState:
     protocol_error : ProtocolError | None
     expected_sequence : UInt64
+    all_vars_ok : Boolean       -- added: whether every var scope closed so far matched its
+                                -- marker — an unmarked var that saw no :fail/:error, or a
+                                -- marked one that saw at least one — and no :fail/:error has
+                                -- arrived outside any var scope. Starts true; consume_scope
+                                -- and consume_events clear it, never set it back to true.
 
 FUNCTION protocol_fault(state, events, text):
     IF state.protocol_error IS None: state.protocol_error = ProtocolError(text)
     drain(events)                              -- read until the sole producer closes
 
 FUNCTION consume_scope(sub : testing.T, begin : BridgeEnvelope, events, state):
-    saw_failure = false        -- added: whether an expected-failure var actually failed
+    saw_failure = false        -- whether this scope has seen at least one :fail/:error event
     FOR EACH envelope IN events:
         IF envelope.sequence != state.expected_sequence++:
             protocol_fault(state, events, "non-contiguous event sequence")
@@ -1444,23 +1459,30 @@ FUNCTION consume_scope(sub : testing.T, begin : BridgeEnvelope, events, state):
                 IF envelope.parent_scope_id != begin.scope_id:
                     protocol_fault(state, events, "invalid nested scope")
                     RETURN
+                -- A nested scope is its own var: consume_scope recurses with a fresh
+                -- saw_failure and decides that inner var's outcome on its own END_TEST_VAR,
+                -- below. Its :fail/:error events carry the inner scope_id, never this one's,
+                -- so they never reach this loop's FAIL/ERROR arm and never count against
+                -- the outer var.
                 sub.Run(envelope.qualified_name,
                         fn(child): consume_scope(child, envelope, events, state))
             FAIL, ERROR:
                 IF envelope.scope_id != begin.scope_id:
                     protocol_fault(state, events, "event attributed to wrong scope")
                     RETURN
-                IF begin.expected_failure:                              -- added
+                saw_failure = true                                      -- added: for every scope, marked or not
+                IF begin.expected_failure:
                     sub.Log("expected failure: " + envelope.failure_text)
-                    saw_failure = true
                 ELSE:
                     sub.Error(envelope.failure_text)   -- text is never a printf format
             END_TEST_VAR:
                 IF envelope.scope_id != begin.scope_id:
                     protocol_fault(state, events, "scope ended out of order")
                     RETURN
-                IF begin.expected_failure AND NOT saw_failure:          -- added
-                    sub.Error("expected failure passed")
+                IF begin.expected_failure != saw_failure:                -- added: marked but clean,
+                    state.all_vars_ok = false                             -- or unmarked but failed
+                    IF begin.expected_failure:
+                        sub.Error("expected failure passed")
                 RETURN
             PASS:
                 IF envelope.scope_id != begin.scope_id:
@@ -1474,50 +1496,55 @@ FUNCTION consume_scope(sub : testing.T, begin : BridgeEnvelope, events, state):
     IF state.protocol_error IS None:
         state.protocol_error = ProtocolError("event stream closed before end-test-var")
 
-FUNCTION consume_events(t : testing.T, events) -> ProtocolError | None:
-    -- A protocol mismatch is recorded once and switches to drain mode. The
-    -- consumer never returns early and strands an unbuffered producer.
-    state = ConsumerState(expected_sequence = 0)
+FUNCTION consume_events(t : testing.T, events) -> ConsumerState:
+    -- Returns the whole state, not just the protocol error: the caller reads
+    -- both state.protocol_error and state.all_vars_ok off it (below) to decide
+    -- the file's result, since this is the side of the bridge that sees which
+    -- var each event belongs to. A protocol mismatch is recorded once and
+    -- switches to drain mode. The consumer never returns early and strands an
+    -- unbuffered producer.
+    state = ConsumerState(expected_sequence = 0, all_vars_ok = true)
     FOR EACH envelope IN events:
         IF envelope.sequence != state.expected_sequence++:
             protocol_fault(state, events, "non-contiguous event sequence")
-            RETURN state.protocol_error
+            RETURN state
         CASE envelope.kind:
             BEGIN_TEST_NS:
                 IF envelope.scope_id IS NOT None:
                     protocol_fault(state, events, "namespace began inside a var scope")
-                    RETURN state.protocol_error
+                    RETURN state
                 t.Log(envelope.default_text)
             BEGIN_TEST_VAR:
                 IF envelope.parent_scope_id IS NOT None:
                     protocol_fault(state, events, "top-level var has a parent scope")
-                    RETURN state.protocol_error
+                    RETURN state
                 t.Run(envelope.qualified_name,
                       fn(sub): consume_scope(sub, envelope, events, state))
             FAIL, ERROR:
                 IF envelope.scope_id IS NOT None:
                     protocol_fault(state, events, "assertion attributed outside active scope")
-                    RETURN state.protocol_error
+                    RETURN state
+                state.all_vars_ok = false       -- added: no var scope to mark this expected
                 t.Error(envelope.failure_text)  -- assertion emitted directly by test-ns-hook
             PASS:
                 IF envelope.scope_id IS NOT None:
                     protocol_fault(state, events, "pass attributed outside active scope")
-                    RETURN state.protocol_error
+                    RETURN state
             END_TEST_NS, SUMMARY:
                 IF envelope.scope_id IS NOT None:
                     protocol_fault(state, events, "top-level event has a var scope")
-                    RETURN state.protocol_error
+                    RETURN state
                 t.Log(envelope.default_text)
             END_TEST_VAR:
                 protocol_fault(state, events, "end-test-var without matching begin")
-                RETURN state.protocol_error
+                RETURN state
             ELSE:
                 IF envelope.scope_id IS NOT None:
                     protocol_fault(state, events, "top-level event has a var scope")
-                    RETURN state.protocol_error
+                    RETURN state
                 t.Log(envelope.default_text)
-        IF state.protocol_error IS NOT None: RETURN state.protocol_error
-    RETURN state.protocol_error
+        IF state.protocol_error IS NOT None: RETURN state
+    RETURN state
 
 FUNCTION run_file_tests_bridged(t, path) -> Boolean:
     events = new unbuffered Channel<BridgeEnvelope>
@@ -1554,29 +1581,29 @@ FUNCTION run_file_tests_bridged(t, path) -> Boolean:
                         terminal = Terminal(INVOKE_ERROR, error_text = "deftest outside a namespace")
                         RETURN
                     Loaded(LOAD_ONLY, _):
-                        terminal = Terminal(NORMAL, successful = true, summary = None)   -- load-only: assertions ran at load time
+                        terminal = Terminal(NORMAL, summary = None)   -- load-only: assertions ran at load time
                         RETURN
                     Loaded(TESTS, namespaces):
                         summary, run_error = invoke(test, "run-tests", namespaces...)
                         IF run_error IS NOT None:
                             terminal = Terminal(INVOKE_ERROR, error_text = copy_text(run_error))
                             RETURN
-                        expected = expected_failures(namespaces)   -- added: Section 12.2
-                        -- Copy and evaluate while still on the runner ExecContext.
-                        terminal = Terminal(NORMAL,
-                                            summary = copy_summary(summary),
-                                            successful = (summary.fail + summary.error) == expected)
+                        -- Copy while still on the runner ExecContext. The summary rides on the
+                        -- Terminal for display only; the file's result comes from the per-var
+                        -- outcomes the consumer already saw (Step 2), never from comparing this
+                        -- summary against a count of marked vars.
+                        terminal = Terminal(NORMAL, summary = copy_summary(summary))
         CATCH bridge_cancelled:
             terminal = Terminal(CANCELLED)
 
     -- Step 2: this goroutine performs only testing.T calls and string handling.
     DEFER close(cancel)
-    protocol_error = consume_events(t, events)     -- always drains to close
+    state = consume_events(t, events)              -- always drains to close
     terminal = receive(done)                       -- exactly one terminal
-    protocol_failed = protocol_error IS NOT None
-    IF protocol_failed: t.Error(protocol_error.text)
+    protocol_failed = state.protocol_error IS NOT None
+    IF protocol_failed: t.Error(state.protocol_error.text)
     CASE terminal.kind:
-        NORMAL:       RETURN terminal.successful AND NOT protocol_failed
+        NORMAL:       RETURN state.all_vars_ok AND NOT protocol_failed
         INVOKE_ERROR: t.Error(terminal.error_text); RETURN false
         PANIC:        t.Error(terminal.panic_text + "\n" + terminal.go_stack); RETURN false
         ABORTED:      t.Error("let-go runner exited without a result"); RETURN false
@@ -1598,14 +1625,24 @@ FUNCTION run_file_tests_bridged(t, path) -> Boolean:
 --     NORMAL terminal with no summary, which the NORMAL arm below accepts.
 --   - The bridge increments counters itself, exactly as default methods and
 --     tap-report do, since binding `report` replaces the methods that would
---     otherwise count. `terminal.successful` and the per-var Error calls agree by
---     construction: both compare `fail + error` against the same `expected_failures`
---     count (Section 12.2), so a file where every marked var failed and no other
---     var did produces a `successful` Terminal and no `sub.Error` from any subtest.
+--     otherwise count.
+--   - The consumer, not the runner, decides the file's result. `state.all_vars_ok`
+--     starts true and `consume_scope` clears it whenever a var scope's outcome does
+--     not match its marker — an unmarked var that failed, or a marked var that did
+--     not — and `consume_events` clears it for a `:fail`/`:error` with no open var
+--     scope. Two marked vars are independent: one that fails twice and one that
+--     never fails yields `all_vars_ok = false` (the second reports "expected
+--     failure passed"), even though the file's total `fail + error` count equals
+--     its marked-var count; one marked var failing twice on its own yields
+--     `all_vars_ok = true`, even though `fail + error` (2) exceeds the marked-var
+--     count (1). The Terminal's summary is for display only; `run_file_tests_bridged`
+--     never compares it against a count of marked vars.
 --   - The bridge does not wrap printing in with-test-out. testing.T owns the output.
 --   - Nested BEGIN/END pairs receive explicit scope IDs. A composed deftest opens
 --     a nested Go subtest; its END returns only from that matching recursive scope,
---     so later outer events stay attributed to the outer subtest.
+--     so later outer events stay attributed to the outer subtest, and a nested var's
+--     own `:fail`/`:error` events count only toward that nested var's own outcome,
+--     never the outer var's.
 --   - The let-go goroutine holds the ExecContext for the whole load and run. The
 --     harness goroutine never touches let-go state or formats a live value.
 --   - One outer defer converts every normal return, invocation error, panic, or
@@ -1637,7 +1674,7 @@ Existing `test/*.lg` files use `deftest`, `is`, `testing`, `are`, and `use-fixtu
 | `(throw (str ...))` in core library code | `(throw (ex-info ...))` | Convert the 40 core sites. Behavior under `catch Throwable` and bare `catch` is unchanged. |
 | `:trace` under `ex-data` as strings | Vector of `Frame` maps, derived from the chain on read, excluded from equality | Readers of the string form must switch. |
 
-Add the reference example, `^:expected-failure` marker included, as `test/tap/tap-example.lg`. Its failure line reads `(math-test) (test/tap/tap-example.lg:9)`. Remove any demonstration scripts that print TAP output without asserting from `test/`, since the harness runs every `.lg` file there.
+Add the reference example, `^:expected-failure` marker included, as `test/tap/tap-example.lg`. Its failure line reads `(math-test) (test/tap/tap-example.lg:9)`. This file ships with Slice 3 (Section 1.8), not with the rest of this migration: summary mode has no per-var attribution and cannot honor `:expected-failure` (Section 12.2), so the summary harness skips a file holding a marked var, with `expected-failure requires the report bridge`, and the example would never run before the bridge exists. Remove any demonstration scripts that print TAP output without asserting from `test/`, since the harness runs every `.lg` file there.
 
 **Patterns to avoid in new tests.** Tests capturing reporter output bind `*test-out*` to an `io/buffer` and read it with `io/buffer-str`. `with-out-str` around a runner returns `""`. Tests needing counters bind `*report-counters*` to `(ref *initial-report-counters*)` or call `run-test-var`, and increment via `inc-report-counter`. Tests define probes with `deftest` rather than attaching `:test` metadata by hand. Tests needing an integer from a regex group use `parse-long`.
 
@@ -1854,7 +1891,10 @@ The costs are on the error path and in generated code, not the happy path. The l
 - [ ] Bridge: load/invoke errors, panics, cancellation, premature channel close, and mismatched scope IDs each produce one terminal result without panic, timeout, deadlock, or a stranded producer
 - [ ] Bridge: a `deftest` var marked `^:expected-failure` that produces a `:fail` or `:error` passes its subtest, with the failure logged via `t.Log`
 - [ ] Bridge: a `deftest` var marked `^:expected-failure` that produces none fails its subtest with `t.Error("expected failure passed")`
-- [ ] `test/tap/tap-example.lg` passes under both `LG_TEST_REPORTER` modes, with `run-tests` reporting `math-test`'s failure and the bridge logging it as expected
+- [ ] A single marked deftest with two failing `is` forms passes its Go subtest, and the file's overall result is success — derived from that one var's outcome, never from comparing `fail + error` against a count of marked vars
+- [ ] A file with two marked deftests, one that never fails and one that fails twice, fails the file: the first's subtest reports `t.Error("expected failure passed")` even though `fail + error` (2) equals the number of marked vars (2)
+- [ ] `test/tap/tap-example.lg` passes with `LG_TEST_REPORTER` unset (the bridge): `run-tests` reports `math-test`'s failure and the bridge logs it as expected
+- [ ] With `LG_TEST_REPORTER=summary`, a file holding a `^:expected-failure` var is skipped with `expected-failure requires the report bridge`; it is loaded once and none of its tests run
 - [ ] `go test ./test/...` passes on the migrated corpus
 - [ ] A namespace whose only test entry point is a new or changed `test-ns-hook` (no `:test` var) is discovered as touched and run through `run-tests`, in both harness modes
 
@@ -1952,7 +1992,7 @@ Prose-only cases that remain:
 
 `docs/specs/executable-evidence.md` (#861) specifies a general mechanism for a spec to carry its own runnable evidence: the fence grammar, vocabularies, engines, promotion, tooling, and the coverage rule. `specs` there gates a document once it carries at least one `@R-` requirement tag, unless its masthead opts out with `evidence: skip`.
 
-This specification carries no `@R-` tags of its own outside Section 4.9, and it opts out of the gate with `evidence: skip` in its masthead: `clojure.test`, `clojure.test.tap`, and the trace primitives this spec describes are not yet implemented, so a spec-evidence run against this document would exercise runtime capabilities that do not exist. Section 16 is the Definition of Done as written. Once the implementation lands, a Section 16 case that can be stated as a form and an expected result can become an evidence block without changing its meaning, and the opt-out is dropped.
+This specification carries `@R-` tags in Sections 4.9, 11.1, and 16.13, and it opts out of the gate with `evidence: skip` in its masthead: `clojure.test`, `clojure.test.tap`, and the trace primitives this spec describes are not yet implemented, so a spec-evidence run against this document would exercise runtime capabilities that do not exist. Section 16 is the Definition of Done as written. Once the implementation lands, a Section 16 case that can be stated as a form and an expected result can become an evidence block without changing its meaning, and the opt-out is dropped.
 
 ---
 
