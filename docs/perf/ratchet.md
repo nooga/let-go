@@ -108,6 +108,28 @@ make perf-page               # refresh docs/perf/index.html from committed JSON
 make perf-snapshot           # full capture into docs/perf/timeline/<ts>-<sha>.json
 ```
 
+Every *Make target* above that runs `bench-ratchet` prefixes the command with
+`$BENCH_WRAP`. Where `caffeinate` exists (macOS) it defaults to `caffeinate -is`,
+so the machine cannot idle-sleep mid-capture and move the anchor. Set it from the
+environment to substitute another wrapper, or empty to run bare:
+
+```sh
+BENCH_WRAP= make bench-ratchet
+BENCH_WRAP="systemd-inhibit --what=idle:sleep" make bench-ratchet
+BENCH_WRAP="taskset -c 0-7" make bench-ratchet
+```
+
+`systemd-inhibit` is the Linux counterpart to `caffeinate`, and deliberately not
+the default there: CI runners and headless servers do not idle-sleep, so it would
+be a no-op, and taking an inhibitor lock goes through polkit, which can prompt or
+be refused over SSH or in a container. A default that can break `make
+bench-ratchet` is worse than no default. `taskset` addresses a different source of
+drift — scheduler migration rather than sleep — and composes the same way.
+
+**The wrapper reaches Make targets only.** The two-phase `go run ./cmd/bench-ratchet`
+invocations below and `scripts/recapture-release-baseline.sh` build and run the tool
+directly, so they are unwrapped; prefix them by hand on a machine that might sleep.
+
 Explicit two-phase (useful when you want progress visibility, or are
 capturing on one machine and aggregating on another):
 

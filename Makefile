@@ -243,13 +243,21 @@ clojure-compat-report: $(GO)
 #
 # All three are anchor-normalized — see cmd/bench-ratchet/main.go
 # and docs/perf/ratchet.md.
+#
+# BENCH_WRAP prefixes every bench-ratchet run. A machine that idle-sleeps
+# or throttles mid-capture moves the anchor, so where `caffeinate` exists
+# (macOS) the default holds the system awake for the run. The name uses _
+# rather than this file's usual - so the environment can set it; set it
+# empty to run bare:
+#   BENCH_WRAP= make bench-ratchet
+BENCH_WRAP ?= $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -is)
 perf-page: $(GO)
 	go run ./cmd/perf-page -out docs/perf/index.html \
 		-viewer-out docs/perf/explore/index.html
 
 perf-snapshot: lowered $(GO)
 	mkdir -p $(PERF-TIMELINE-DIR)
-	go run ./cmd/bench-ratchet -full -baseline $(PERF-SNAPSHOT) snapshot
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet -full -baseline $(PERF-SNAPSHOT) snapshot
 
 # Regenerate the gitignored gogen_ir lowered tree (a build artifact, not
 # committed — see check-generated). Any target that builds -tags gogen_ir
@@ -356,13 +364,13 @@ native-entry-gate: $(GO)
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.
 bench-ratchet: lowered $(GO)
-	go run ./cmd/bench-ratchet check
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet check
 
 bench-ratchet-update: lowered $(GO)
-	go run ./cmd/bench-ratchet update
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet update
 
 bench-ratchet-show: lowered $(GO)
-	go run ./cmd/bench-ratchet show
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet show
 
 # Parity checks: untagged vs -tags gogen_ir across jank + ir-stress.
 # `parity-check` is the default cadence (~3 min); `parity-quick` for
@@ -380,10 +388,10 @@ parity-full: $(GO)
 # gated in PR CI — run by hand when investigating a specific regression. Pair
 # with `update` to refresh the full baseline.
 bench-ratchet-full: lowered $(GO)
-	go run ./cmd/bench-ratchet -full check
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet -full check
 
 bench-ratchet-full-update: lowered $(GO)
-	go run ./cmd/bench-ratchet -full update
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet -full update
 
 .PHONY: clean-lowered clean distclean
 
@@ -547,11 +555,11 @@ ir-stress-rebaseline: build
 # with --no-regen so it reuses the same tree — ~halving wall time vs running
 # `make bench-ratchet fanout-ratchet`. Use this in CI.
 ratchets: build lowered $(GO)
-	go run ./cmd/bench-ratchet check
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet check
 	$(LG) scripts/fanout-ratchet.lg check --go "$$(command -v go)" --no-regen
 
 ratchets-update: build lowered $(GO)
-	go run ./cmd/bench-ratchet update
+	$(BENCH_WRAP) go run ./cmd/bench-ratchet update
 	$(LG) scripts/fanout-ratchet.lg update --go "$$(command -v go)" --no-regen
 
 # PHONY targets are for ones that have conflicting files/dirs present:
