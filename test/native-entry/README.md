@@ -88,7 +88,10 @@ loophole:
 - `guarded_entry` — the documented `(when-not *compiling-aot* (-main))` guard at the
   top level (#796). The frame owns the entry call, so the replay must run with
   `*compiling-aot*` set; without that the guard passes and the binary runs `-main`
-  once on the VM and once natively, printing its line twice.
+  once on the VM and once natively, printing its line twice. Fixtures here are a
+  single file, so this one only exercises the empty-NS-table shape; the multi-namespace
+  shape, where the guard runs during the namespace load instead, is pinned by
+  `TestLoadProgramNamespacesForEntryFrameBracketsCompilingAOT` in `pkg/rt`.
 
 ### Regression pinned by `toplevel_effect` + `vm_backed`
 

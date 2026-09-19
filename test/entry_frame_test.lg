@@ -53,7 +53,7 @@
     (is (str/includes? src "prog.Main(ec, argv...)"))
     (is (str/includes? src "rt.BootCore()"))
     (is (str/includes? src "defer rt.ShutdownAllPods()"))
-    (is (str/includes? src "rt.LoadProgramNamespaces(unit)"))
+    (is (str/includes? src "rt.LoadProgramNamespacesForEntryFrame(unit)"))
     (is (str/includes? (ef/entry-summary-line 2 e) "Main ✓"))))
 
 (defn- count-lines-with [src needle]
@@ -78,7 +78,7 @@
     (is (some? i-mc) "frame must replay the program main chunk")
     (when i-mc
       (let [i-cl (str/index-of src "rt.SetCommandLineArgs(")
-            i-ns (str/index-of src "rt.LoadProgramNamespaces(unit)")
+            i-ns (str/index-of src "rt.LoadProgramNamespacesForEntryFrame(unit)")
             i-en (str/index-of src "prog.Main(ec)")]
         (is (< i-cl i-ns) "*command-line-args* must be published before replay")
         (is (< i-ns i-mc) "main-chunk replay must follow LoadProgramNamespaces")
@@ -93,7 +93,7 @@
         e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "app")
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})]
     (is (false? (:lowered? e)))
-    (is (< (str/index-of src "rt.LoadProgramNamespaces(unit)")
+    (is (< (str/index-of src "rt.LoadProgramNamespacesForEntryFrame(unit)")
            (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")))
     (is (< (str/index-of src "rt.RunProgramMainChunkForEntryFrame(unit)")
            (str/index-of src "rt.InvokeProgramEntry(")))))
@@ -247,7 +247,7 @@
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})
         boot-i (index-of-substr src "rt.BootCore()")
         args-i (index-of-substr src "rt.SetCommandLineArgs(os.Args[1:])")
-        load-i (index-of-substr src "rt.LoadProgramNamespaces(unit)")]
+        load-i (index-of-substr src "rt.LoadProgramNamespacesForEntryFrame(unit)")]
     (is (>= boot-i 0))
     (is (>= args-i 0))
     (is (>= load-i 0))

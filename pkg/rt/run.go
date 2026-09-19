@@ -103,9 +103,9 @@ func RunExecUnit(unit *bytecode.ExecUnit) error {
 // ApplyGoOverrides after each so gogen_ir NativeFn overrides land on the Vars
 // the bytecode just installed. This is the program-half of an AOT native-entry
 // frame (#425): BootCore already owns core boot+reapply; the generated main.go
-// owns only this load, then the main-chunk replay
-// (RunProgramMainChunkForEntryFrame), then the entry — directly when it
-// lowered, else through InvokeProgramEntry.
+// owns only this load (through LoadProgramNamespacesForEntryFrame), then the
+// main-chunk replay (RunProgramMainChunkForEntryFrame), then the entry —
+// directly when it lowered, else through InvokeProgramEntry.
 //
 // Unlike the historical RunExecUnit loop, this does NOT skip MainChunk —
 // for a single-ns program the ns chunk IS MainChunk, and the native entry
@@ -171,17 +171,42 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 // lg and lg-runtime keep calling RunProgramMainChunk: there the replay is the
 // program's run, and the guarded top-level call is the entry.
 func RunProgramMainChunkForEntryFrame(unit *bytecode.ExecUnit) error {
+	return withCompilingAOT(func() error { return RunProgramMainChunk(unit) })
+}
+
+// LoadProgramNamespacesForEntryFrame loads the program's namespaces exactly as
+// LoadProgramNamespaces does, with *compiling-aot* set for the duration.
+//
+// Bracketing the main-chunk replay alone is not enough. `lg -c` emits an empty
+// NS table only for a single-file program; as soon as the program requires
+// another namespace the bundle carries an NS table in which MainChunk IS one
+// of the NSOrder chunks. The top level then runs here, RunProgramMainChunk
+// no-ops by design, and an unbracketed load leaves the guard free to enter the
+// program a second time (#796) — the very shape the bracket exists to stop.
+//
+// lg and lg-runtime keep calling LoadProgramNamespaces: there the replay is
+// the program's run, and the guarded top-level call is the entry.
+func LoadProgramNamespacesForEntryFrame(unit *bytecode.ExecUnit) error {
+	return withCompilingAOT(func() error { return LoadProgramNamespaces(unit) })
+}
+
+// withCompilingAOT runs fn with *compiling-aot* rooted true, restoring the
+// previous root before it returns so code reading the var inside the entry
+// still sees the runtime value. It degrades to a plain call before core is
+// installed, which is not a state an entry frame can reach: BootCore runs
+// first.
+func withCompilingAOT(fn func() error) error {
 	if CoreNS == nil {
-		return RunProgramMainChunk(unit)
+		return fn()
 	}
 	v := CoreNS.LookupLocal(vm.Symbol("*compiling-aot*"))
 	if v == nil {
-		return RunProgramMainChunk(unit)
+		return fn()
 	}
 	prev := v.Root()
 	v.SetRoot(vm.TRUE)
 	defer v.SetRoot(prev)
-	return RunProgramMainChunk(unit)
+	return fn()
 }
 
 // InvokeProgramEntry looks up name ("-main" or "main") in the given
