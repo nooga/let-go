@@ -558,90 +558,97 @@ func (c *Context) compileForm(o vm.Value) error {
 		varn := c.constant(v)
 		c.emitWithArg(vm.OP_LOAD_VAR, varn)
 		c.incSP(1)
-	case vm.ArrayVectorType:
+	case vm.ArrayVectorType, vm.PersistentVectorType:
 		tp := c.tailPosition
 		c.tailPosition = false
-		v, ok := o.(vm.ArrayVector)
+		elems, ok := orderedLiteralElems(o)
 		if !ok {
-			if me, ok := o.(vm.MapEntry); ok {
-				v = vm.ArrayVector{me.Key, me.Value}
-			} else {
-				return c.compileError("expected vector form")
-			}
+			return c.compileError("expected vector form")
 		}
-		// Optimization: const vectors could be pushed as constants
-		//if len(v) == 0 {
-		//	n := c.constant(v)
-		//	c.emitWithArg(vm.OP_LOAD_CONST, n)
-		//	c.incSP(1)
-		//	return nil
-		//}
-		vector := c.constant(rt.CoreNS.Lookup("vector"))
-		c.emitWithArg(vm.OP_LOAD_CONST, vector)
-		c.incSP(1)
-		for i := range v {
-			err := c.compileForm(v[i])
-			if err != nil {
-				return NewCompileError("compiling vector elements").Wrap(err)
+		err := c.compileAggregateWithMeta(o, func() error {
+			vector := c.constant(rt.CoreNS.Lookup("vector"))
+			c.emitWithArg(vm.OP_LOAD_CONST, vector)
+			c.incSP(1)
+			n := len(elems)
+			for _, e := range elems {
+				if err := c.compileForm(e); err != nil {
+					return NewCompileError("compiling vector elements").Wrap(err)
+				}
 			}
+			c.emitWithArg(vm.OP_INVOKE, n)
+			c.decSP(n)
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		c.emitWithArg(vm.OP_INVOKE, len(v))
-		c.decSP(len(v))
 		c.tailPosition = tp
 	case vm.MapType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
-		arrayMap := c.constant(rt.CoreNS.Lookup("array-map"))
-		c.emitWithArg(vm.OP_LOAD_CONST, arrayMap)
-		c.incSP(1)
+		err := c.compileAggregateWithMeta(o, func() error {
+			arrayMap := c.constant(rt.CoreNS.Lookup("array-map"))
+			c.emitWithArg(vm.OP_LOAD_CONST, arrayMap)
+			c.incSP(1)
 
-		// Get entries via Seq for both Map and PersistentMap
-		var count int
-		if sq, ok := o.(vm.Sequable); ok {
-			s := sq.Seq()
-			var entries []vm.Value
-			for s != nil && s != vm.EmptyList {
-				k, v, ok := vm.MapEntryKV(s.First())
-				if !ok {
+			// Get entries via Seq for both Map and PersistentMap
+			var count int
+			if sq, ok := o.(vm.Sequable); ok {
+				s := sq.Seq()
+				var entries []vm.Value
+				for s != nil && s != vm.EmptyList {
+					k, v, ok := vm.MapEntryKV(s.First())
+					if !ok {
+						s = s.Next()
+						continue
+					}
+					entries = append(entries, k, v)
 					s = s.Next()
-					continue
 				}
-				entries = append(entries, k, v)
-				s = s.Next()
-			}
-			count = len(entries) / 2
-			for _, e := range entries {
-				err := c.compileForm(e)
-				if err != nil {
-					return NewCompileError("compiling map entry").Wrap(err)
+				count = len(entries) / 2
+				for _, e := range entries {
+					err := c.compileForm(e)
+					if err != nil {
+						return NewCompileError("compiling map entry").Wrap(err)
+					}
 				}
 			}
-		}
 
-		c.emitWithArg(vm.OP_INVOKE, count*2)
-		c.decSP(count * 2)
+			c.emitWithArg(vm.OP_INVOKE, count*2)
+			c.decSP(count * 2)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		c.tailPosition = tp
 	case vm.SetType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
-		hashSet := c.constant(rt.CoreNS.Lookup("hash-set"))
-		c.emitWithArg(vm.OP_LOAD_CONST, hashSet)
-		c.incSP(1)
+		err := c.compileAggregateWithMeta(o, func() error {
+			hashSet := c.constant(rt.CoreNS.Lookup("hash-set"))
+			c.emitWithArg(vm.OP_LOAD_CONST, hashSet)
+			c.incSP(1)
 
-		count := 0
-		if sq, ok := o.(vm.Sequable); ok {
-			for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-				if err := c.compileForm(s.First()); err != nil {
-					return NewCompileError("compiling set element").Wrap(err)
+			count := 0
+			if sq, ok := o.(vm.Sequable); ok {
+				for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+					if err := c.compileForm(s.First()); err != nil {
+						return NewCompileError("compiling set element").Wrap(err)
+					}
+					count++
 				}
-				count++
 			}
-		}
 
-		c.emitWithArg(vm.OP_INVOKE, count)
-		c.decSP(count)
+			c.emitWithArg(vm.OP_INVOKE, count)
+			c.decSP(count)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		c.tailPosition = tp
 	case vm.ListType:
 		prevList := c.currentList
@@ -850,6 +857,12 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.decSP(argc)
 
 		c.tailPosition = tp
+	default:
+		// Fail closed. Without this arm an unlisted type compiled to nothing
+		// and returned nil, and the caller's missing stack slot surfaced much
+		// later as "index out of range [-1]". Forms also arrive from macros,
+		// eval and tagged readers, so the set of types is open.
+		return c.compileError(fmt.Sprintf("cannot compile a value of type %s as a form: %s", o.Type().Name(), o.String()))
 	}
 	return nil
 }
@@ -1789,13 +1802,98 @@ func fnFormCompiler(c *Context, sourceForm vm.Value, args vm.ArrayVector, bodyf 
 	return nil
 }
 
+// compileAggregateWithMeta runs emit, which must leave one value on the
+// stack, and wraps it in a with-meta call when o carries reader metadata, so a
+// data-read `^:flag [1 2]` evaluates to a vector carrying it, as the code
+// reader's (with-meta ...) form does. lower_go.lg's boxed-with-meta is the AOT
+// counterpart.
+func (c *Context) compileAggregateWithMeta(o vm.Value, emit func() error) error {
+	im, ok := o.(vm.IMeta)
+	if !ok {
+		return emit()
+	}
+	m := im.Meta()
+	if m == vm.NIL || m == nil {
+		return emit()
+	}
+	withMeta := c.constant(rt.CoreNS.Lookup("with-meta"))
+	c.emitWithArg(vm.OP_LOAD_CONST, withMeta)
+	c.incSP(1)
+	if err := emit(); err != nil {
+		return err
+	}
+	// The metadata map is a form too: `^{:a (+ 1 1)} [1]` carries {:a 2}.
+	if err := c.compileForm(quoteTagHint(m)); err != nil {
+		return NewCompileError("compiling collection metadata").Wrap(err)
+	}
+	c.emitWithArg(vm.OP_INVOKE, 2)
+	c.decSP(2)
+	return nil
+}
+
+// quoteTagHint keeps a bare type hint a symbol when data-read metadata is
+// compiled as a form. The data reader stores `^long [1]` as {:tag long}, the
+// symbol itself; readMeta's code path quotes it for the same reason.
+func quoteTagHint(m vm.Value) vm.Value {
+	pm, ok := m.(*vm.PersistentMap)
+	if !ok {
+		return m
+	}
+	tagKey := vm.Keyword("tag")
+	sym, ok := pm.ValueAt(tagKey).(vm.Symbol)
+	if !ok {
+		return m
+	}
+	return pm.Assoc(tagKey, vm.NewList([]vm.Value{vm.Symbol("quote"), sym})).(vm.Value)
+}
+
+// orderedLiteralElems returns the elements of an ordered, non-seq collection
+// form. It is the one place that decides which representations count: both
+// vector types, matching vector?, and MapEntry, which is a vector in Clojure
+// too. pkg/vm has no ordered marker to ask instead (Indexed and Sequable also
+// cover strings, ranges and maps), so this is a type switch for now.
+func orderedLiteralElems(form vm.Value) ([]vm.Value, bool) {
+	switch v := form.(type) {
+	case vm.ArrayVector:
+		return []vm.Value(v), true
+	case vm.PersistentVector:
+		elems := make([]vm.Value, 0, v.RawCount())
+		for s := v.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+			elems = append(elems, s.First())
+		}
+		return elems, true
+	case vm.MapEntry:
+		return []vm.Value{v.Key, v.Value}, true
+	default:
+		return nil, false
+	}
+}
+
+// paramVector accepts a fn params vector in either vector representation. The
+// code reader produces vm.ArrayVector; the data reader (read-string) promotes a
+// vector that carries metadata, such as the arity `^long [^long n]`, to
+// vm.PersistentVector — and data read back in must still compile, as it does in
+// Clojure. Unlike compileForm's vector-literal arm, a params vector must not
+// accept a bare vm.MapEntry — a fn signature that happens to be a map entry
+// makes no sense — so binding forms stay stricter than literals here.
+func paramVector(v vm.Value) (vm.ArrayVector, bool) {
+	if _, isEntry := v.(vm.MapEntry); isEntry {
+		return nil, false
+	}
+	elems, ok := orderedLiteralElems(v)
+	if !ok {
+		return nil, false
+	}
+	return vm.ArrayVector(elems), true
+}
+
 func fnCompiler(c *Context, form vm.Value) error {
 	f := form.(*vm.List).Next()
 	if f == nil {
 		return NewCompileError("unexpected fn form")
 	}
 
-	if args, ok := f.First().(vm.ArrayVector); ok {
+	if args, ok := paramVector(f.First()); ok {
 		// we have (fn* [args] body)
 		body := f.Next()
 		if body == nil {
@@ -1807,7 +1905,10 @@ func fnCompiler(c *Context, form vm.Value) error {
 		i := 0
 		for b := f; b != nil; b = b.Next() {
 			e := b.First().(vm.Seq)
-			args := e.First().(vm.ArrayVector)
+			args, ok := paramVector(e.First())
+			if !ok {
+				return NewCompileError("unexpected fn form")
+			}
 			ebody := e.Next()
 			if ebody == nil {
 				ebody = vm.EmptyList
