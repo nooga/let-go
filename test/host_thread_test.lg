@@ -1,0 +1,60 @@
+;; Tests for Thread/currentThread: the calling scope dressed as a
+;; java.lang.Thread, so a library's cooperative-cancellation idiom
+;; ((.isInterrupted (Thread/currentThread)) -> (throw (InterruptedException. ..)))
+;; resolves and means scope cancellation.
+(ns test.host-thread-test
+  (:require [test :refer :all]))
+
+(deftest current-thread-fresh-test
+  (testing "a fresh program is not interrupted"
+    (is (= false (.isInterrupted (Thread/currentThread))))))
+
+(deftest interrupt-root-scope-refused-test
+  (testing ".interrupt outside with-scope refuses rather than cancelling the process-wide root scope"
+    (let [msg (try (.interrupt (Thread/currentThread)) nil
+                   (catch Exception e (ex-message e)))]
+      (is (string? msg))
+      (is (clojure.string/includes? msg "root scope"))
+      (is (= false (.isInterrupted (Thread/currentThread)))))))
+
+(deftest interrupt-cancels-scope-test
+  (testing ".interrupt cancels the current scope and .isInterrupted agrees"
+    (with-scope [s]
+      (is (= false (.isInterrupted (Thread/currentThread))))
+      (is (= false (scope-cancelled? s)))
+      (is (nil? (.interrupt (Thread/currentThread))))
+      (is (= true (.isInterrupted (Thread/currentThread))))
+      (is (= true (scope-cancelled? s))))))
+
+(deftest interrupted-migration-shape-test
+  (testing "the ragtime migrate-all shape: check, throw, catch"
+    (let [ran (atom [])
+          msg (with-scope [_]
+                (try
+                  (doseq [id ["001" "002" "003"]]
+                    (when (.isInterrupted (Thread/currentThread))
+                      (throw (InterruptedException. (str "before " id))))
+                    (swap! ran conj id)
+                    (when (= id "002")
+                      (.interrupt (Thread/currentThread))))
+                  :not-interrupted
+                  (catch InterruptedException e
+                    (ex-message e))))]
+      (is (= "before 003" msg))
+      (is (= ["001" "002"] @ran))))
+  (testing "the parent scope was untouched"
+    (is (= false (.isInterrupted (Thread/currentThread))))))
+
+(deftest unsupported-thread-method-test
+  (testing "other Thread methods fail loudly"
+    (let [msg (try (.getName (Thread/currentThread)) nil
+                   (catch Exception e (ex-message e)))]
+      (is (string? msg))
+      (is (clojure.string/includes? msg "not supported under let-go")))))
+
+(deftest thread-ctor-still-stub-test
+  (testing "Thread. stays a loud stub"
+    (let [msg (try (Thread. (fn [])) nil
+                   (catch Exception e (ex-message e)))]
+      (is (string? msg))
+      (is (clojure.string/includes? msg "not supported under let-go")))))
