@@ -282,6 +282,10 @@ func seedOneMachine(key string, cands []seedCandidate, opt seedOptions) (Machine
 
 	rep := reduceBenchmarks(cands, anchorNs, opt)
 	out.Benchmarks = rep.entries
+	// Stamp every seeded entry with the newest surviving snapshot's identity —
+	// the same one the profile carries. An unstamped deterministic floor is one
+	// the gate cannot place in time, and so cannot compare like with like.
+	stampAll(&out)
 
 	fmt.Printf("  %s: %d benchmarks from %d/%d snapshots (anchor %.3f ns/op, newest %s)\n",
 		key, len(out.Benchmarks), len(cands), window,
