@@ -133,6 +133,19 @@ func installJVMStatics(ns *vm.Namespace) {
 		}
 		return vm.MakeInt64(n), nil
 	})
+	parseInteger := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("parseInt expects a string")
+		}
+		// java.lang.Integer/parseInt always enforces a signed 32-bit range,
+		// even when the host's int can hold a larger value.
+		n, err := strconv.ParseInt(string(s), 10, 32)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.MakeInt64(n), nil
+	})
 	parseFloat := mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		s, ok := vs[0].(vm.String)
 		if !ok {
@@ -145,7 +158,7 @@ func installJVMStatics(ns *vm.Namespace) {
 		return vm.Float(f), nil
 	})
 	defStaticNS("Long").Def("parseLong", parseLong)
-	defStaticNS("Integer").Def("parseInt", parseLong)
+	defStaticNS("Integer").Def("parseInt", parseInteger)
 	defStaticNS("Float").Def("parseFloat", parseFloat)
 	defStaticNS("Double").Def("parseDouble", parseFloat)
 
