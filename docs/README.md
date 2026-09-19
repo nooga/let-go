@@ -54,6 +54,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Perf ratchet, regression checkpoints, historical baselines | `perf/ratchet.md` |
 | Running the perf A/B on a PR (the `perf` label) | `perf/ratchet.md` (§ Running the check on a PR) |
 | gogen_ir native-lowering compute microbench gate | `perf/microbench/README.md` |
+| Binary size and boot-time history, v1.7.4 -> 2026-07 (one-off audit) | `perf/size-boot-audit/README.md` |
 | Babashka pods (usage) | `guide/pods.md` |
 | Babashka pods (host protocol / design) | `design/pods.md` |
 | Portable `.cljc` / `:lg` reader conditionals | `guide/portability.md` |
