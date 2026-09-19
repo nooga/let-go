@@ -1,0 +1,10 @@
+;; The only test file in the quality CLI fixture corpus: under
+;; `--source-root fixtures/quality` every other fixture is measured as
+;; source, and this one stays a test because of its `_test.lg` name.
+(ns fixture.cli-src-test
+  (:require
+   [fixture.cli-src :as src]
+   [test :refer :all]))
+
+(deftest tested-fn-increments
+  (is (= 2 (src/tested-fn 1))))

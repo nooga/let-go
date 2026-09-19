@@ -1,0 +1,33 @@
+;; Shared `quiet` helper for clojure.test harness tests that deliberately
+;; drive a failing/erroring probe through run-tests / run-test-var and need
+;; the resulting reported noise (`FAIL in ...`, TAP `ok`/`not ok` lines, ...)
+;; discarded from stdout while keeping report's real dispatch — and so its
+;; counter-incrementing side effects — intact.
+;;
+;; Extracted because it was byte-for-byte duplicated in run_test_var_test.lg,
+;; thrown_test.lg, and runners_test.lg (branch review, I4/Minor): three
+;; copies of an eleven-line helper is exactly what a near-duplicate detector
+;; exists to flag.
+;;
+;; Loaded from disk via require, same pattern as topdo-helper.lg (#195): a
+;; bare, unqualified helper namespace with no deftest of its own — not a
+;; `test.*`-prefixed suite namespace like test.types.lg, which defines real
+;; tests to run. The corpus harness (TestRunner) still walks this file since
+;; every .lg file under test/ becomes its own subtest, but with no deftest
+;; vars interned here run-tests trivially reports zero tests and passes —
+;; exactly how topdo-helper.lg survives being walked today.
+(ns quiet-helper
+  (:require
+   [test :refer [*test-out*]]))
+
+(defn quiet
+  "Run f, discarding whatever it prints via report, but keep report's real
+   dispatch (and so its counter-incrementing side effects) intact — unlike
+   rebinding report itself to a no-op, which would also swallow :pass/
+   :fail/:error counting and break every summary callers assert on.
+   with-test-out always prints through *test-out*, not *out*, so route
+   *test-out* into with-out-str*'s capture buffer for the duration."
+  [f]
+  (let [result (atom nil)]
+    (with-out-str* (fn [] (binding [*test-out* *out*] (reset! result (f)))))
+    @result))

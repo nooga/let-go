@@ -357,6 +357,21 @@ func installIOBuiltins(ns *vm.Namespace) {
 	ns.Def("*out*", stdoutHandle)
 	ns.Def("*err*", stderrHandle)
 
+	// register-test-out — (register-test-out (var *test-out*)). Called by
+	// test.lg right after *test-out* is interned so InstallHostOutputRoots
+	// can update it alongside *out*/*err* regardless of load order.
+	ns.Def("register-test-out", vm.NewCtxNativeFn("register-test-out", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("register-test-out expects 1 arg")
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("register-test-out expected Var")
+		}
+		RegisterTestOut(v)
+		return vm.NIL, nil
+	}))
+
 	// *emit* — host event sink for (js/emit ...). Defaults to a no-op so
 	// emit is harmless when no host is listening; the WASM bundle installs
 	// a HostEmitter root and Go embedders push a FuncEmitter via
@@ -379,6 +394,58 @@ func installIOBuiltins(ns *vm.Namespace) {
 	// no-op so (surface/present ...) is harmless and (surface/available?) is
 	// false when nothing is wired, the same way *emit* does. See surface.go.
 	ns.Def("*surface*", vm.NewBoxed(nopSurface{}))
+}
+
+// registeredHostStdout is the host's stdout handle after
+// InstallHostOutputRoots; nil until a host installs one. Written only by
+// InstallHostOutputRoots and read by RegisterTestOut; both run during
+// single-threaded host/guest setup before any concurrent guest execution
+// begins, so no lock is needed here.
+var registeredHostStdout *IOHandle
+
+// testOutVar is test/*test-out* once interned (RegisterTestOut), so a later
+// InstallHostOutputRoots can update it in the same operation as *out*. Same
+// single-threaded-setup assumption as registeredHostStdout above.
+var testOutVar *vm.Var
+
+// InstallHostOutputRoots replaces the process roots of *out* and *err* with
+// the host's handles, and *test-out* too if the test namespace is already
+// loaded. Hosts must use this instead of SetRoot on *out* directly so the
+// two vars never disagree. Spec 10.2.
+func InstallHostOutputRoots(stdout, stderr *IOHandle) {
+	registeredHostStdout = stdout
+	core := NS(NameCoreNS)
+	// One shared Boxed for *out* and *test-out* so they stay `identical?`
+	// after install, matching the pre-install path where *test-out*'s root
+	// is seeded directly from *out*'s current Boxed value.
+	stdoutBox := vm.NewBoxed(stdout)
+	if v := core.LookupLocal(vm.Symbol("*out*")); v != nil {
+		v.SetRoot(stdoutBox)
+	}
+	if v := core.LookupLocal(vm.Symbol("*err*")); v != nil {
+		v.SetRoot(vm.NewBoxed(stderr))
+	}
+	if testOutVar != nil {
+		testOutVar.SetRoot(stdoutBox)
+	}
+}
+
+// RegisterTestOut records test/*test-out* and seeds its root: the host
+// stdout if one is installed, else the current root of *out*. Called by
+// test.lg immediately after the var is interned, so either load order works.
+func RegisterTestOut(v *vm.Var) {
+	testOutVar = v
+	if registeredHostStdout != nil {
+		v.SetRoot(vm.NewBoxed(registeredHostStdout))
+		return
+	}
+	if out := NS(NameCoreNS).LookupLocal(vm.Symbol("*out*")); out != nil {
+		// Root(), not Deref(): Deref returns the current dynamic top
+		// binding when one is pushed (e.g. inside an api.WithStdout Run),
+		// which would bake a per-Run writer into *test-out*'s ROOT. The
+		// brief specifies the current ROOT of *out*.
+		v.SetRoot(out.Root())
+	}
 }
 
 // resolveIOHandleVar looks up a var (e.g. "*out*") in the core namespace
@@ -407,6 +474,8 @@ func resolveIOHandleVar(ec *vm.ExecContext, varName string) *IOHandle {
 		return u
 	case *os.File:
 		return NewIOHandle(u)
+	case *LGBuffer:
+		return &IOHandle{name: "io/buffer", writer: u}
 	}
 	return nil
 }

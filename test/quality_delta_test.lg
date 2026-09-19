@@ -1,0 +1,384 @@
+(ns test.quality-delta-test
+  (:require
+   [clojure.string :as str]
+   [quality :as q]
+   [quality.diff :as diff]
+   [quality.report :as report]
+   [quality.touched :as touched]
+   [test :refer :all]))
+
+;; PR mode's pure half: two measured results in, the delta surface out.
+;; A delta is signed and POSITIVE MEANS WORSE, since every term is
+;; lower-is-better.
+
+(defn- result [debt terms files]
+  {:debt debt :terms terms :files files})
+
+(def ^:private base
+  (result 0.300 {:erosion 0.40 :uncovered 0.50 :verbosity 0.10 :dead 0.0
+                 :defects 0.20 :testing 0.10 :efficiency 0.30}
+          [{:path "a.lg" :debt 0.20 :definitions [{:name 'big :cc 9}]}
+           {:path "b.lg" :debt 0.40 :definitions [{:name 'calm :cc 3}]}]))
+
+(def ^:private head-worse
+  (result 0.340 {:erosion 0.55 :uncovered 0.50 :verbosity 0.10 :dead 0.0
+                 :defects 0.20 :testing 0.10 :efficiency 0.30}
+          [{:path "a.lg" :debt 0.45 :definitions [{:name 'big :cc 14}]}
+           {:path "b.lg" :debt 0.39 :definitions [{:name 'calm :cc 3}]}]))
+
+(deftest a-regression-reports-a-positive-composite-delta
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")]
+    (is (> (:debt-delta d) 0))
+    (is (< 0.039 (:debt-delta d) 0.041))
+    ;; the term that moved is named, and only it
+    (let [moved (filter (fn [t] (and (:delta t) (> (abs (:delta t)) 0.0001))) (:terms d))]
+      (is (= [:erosion] (map :term moved)))
+      (is (< 0.149 (:delta (first moved)) 0.151)))))
+
+(deftest the-responsible-file-is-first
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")]
+    (is (= "a.lg" (:path (first (:files d)))))
+    (is (> (:delta (first (:files d))) 0))
+    ;; the file that improved is last, with a negative delta
+    (is (= "b.lg" (:path (last (:files d)))))
+    (is (< (:delta (last (:files d))) 0))))
+
+(deftest added-and-removed-files-are-not-fabricated-zeroes
+  (let [d (q/compare-results
+            (result 0.3 {} [{:path "gone.lg" :debt 0.5 :definitions []}])
+            (result 0.3 {} [{:path "new.lg" :debt 0.1 :definitions []}])
+            "BASE" "HEAD")
+        by-path (into {} (map (fn [f] [(:path f) f]) (:files d)))]
+    (is (= :removed (:status (get by-path "gone.lg"))))
+    (is (nil? (:head (get by-path "gone.lg"))))
+    (is (= :added (:status (get by-path "new.lg"))))
+    (is (nil? (:base (get by-path "new.lg"))))
+    ;; a missing side has no delta rather than a made-up one
+    (is (nil? (:delta (get by-path "new.lg"))))))
+
+(deftest definitions-crossing-the-complexity-threshold-are-reported
+  ;; Crossings are what actually move erosion, so they are the actionable
+  ;; half of a delta: `big` went from 9 to 14, i.e. across 10.
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")
+        c (first (:crossings d))]
+    (is (= 1 (count (:crossings d))))
+    (is (= 'big (:name c)))
+    (is (= :rose (:direction c)))
+    (is (= 14 (:cc c)))
+    (is (= 9 (:was c)))))
+
+(deftest delta-text-states-its-direction-and-signs-every-number
+  (let [out (report/delta-text (q/compare-results base head-worse "BASE" "HEAD"))]
+    (is (str/includes? out "positive delta means WORSE"))
+    (is (str/includes? out "base BASE"))
+    (is (str/includes? out "head HEAD"))
+    ;; signed, so the direction is never ambiguous
+    (is (str/includes? out "+0.040"))
+    (is (str/includes? out "+0.150"))
+    (is (str/includes? out "rose to 14 from 9"))))
+
+(deftest touched-forms-are-a-separate-unscored-report-view
+  (let [corpus (q/compare-results base head-worse "BASE" "HEAD")
+        touched [{:entry-type :form :status :modified
+                  :old-path "a.lg" :new-path "a.lg"
+                  :identity 'sample/changed :kind :defn :pairing :paired
+                  :old-span {:start 2 :end 4} :new-span {:start 2 :end 5}
+                  :old-metrics {:cc 2 :sloc 3} :new-metrics {:cc 3 :sloc 4}
+                  :delta {:cc 1 :sloc 1}}
+                 {:entry-type :form :status :added
+                  :new-path "b.lg" :identity 'sample/new :pairing :unpaired
+                  :new-metrics {:cc 2 :sloc 3}}
+                 {:entry-type :path-only :status :renamed
+                  :old-path "README.old" :new-path "README.md"}]
+        out (report/delta-text (assoc corpus :touched touched :working-tree? true))]
+    (is (< 0.039 (:debt-delta corpus) 0.041))
+    (is (not (contains? corpus :touched)))
+    (is (str/includes? out "whole corpus"))
+    (is (str/includes? out "touched forms"))
+    (is (str/includes? out "cc +1"))
+    (is (str/includes? out "sloc +1"))
+    (is (str/includes? out "unpaired"))
+    (is (str/includes? out "README.old"))
+    (is (str/includes? out "untracked files omitted"))
+    (is (= 1 (count (re-seq #"cc \+1" out))))))
+
+(deftest plain-git-form-replacement-reports-unpaired-side-metrics
+  (let [dir (str (os/temp-dir) "/quality-unpaired-report-" (System/nanoTime))
+        git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (str/trim (:out r))))
+        commit (fn [message]
+                 (git "-c" "user.name=Quality Test"
+                      "-c" "user.email=quality@example.invalid"
+                      "commit" "-qm" message))]
+    (try
+      (is (zero? (:exit (os/sh "mkdir" "-p" dir))))
+      (git "init" "-q")
+      (spit (str dir "/forms.lg")
+            "(ns fixture.forms)\n(defn old-form [x]\n  (if x 1 2))\n")
+      (git "add" "forms.lg")
+      (commit "base")
+      (let [base-sha (git "rev-parse" "HEAD")]
+        (spit (str dir "/forms.lg")
+              "(ns fixture.forms)\n(defn new-form [x]\n  (if x 3 4))\n")
+        (git "add" "forms.lg")
+        (commit "head")
+        (let [head-sha (git "rev-parse" "HEAD")
+              entries (touched/build (diff/git-changes base-sha head-sha dir))
+              out (report/delta-text
+                    (assoc (q/compare-results base head-worse base-sha head-sha)
+                           :touched entries))
+              lines (str/split out #"\n")
+              old-entry (first (filter #(= 'fixture.forms/old-form (:identity %)) entries))
+              new-entry (first (filter #(= 'fixture.forms/new-form (:identity %)) entries))
+              old-line (first (filter #(str/includes? % "fixture.forms/old-form") lines))
+              new-line (first (filter #(str/includes? % "fixture.forms/new-form") lines))]
+          (is (= [:form :form] (map :entry-type entries)))
+          (is (= [:unpaired :unpaired] (map :pairing entries)))
+          (is (str/includes? out "touched entries 2"))
+          (is (str/includes? old-line "old="))
+          (is (str/includes? old-line
+                             (str "cc=" (get-in old-entry [:old-metrics :cc]))))
+          (is (str/includes? old-line
+                             (str "sloc=" (get-in old-entry [:old-metrics :sloc]))))
+          (is (str/includes? old-line "new=-"))
+          (is (str/includes? new-line "old=-"))
+          (is (str/includes? new-line "new="))
+          (is (str/includes? new-line
+                             (str "cc=" (get-in new-entry [:new-metrics :cc]))))
+          (is (str/includes? new-line
+                             (str "sloc=" (get-in new-entry [:new-metrics :sloc]))))
+          (is (not (contains? old-entry :delta)))
+          (is (not (contains? new-entry :delta)))
+          (is (not (str/includes? old-line "cc +")))
+          (is (not (str/includes? new-line "cc +")))
+          (is (not (str/includes? old-line " cc ")))
+          (is (not (str/includes? new-line " cc ")))))
+      (finally (os/delete-tree dir)))))
+
+(deftest touched-text-distinguishes-method-dispatch-and-explains-parse-fallback
+  (let [old "(ns demo)\n(defmethod paint :red [x] (inc x))\n(defmethod paint :blue [x] (dec x))\n"
+        new "(ns demo)\n(defmethod paint :red [x] (+ x 2))\n(defmethod paint :blue [x] (- x 2))\n"
+        methods (touched/build [{:status :modified :old-path "methods.lg"
+                                 :new-path "methods.lg" :old-text old :new-text new
+                                 :old-spans [{:start 2 :count 2}]
+                                 :new-spans [{:start 2 :count 2}]}])
+        fallback (first (touched/build [{:status :modified :old-path "broken.lg"
+                                         :new-path "broken.lg"
+                                         :old-text "(ns demo)\n(defn f [] 1)\n"
+                                         :new-text "(ns demo)\n(defn f [] 1\n"
+                                         :old-spans [{:start 2 :count 1}]
+                                         :new-spans [{:start 2 :count 1}]}]))
+        out (report/delta-text
+              (assoc (q/compare-results base head-worse "BASE" "HEAD")
+                     :touched (conj methods fallback)))
+        method-lines (filter #(str/includes? % "demo/paint") (str/split out #"\n"))
+        fallback-line (first (filter #(str/includes? % "broken.lg") (str/split out #"\n")))]
+    (is (= #{":red" ":blue"} (set (map :dispatch methods))))
+    (is (= 2 (count method-lines)))
+    (is (some #(str/includes? % "dispatch :red") method-lines))
+    (is (some #(str/includes? % "dispatch :blue") method-lines))
+    (is (= :file-fallback (:entry-type fallback)))
+    (is (= :invalid-source (:reason fallback)))
+    (is (str/includes? fallback-line "could not parse source"))
+    (is (str/includes? fallback-line (:message fallback)))))
+
+;; Revision handling reads from GIT and never materializes a tree: the head
+;; corpus is the working copy, and the base corpus is that same corpus with
+;; the changes since base undone in memory. A working copy with no readable
+;; Git repository cannot supply the base side at all, so it is named once and
+;; the tests that need it skip on that reason rather than fail on the shape of
+;; the checkout.
+
+(defn- skipped [why]
+  (println "SKIP:" why)
+  true)
+
+(deftest a-revision-needs-git-and-a-bad-one-carries-gits-complaint
+  (if-let [why (q/revision-support-error)]
+    (is (skipped why))
+    (do
+      (is (thrown? Throwable (q/resolve-rev "definitely-not-a-revision")))
+      (is (re-matches #"[0-9a-f]{40}" (q/resolve-rev "HEAD"))))))
+
+(deftest explicit-and-working-tree-deltas-share-corpus-and-diff-endpoints
+  (if-let [why (q/revision-support-error)]
+    (is (skipped why))
+    (let [sha (str/trim (:out (os/sh "git" "rev-parse" "HEAD")))
+          opts {:base "HEAD" :top 5 :paths ["fixtures/quality"]
+                :source-roots ["fixtures/quality"]}
+          explicit (q/delta (assoc opts :head "HEAD"))
+          working (q/delta opts)]
+      (is (= sha (get-in explicit [:base :rev])))
+      (is (= sha (get-in explicit [:head :rev])))
+      (is (= sha (get-in explicit [:touched-range :base])))
+      (is (= sha (get-in explicit [:touched-range :head])))
+      (is (vector? (:touched explicit)))
+      (is (number? (:debt-delta explicit)))
+      (is (= sha (get-in working [:base :rev])))
+      (is (= sha (get-in working [:touched-range :base])))
+      (is (nil? (get-in working [:touched-range :head])))
+      (is (= "working tree" (get-in working [:head :rev])))
+      (is (str/includes? (report/delta-text working) "head working tree")))))
+
+(deftest a-head-that-is-not-the-working-copy-is-refused
+  (if-let [why (q/revision-support-error)]
+    (is (skipped why))
+    ;; Scoring an arbitrary head would mean materializing its tree, which this
+    ;; tool no longer does; saying so is better than scoring the wrong one.
+    (is (thrown? Throwable
+                 (q/delta {:base "HEAD" :head (str/join (repeat 40 "0"))
+                           :paths ["fixtures/quality"]})))))
+
+(deftest measure-reports-the-commit-it-was-given
+  ;; An extracted revision's commit metadata, defect history and CI lookup come
+  ;; from that revision, not from the live checkout's head.
+  ;;
+  ;; The pinned commit is made HERE, in a throwaway repository, rather than
+  ;; named as `HEAD~1`/`@--` in the checkout under test. CI clones at depth one,
+  ;; so the checkout has exactly one reachable commit and `git rev-parse
+  ;; HEAD~1` exits 128 -- the assertion would then fail on the shape of the
+  ;; clone rather than on the behaviour it is about. A commit this test creates
+  ;; exists whatever the checkout's depth, and being foreign to it is the
+  ;; point: `measure` can only report it by taking the `:commit` it was given.
+  (let [dir (str (os/temp-dir) "/quality-pinned-commit-" (System/nanoTime))
+        git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (str/trim (:out r))))
+        opts {:top 5 :paths ["fixtures/quality"] :source-roots ["fixtures/quality"]}]
+    (try
+      (is (zero? (:exit (os/sh "mkdir" "-p" dir))))
+      (git "init" "-q")
+      (spit (str dir "/pinned.txt") "pinned\n")
+      (git "add" "pinned.txt")
+      (git "-c" "user.name=Quality Test" "-c" "user.email=quality@example.invalid"
+           "commit" "-qm" "pinned revision")
+      (let [pinned-rev (git "rev-parse" "HEAD")
+            pinned (q/measure (assoc opts :commit pinned-rev))
+            live (q/measure opts)]
+        (is (re-matches #"[0-9a-f]{40}" pinned-rev))
+        (is (= pinned-rev (get-in pinned [:inputs :commit])))
+        (is (= "revision" (get-in pinned [:inputs :commit-source])))
+        (is (= pinned-rev (get-in pinned [:inputs :git-range :to])))
+        (is (not= pinned-rev (get-in live [:inputs :commit])))
+        (is (not= "revision" (get-in live [:inputs :commit-source]))))
+      (finally (os/delete-tree dir)))))
+
+;; Base-corpus reconstruction. A throwaway repository with two commits covers
+;; every change kind at once: one file left alone, one modified, one deleted,
+;; one renamed and one added. Undoing those changes must reproduce the base
+;; commit's corpus exactly -- and, because the whole pipeline then runs over
+;; it, scoring the reconstruction must equal scoring that commit's tree read
+;; from disk. That equality is the whole claim: no tree is materialized by the
+;; tool, yet both sides of a delta are still scored in full.
+
+(def ^:private corpus-dir "test/fixtures/quality")
+
+(defn- fixture-repo
+  "A repo with two commits over `corpus-dir`, as
+   {:dir :base :head}. Scaffolding may check a tree out; the tool never does."
+  [dir]
+  (let [git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (str/trim (:out r))))
+        commit (fn [m] (git "-c" "user.name=Quality Test"
+                            "-c" "user.email=quality@example.invalid" "commit" "-qm" m))
+        write (fn [p text] (os/sh "mkdir" "-p" (str dir "/" corpus-dir))
+                (spit (str dir "/" p) text))]
+    (os/sh "mkdir" "-p" (str dir "/" corpus-dir))
+    (git "init" "-q")
+    (write (str corpus-dir "/keep.lg") "(ns keep)\n(defn kept [x]\n  (if x 1 2))\n")
+    (write (str corpus-dir "/edit.lg") "(ns edit)\n(defn edited [x]\n  (if x 1 2))\n")
+    (write (str corpus-dir "/gone.lg") "(ns gone)\n(defn removed [x]\n  (if x 3 4))\n")
+    (write (str corpus-dir "/old.lg") "(ns old)\n(defn moved [x]\n  (if x 5 6))\n")
+    (git "add" "-A")
+    (commit "base")
+    (let [base (git "rev-parse" "HEAD")]
+      (write (str corpus-dir "/edit.lg")
+             "(ns edit)\n(defn edited [x]\n  (if x (if x 7 8) 9))\n")
+      (os/sh "rm" (str dir "/" corpus-dir "/gone.lg"))
+      (os/sh "mv" (str dir "/" corpus-dir "/old.lg") (str dir "/" corpus-dir "/new.lg"))
+      (write (str corpus-dir "/added.lg") "(ns added)\n(defn fresh [x]\n  (if x 10 11))\n")
+      (git "add" "-A")
+      (commit "head")
+      {:dir dir :base base :head (git "rev-parse" "HEAD")})))
+
+(defn- corpus-of
+  "A `measure` corpus for every .lg file of `corpus-dir` under `root`."
+  [root]
+  (let [names (sort (filter #(str/ends-with? % ".lg")
+                            (str/split-lines
+                              (or (:out (os/sh "ls" "-1" (str root "/" corpus-dir))) ""))))
+        files (mapv (fn [n] {:path (str corpus-dir "/" n) :lang :lg
+                             :text (slurp (str root "/" corpus-dir "/" n))})
+                    names)]
+    {:files files
+     :disk (into {} (map (fn [n] [(str corpus-dir "/" n) (str root "/" corpus-dir "/" n)]) names))
+     :source "revision"}))
+
+(def ^:private reconstruction-opts
+  ;; `corpus-dir` is repo-relative, so the scope prefix is empty: these
+  ;; corpora are built by hand rather than discovered from the cwd.
+  {:top 5 :since "2000-01-01" :paths [corpus-dir] :source-roots [corpus-dir]})
+
+(deftest undoing-the-changes-since-base-reproduces-the-base-corpus
+  (let [dir (str (os/temp-dir) "/quality-base-corpus-" (System/nanoTime))
+        temp (str dir "-temp")]
+    (try
+      (let [repo (fixture-repo dir)
+            head (corpus-of dir)
+            changes (diff/git-changes (:base repo) (:head repo) dir)
+            base (q/base-corpus reconstruction-opts "" head changes temp (:base repo))
+            by-path (into {} (map (fn [f] [(:path f) (:text f)]) (:files base)))
+            at (fn [n] (get by-path (str corpus-dir "/" n)))]
+        ;; every change kind, undone
+        (is (= [(str corpus-dir "/edit.lg") (str corpus-dir "/gone.lg")
+                (str corpus-dir "/keep.lg") (str corpus-dir "/old.lg")]
+               (mapv :path (:files base))))
+        (is (str/includes? (at "edit.lg") "(if x 1 2)"))       ; modified, undone
+        (is (not (str/includes? (at "edit.lg") "(if x 7 8)")))
+        (is (str/includes? (at "gone.lg") "removed"))          ; deleted, restored
+        (is (str/includes? (at "old.lg") "moved"))             ; renamed, put back
+        (is (nil? (at "new.lg")))
+        (is (nil? (at "added.lg")))                            ; added, dropped
+        (is (str/includes? (at "keep.lg") "kept"))             ; untouched
+        ;; a reconstructed file is given a real path for the analyses that
+        ;; take paths, and an untouched one keeps the working copy's
+        (is (str/starts-with? (get (:disk base) (str corpus-dir "/edit.lg")) temp))
+        (is (= (str dir "/" corpus-dir "/keep.lg")
+               (get (:disk base) (str corpus-dir "/keep.lg")))))
+      (finally (os/delete-tree temp) (os/delete-tree dir)))))
+
+(deftest scoring-the-reconstruction-equals-scoring-the-base-tree-on-disk
+  (let [dir (str (os/temp-dir) "/quality-base-score-" (System/nanoTime))
+        temp (str dir "-temp")
+        checked-out (str dir "-base")]
+    (try
+      (let [repo (fixture-repo dir)
+            head (corpus-of dir)
+            changes (diff/git-changes (:base repo) (:head repo) dir)
+            reconstructed (q/base-corpus reconstruction-opts "" head changes temp (:base repo))
+            ;; SCAFFOLDING, not tool code: the base tree, on disk, to compare against.
+            _ (os/sh "mkdir" "-p" checked-out)
+            tarball (str dir "-base.tar")
+            _ (is (zero? (:exit (os/sh "git" "-C" dir "archive" "--format=tar"
+                                       "-o" tarball (:base repo)))))
+            _ (is (zero? (:exit (os/sh "tar" "-xf" tarball "-C" checked-out))))
+            pinned (assoc reconstruction-opts :commit (:base repo))
+            from-blobs (q/measure (assoc pinned :corpus reconstructed))
+            from-disk (q/measure (assoc pinned :corpus (corpus-of checked-out)))]
+        (is (= (:debt from-disk) (:debt from-blobs)))
+        (is (= (:terms from-disk) (:terms from-blobs)))
+        (is (= (mapv :path (:files from-disk)) (mapv :path (:files from-blobs))))
+        (is (= (mapv :debt (:files from-disk)) (mapv :debt (:files from-blobs))))
+        (is (= (:coverage from-disk) (:coverage from-blobs)))
+        (is (= 4 (count (:files from-blobs)))))
+      (finally
+        (os/delete-tree (str dir "-base.tar"))
+        (os/delete-tree checked-out) (os/delete-tree temp) (os/delete-tree dir)))))

@@ -1,23 +1,31 @@
-;; Behavior tests for test/run-tests. Probe vars are kept out of the normal
-;; registry so nested runner calls can install an isolated test set.
+;; Behavior test for test/run-tests (#798): running an explicit namespace
+;; must restore the caller's namespace afterwards.
+;;
+;; The probe lives in its own namespace rather than in a binding of a
+;; registry var: spec 7 removed the registry, so a test is any var carrying
+;; :test metadata and `run-tests` on the CURRENT namespace would recurse
+;; into the driving deftest below. Running a separate probe namespace is the
+;; port's equivalent of the old isolated test set.
 
-(ns test.run-tests-test
-  (:require [test :refer :all]))
+(ns test.run-tests-test.probe
+  (:require
+   [test :refer :all]))
 
 (def observed-ns (atom nil))
-(def explicit-namespace-probe
-  (fn [] (reset! observed-ns (ns-name *ns*))))
-(alter-meta! (var explicit-namespace-probe)
-             assoc
-             :ns *ns*
-             :name 'explicit-namespace-probe
-             :test explicit-namespace-probe)
+
+(deftest explicit-namespace-probe
+  (reset! observed-ns (ns-name *ns*)))
+
+(ns test.run-tests-test
+  (:require
+    [quiet-helper :refer [quiet]]
+    [test :refer :all]))
 
 (deftest explicit-namespaces-restore-the-callers-namespace
-  (reset! observed-ns nil)
+  (reset! test.run-tests-test.probe/observed-ns nil)
   (let [before (ns-name *ns*)]
-    (binding [test/*registered-tests*
-              {*ns* [(var explicit-namespace-probe)]}]
-      (run-tests 'test.run-tests-test))
-    (is (= 'test.run-tests-test @observed-ns))
-    (is (= before (ns-name *ns*)))))
+    (quiet #(run-tests 'test.run-tests-test.probe))
+    (is (= 'test.run-tests-test.probe @test.run-tests-test.probe/observed-ns)
+        "the probe body must run with *ns* set to its own namespace")
+    (is (= before (ns-name *ns*))
+        "run-tests must restore the caller's namespace (#798)")))

@@ -1,0 +1,66 @@
+;; Every library validation failure under pkg/rt/core/**/*.lg must throw an
+;; ExceptionInfo (via ex-info), not a bare string, so user code that does
+;; (catch Exception e ...) can see it. See task-16-brief.md.
+(ns test.core-throws-ex-info-test
+  (:require
+   [clojure.string :as str]
+   [clojure.test.tap :refer [print-tap-plan]]
+   [test :refer :all]))
+
+(deftest string-namespace-validation-throws-ex-info
+  (is (thrown-with-msg? ExceptionInfo #"blank\? expected String" (str/blank? 1)))
+  (is (thrown-with-msg? ExceptionInfo #"reverse expected non-nil" (str/reverse nil)))
+  (is (thrown-with-msg? ExceptionInfo #"capitalize expected non-nil" (str/capitalize nil))))
+
+(deftest ex-info-data-map-shape-is-uniform
+  ;; Pins the convention documented next to its first use in core.lg (above
+  ;; zero?): every library-validation ex-info under pkg/rt/core carries
+  ;; exactly #{:fn :type :value} — no more, no fewer, and no site-specific
+  ;; variants (see task-16 review: :are and print-tap-plan drifted from this
+  ;; once already). One representative site per file family that changed in
+  ;; that migration; not exhaustive over all 64, but enough that a future
+  ;; drift at any of them fails loud here instead of only in review.
+  (doseq [[label thrower] [[:string/blank? (fn [] (str/blank? 1))]
+                           [:zero? (fn [] (zero? :not-a-number))]
+                           [:select-keys (fn [] (select-keys 5 [:a]))]
+                           [:are (fn [] (macroexpand '(are [x y] (= x y) 1 2 3)))]
+                           [:print-tap-plan (fn [] (print-tap-plan -1))]]]
+    (let [e (try (thrower) nil (catch ExceptionInfo caught caught))]
+      (is (some? e) (str label " did not throw ExceptionInfo"))
+      (when e
+        (is (= #{:fn :type :value} (set (keys (ex-data e))))
+            (str label " ex-data keys: " (pr-str (ex-data e))))))))
+
+(defn- lg-files-under [dir]
+  "Recursively list every .lg source file under dir, via os/ls + os/stat
+   (no glob/file-seq primitive exists in let-go). dir is relative to the
+   test runner's working directory, which is test/ (the package dir Go
+   test sets as cwd) — not the repo root."
+  (reduce
+    (fn [acc name]
+      (let [path (str dir "/" name)
+            st (os/stat path)]
+        (cond
+          (nil? st) acc
+          (:dir? st) (into acc (lg-files-under path))
+          (str/ends-with? name ".lg") (conj acc path)
+          :else acc)))
+    []
+    (os/ls dir)))
+
+(deftest no-core-file-throws-a-bare-string
+  ;; Guard against regressions: no source file under pkg/rt/core throws a
+  ;; bare string or a (str ...) form directly. Walks the actual tree on
+  ;; disk (via os/ls + os/stat + slurp) rather than asserting a fixed
+  ;; count, so it stays meaningful as files are added or removed.
+  (let [files (lg-files-under "../pkg/rt/core")
+        offenders (filter
+                    (fn [path]
+                      (let [lines (str/split-lines (slurp path))]
+                        (some (fn [line]
+                                (or (str/includes? line "(throw \"")
+                                    (str/includes? line "(throw (str ")))
+                              lines)))
+                    files)]
+    (is (pos? (count files)) "sanity: the walk actually found .lg files")
+    (is (empty? offenders) (str "files with bare-string throws: " (pr-str offenders)))))

@@ -1,0 +1,117 @@
+(ns test.quality-score-test
+  (:require
+   [clojure.string :as str]
+   [quality.score :as s]
+   [test :refer :all]))
+
+;; Every scored number is a SHARE in [0, 1]: 0 perfect, 1 worst. Bounded by
+;; construction, and nothing saturates -- the defect being fixed was never
+;; boundedness, it was the clamp that made complexity 30 and 200 score alike.
+
+(deftest weights-are-the-single-source-of-composite-constants
+  (let [w (:weights s/thresholds)]
+    (is (= 8 (count w)))
+    ;; the weights are a partition of 1
+    (is (< 0.999 (reduce + 0.0 (map second w)) 1.001))
+    ;; the maintainability index is deliberately NOT a composite term
+    (is (nil? (:mi w)))))
+
+(deftest corpus-score-is-a-weighted-mean-of-shares
+  (let [r (s/corpus-score {:erosion 0.4 :verbosity 0.2 :uncovered 0.5 :comment-debt 0.2
+                           :dead 0.1 :defects 0.3 :testing 0.6 :cost 0.8})]
+    ;; cost is weighted 0 while its loop rule is being fixed, so it
+    ;; contributes to neither the numerator nor the weight sum:
+    ;; .30*.4 + .20*.5 + .10*.2 + .10*.2 + .10*.1 + .10*.3 + .10*.6 = 0.36
+    (is (< 0.359 (:debt r) 0.361))
+    (is (= [] (:omitted r)))
+    (is (<= 0.0 (:debt r) 1.0))))
+
+(deftest a-perfect-corpus-is-zero-and-the-worst-is-one
+  (is (= 0.0 (:debt (s/corpus-score {:erosion 0.0 :verbosity 0.0 :uncovered 0.0
+                                     :comment-debt 0.0 :dead 0.0 :defects 0.0
+                                     :testing 0.0 :cost 0.0}))))
+  (is (= 1.0 (:debt (s/corpus-score {:erosion 1.0 :verbosity 1.0 :uncovered 1.0
+                                     :comment-debt 1.0 :dead 1.0 :defects 1.0
+                                     :testing 1.0 :cost 1.0})))))
+
+(deftest missing-terms-renormalize-and-are-named
+  (let [r (s/corpus-score {:erosion 0.4 :verbosity 0.4 :uncovered 0.4 :comment-debt 0.4
+                           :dead 0.4 :defects 0.4 :testing 0.4 :cost nil})]
+    ;; every present term is 0.4, so the mean is 0.4 whatever the weights
+    (is (< 0.399 (:debt r) 0.401))
+    (is (= [:cost] (:omitted r)))))
+
+(deftest file-score-uses-the-same-weights-restricted-to-a-file
+  (let [f (s/file-score {:erosion 0.4 :verbosity 0.2 :defects 0.3 :dead 0.1})]
+    ;; (.30*.4 + .10*.2 + .10*.3 + .10*.1) / .60 = 0.18/0.60 = 0.30
+    (is (< 0.299 f 0.301)))
+  ;; a Go file has no dead measurement; the rest renormalize
+  (is (some? (s/file-score {:erosion 0.5 :verbosity 0.5 :defects nil :dead nil})))
+  (is (nil? (s/file-score {:erosion nil :verbosity nil :defects nil :dead nil}))))
+
+(deftest testing-term-is-zero-at-good-and-half-at-bad
+  ;; density good 40 / bad 4, ratio good 1.0 / bad 0.1
+  (is (= 0.0 (s/testing-term {:density 40 :ratio 1.0})))
+  (is (= 0.0 (s/testing-term {:density 100 :ratio 2.0})))
+  (is (< 0.499 (s/testing-term {:density 4 :ratio 0.1}) 0.501))
+  ;; and it never reaches 1, however bad
+  (is (< (s/testing-term {:density 0 :ratio 0.0}) 1.0)))
+
+(deftest penalty-still-serves-callers-that-want-an-unbounded-rate
+  ;; kept for diagnostics: 0 at good, 100 at bad, no upper clamp
+  (is (= 0.0 (s/penalty 10 10 30)))
+  (is (= 100.0 (s/penalty 30 10 30)))
+  (is (= 200.0 (s/penalty 50 10 30))))
+
+(deftest issues-rank-by-impact
+  (let [per-file [{:path "a.lg" :loc 200 :comment-ratio 0.01 :dup-pct 0 :defects-per-kloc 0
+                   :definitions [{:name 'big :line 3 :end 90 :depth 8 :cc 25}]}]
+        iss (s/issues per-file {:untested []} [])]
+    (is (= [:complexity :long-defn :low-comment :nesting] (sort (map :kind iss))))
+    (is (= :complexity (:kind (first iss))))
+    (is (= 3 (:line (first iss))))))
+
+(deftest issues-cover-duplicate-and-untested-kinds
+  (let [iss (s/issues [] {:untested [{:name 'gone :qname 'some.ns/gone
+                                      :path "b.lg" :line 12}]}
+                      [{:a {:path "a.lg" :start 1 :end 30}
+                        :b {:path "b.lg" :start 40 :end 70}
+                        :shared 60 :similarity 0.5}])]
+    (is (= [:duplicate :untested] (sort (map :kind iss))))
+    (is (= :duplicate (:kind (first iss))))
+    ;; the hint names the qualified definition, not just the bare name
+    (is (str/includes? (:hint (second iss)) "some.ns/gone"))))
+
+(deftest top-complexity-ranks-by-mass-not-cc
+  ;; The list must recommend the fix that moves the number. Real values from
+  ;; this corpus: type-join is cc 46 over 41 lines (mass 294);
+  ;; lower-ns-to-go-result is cc 35 over 324 lines (mass 630). A cc ranking
+  ;; puts type-join first; erosion says the other is worth twice as much.
+  (let [cs [{:path "lattice.lg" :name 'type-join :cc 46 :sloc 41 :line 319}
+            {:path "pipeline.lg" :name 'lower-ns-to-go-result :cc 35 :sloc 324 :line 1321}]
+        top (s/top-complexity cs 2 (fn [_] false))]
+    (is (= 'lower-ns-to-go-result (:name (first top))))
+    (is (= 'type-join (:name (second top))))
+    (is (> (:mass (first top)) (:mass (second top))))
+    ;; cc stays visible, because it is what tells you how to fix it
+    (is (= 35 (:cc (first top))))
+    ;; shares sum to 1 over the whole corpus
+    (is (< 0.999 (reduce + 0.0 (map :mass-share top)) 1.001))))
+
+(deftest findings-carry-stable-content-derived-ids
+  ;; An unrelated edit above a function must not change its identity, so the
+  ;; id comes from what the finding IS, not where it sits.
+  (let [at-319 (s/top-complexity [{:path "a.lg" :name 'f :cc 20 :sloc 10 :line 319}] 1 (fn [_] false))
+        at-42 (s/top-complexity [{:path "a.lg" :name 'f :cc 20 :sloc 10 :line 42}] 1 (fn [_] false))
+        other (s/top-complexity [{:path "b.lg" :name 'f :cc 20 :sloc 10 :line 319}] 1 (fn [_] false))]
+    (is (= (:id (first at-319)) (:id (first at-42))))
+    (is (not= (:id (first at-319)) (:id (first other))))))
+
+(deftest best-targets-are-the-high-mass-duplicated-ones
+  (let [cs [{:path "a.lg" :name 'dup-heavy :cc 30 :sloc 100 :line 1}
+            {:path "b.lg" :name 'clean :cc 30 :sloc 100 :line 1}]
+        top (s/top-complexity cs 2 (fn [c] (= "a.lg" (:path c))))
+        targets (s/best-targets top)]
+    (is (= 1 (count targets)))
+    (is (= 'dup-heavy (:name (first targets))))
+    (is (:duplicated? (first targets)))))

@@ -18,6 +18,14 @@ var lgBin string
 var repoRoot string
 
 func TestMain(m *testing.M) {
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "GIT_") {
+			if err := os.Unsetenv(name); err != nil {
+				panic(err)
+			}
+		}
+	}
 	tmp, err := os.MkdirTemp("", "lg-fanout-*")
 	if err != nil {
 		panic(err)
@@ -41,6 +49,21 @@ func TestMain(m *testing.M) {
 	revertJankPatches(jankPatches)
 	os.RemoveAll(tmp)
 	os.Exit(code)
+}
+
+func TestHookGitEnvIsolated(t *testing.T) {
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "GIT_") {
+			t.Errorf("inherited Git environment variable %s was not cleared", name)
+		}
+	}
+	if os.Getenv("PATH") == "" {
+		t.Error("PATH was cleared along with Git environment variables")
+	}
+	if value, ok := os.LookupEnv("LG_TEST_HOOK_SENTINEL"); ok && value != "kept" {
+		t.Errorf("non-Git sentinel = %q, want kept", value)
+	}
 }
 
 func TestPatchOverlayApplyIdempotentAndRevert(t *testing.T) {
