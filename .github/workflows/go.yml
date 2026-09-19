@@ -224,10 +224,12 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # Pin TinyGo so a new release cannot turn this gate red on its own;
+      # bump deliberately and let this job verify the WASI build and core boot.
       - name: Install TinyGo
         run: |
-          wget -q https://github.com/tinygo-org/tinygo/releases/download/v0.41.1/tinygo_0.41.1_amd64.deb
-          sudo dpkg -i tinygo_0.41.1_amd64.deb
+          wget -q https://github.com/tinygo-org/tinygo/releases/download/v0.42.0/tinygo_0.42.0_amd64.deb
+          sudo dpkg -i tinygo_0.42.0_amd64.deb
       # Fetch directly: install.sh can exit 0 after a failed download, masking
       # transient CDN errors until the later PATH check (#682).
       - name: Install wasmtime
