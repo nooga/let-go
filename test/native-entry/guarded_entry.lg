@@ -8,10 +8,9 @@
 ;; on the VM and once natively and printed 42 twice, at a total cost worse than
 ;; running the program on the VM alone.
 ;;
-;; The frame now replays under rt.RunProgramMainChunkForEntryFrame, which sets
-;; *compiling-aot* for the duration of the replay. The byte-exact .expect below
-;; is one line; restore the bare rt.RunProgramMainChunk call in
-;; pkg/rt/core/ir/passes/entry_frame.lg and this fixture fails with two.
+;; Frame-specific bytecode omits only this selected top-level entry call.
+;; The byte-exact .expect below is one line; compile this fixture with bare
+;; lg -c and the binary prints two.
 (ns guardedentry)
 
 (defn bump [a]

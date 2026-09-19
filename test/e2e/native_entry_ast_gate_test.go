@@ -108,6 +108,9 @@ type nativeEntryExpect struct {
 	GeneratedFile string `json:"generatedFile"`
 	// EntryFn is the generated Go function for the fixture's -main.
 	EntryFn string `json:"entryFn"`
+	// EntryName is the let-go entry name for frame-specific bytecode. Existing
+	// fixtures use -main; a fixture selecting main sets this explicitly.
+	EntryName string `json:"entryName"`
 	// LispFn / GoFn name the fixture's lowered defn on both sides.
 	LispFn string `json:"lispFn"`
 	GoFn   string `json:"goFn"`
@@ -181,7 +184,7 @@ func runNativeEntryFixture(ctx context.Context, t *testing.T, bin, root, fixture
 	assertNativeEntryCallClassification(t, spec, generated)
 
 	// --- evidence 3: it builds and runs ---
-	prepareNativeEntryModule(ctx, t, bin, root, outDir, fixture)
+	prepareNativeEntryModule(ctx, t, bin, root, outDir, fixture, spec)
 	// Build outside outDir so the mutant copies stay source-only.
 	exe := filepath.Join(t.TempDir(), "app.native")
 	if out, err := runCmd(ctx, t, "go", outDir, []string{"build", "-o", exe, "."}); err != nil {
@@ -240,10 +243,14 @@ func mustReadFixtureFile(t *testing.T, path string) []byte {
 // prepareNativeEntryModule completes the generated tree into a buildable Go
 // module: program.lgb beside main.go (the frame loads it), a go.mod pointing at
 // this checkout, and `go mod tidy`.
-func prepareNativeEntryModule(ctx context.Context, t *testing.T, bin, root, outDir, fixture string) {
+func prepareNativeEntryModule(ctx context.Context, t *testing.T, bin, root, outDir, fixture string, spec nativeEntryExpect) {
 	t.Helper()
 	lgb := filepath.Join(outDir, "program.lgb")
-	if out, err := runCmd(ctx, t, bin, root, []string{"-c", lgb, fixture}); err != nil {
+	entryName := spec.EntryName
+	if entryName == "" {
+		entryName = "-main"
+	}
+	if out, err := runCmd(ctx, t, bin, root, []string{"-c", lgb, "-entry-frame-entry", spec.Namespace + "/" + entryName, fixture}); err != nil {
 		t.Fatalf("lg -c program.lgb: %v\n%s", err, out)
 	}
 	mod := "module " + nativeEntryModule + "\n\ngo 1.23\n\n" +

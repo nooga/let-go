@@ -429,15 +429,13 @@
      (gogen/binary "!=" (g-id "err") (g-id "nil"))
      (exit-on-err-stmts "decode program.lgb: %v\n" [(g-id "err")])
      nil)
-   ;; Load the program's namespaces. ...ForEntryFrame, not the bare
-   ;; LoadProgramNamespaces, because a program that requires another namespace
-   ;; gets an NS table in which MainChunk IS one of the NSOrder chunks — the
-   ;; top level runs HERE, and the main-chunk replay below no-ops. Both halves
-   ;; of the prologue therefore have to hold *compiling-aot* (#796).
+   ;; Load program namespaces in dependency order. The program.lgb artifact
+   ;; compiled for this frame omits only the selected top-level entry call;
+   ;; other runtime initialization, including in required namespaces, runs.
    (gogen/if-stmt
      (gogen/multi-assign ":="
        [(g-id "err")]
-       [(g-call (g-sel "rt" "LoadProgramNamespacesForEntryFrame") [(g-id "unit")])])
+       [(g-call (g-sel "rt" "LoadProgramNamespaces") [(g-id "unit")])])
      (gogen/binary "!=" (g-id "err") (g-id "nil"))
      (exit-on-err-stmts "%v\n" [(g-id "err")])
      nil)
@@ -450,15 +448,12 @@
    ;; (dependency replay order) and after SetCommandLineArgs (top-level forms
    ;; see the real argv).
    ;;
-   ;; ...ForEntryFrame rather than the bare RunProgramMainChunk because this
-   ;; frame calls the entry itself a few statements below. It sets
-   ;; *compiling-aot* across the replay so the documented
-   ;; `(when-not *compiling-aot* (-main))` guard does not enter the program a
-   ;; second time at VM speed (#796).
+   ;; The entry call is absent from the frame-specific bytecode, so replay
+   ;; keeps *compiling-aot* false and the frame invokes the entry once below.
    (gogen/if-stmt
      (gogen/multi-assign ":="
        [(g-id "err")]
-       [(g-call (g-sel "rt" "RunProgramMainChunkForEntryFrame") [(g-id "unit")])])
+       [(g-call (g-sel "rt" "RunProgramMainChunk") [(g-id "unit")])])
      (gogen/binary "!=" (g-id "err") (g-id "nil"))
      (exit-on-err-stmts "%v\n" [(g-id "err")])
      nil)])

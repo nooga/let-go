@@ -79,8 +79,8 @@ cannot be trusted to regenerate: [`regenerating-generated-artifacts.md`](regener
   bytecode. A change to one path needs a stated position on the other two.
   Knobs: [`design/ir-dynamic-vars.md`](design/ir-dynamic-vars.md); the backend:
   [`design/go-aot-backend.md`](design/go-aot-backend.md).
-- `*compiling-aot*` is true during `-c`/`-b`/`-w` and native-entry frame
-  replay, and false during the entry call and ordinary runtime execution;
+- `*compiling-aot*` is true during `-c`/`-b`/`-w` compilation and false during
+  native-entry frame replay, the entry call, and ordinary runtime execution;
   `*in-wasm*` is true in WASM builds. Guard side effects with them.
 - Performance claims go through the ratchet, not a same-machine single run:
   [`perf/ratchet.md`](perf/ratchet.md). The PR A/B workflow runs only when the

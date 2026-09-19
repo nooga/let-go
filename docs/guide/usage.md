@@ -103,12 +103,12 @@ ordinary runtime execution, useful for keeping side effects out of compile time:
   (-main))
 ```
 
-It is also `true` while an AOT native-entry binary (`lg-compile
---entry-frame`) replays the program's top level. That frame calls the entry
-itself, so the guard above skips the top-level call instead of letting the
-program run twice — once on the VM, then once natively. Under `lg`,
-`lg-runtime` and `-b` bundles the guarded call is the entry and runs as
-written.
+For an AOT native-entry binary, compile the embedded bytecode with
+`lg -c program.lgb -entry-frame-entry app/-main app.lg` (use `app/main` when
+that is the selected entry). This omits the selected top-level entry call
+from the bytecode because the native frame calls it. Other top-level forms,
+including guarded initialization in required namespaces, run with
+`*compiling-aot*` false at runtime. Ordinary `lg -c` keeps the entry call.
 
 `*in-wasm*` is `true` when running inside a WASM build.
 

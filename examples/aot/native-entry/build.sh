@@ -27,7 +27,7 @@ echo "==> lg-compile --entry-frame (emits fib.go + main.go native-entry frame)"
     --entry-frame "$OUT" "$PREFIX" examples/aot/native-entry/fib.lg )
 
 echo "==> lg -c program.lgb"
-( cd "$ROOT" && "$LG" -c "$OUT/program.lgb" examples/aot/native-entry/fib.lg )
+( cd "$ROOT" && "$LG" -c "$OUT/program.lgb" -entry-frame-entry fib/-main examples/aot/native-entry/fib.lg )
 
 echo "==> go.mod + go build"
 cat > "$OUT/go.mod" <<EOF

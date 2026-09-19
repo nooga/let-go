@@ -213,6 +213,25 @@ func (c *Context) Compile(s string) (chunk *vm.CodeChunk, err error) {
 }
 
 func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, result vm.Value, err error) {
+	return c.compileMultiple(reader, nil)
+}
+
+// CompileMultipleForEntryFrame compiles a program bundle whose native entry
+// frame will invoke namespace/name after replay. Only top-level calls to that
+// selected entry are omitted from the emitted chunk; every other top-level
+// form, including runtime initialization in required namespaces, remains.
+// Ordinary CompileMultiple and its bytecode bundles retain their usual entry
+// invocation semantics.
+func (c *Context) CompileMultipleForEntryFrame(reader io.Reader, namespace, name string) (compiled *vm.CodeChunk, result vm.Value, err error) {
+	return c.compileMultiple(reader, &entryFrameCall{namespace: namespace, name: name})
+}
+
+type entryFrameCall struct {
+	namespace string
+	name      string
+}
+
+func (c *Context) compileMultiple(reader io.Reader, entry *entryFrameCall) (compiled *vm.CodeChunk, result vm.Value, err error) {
 	defer vm.RecoverPanic(&err)
 	// Buffer source for error display
 	srcBytes, err := io.ReadAll(reader)
@@ -243,6 +262,9 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 				}
 				return nil
 			}
+		}
+		if entry != nil && c.CurrentNS().Name() == entry.namespace {
+			o, _ = omitTopLevelEntryCall(o, *entry)
 		}
 		if compiledForms > 0 {
 			chunk.Append(vm.OP_POP)
@@ -305,6 +327,55 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 	c.emit(vm.OP_RETURN)
 	c.decSP(1)
 	return c.chunk, result, nil
+}
+
+// omitTopLevelEntryCall removes only a call to the selected entry from a
+// top-level expression. The documented guard and sequential do forms are
+// traversed, while fn bodies, quotes, and other nested expressions are left
+// untouched. Replacing a call with nil preserves sibling side effects and the
+// surrounding form's result shape.
+func omitTopLevelEntryCall(form vm.Value, entry entryFrameCall) (vm.Value, bool) {
+	lst, ok := form.(*vm.List)
+	if !ok || lst.RawCount() == 0 {
+		return form, false
+	}
+	head, ok := lst.First().(vm.Symbol)
+	if !ok {
+		return form, false
+	}
+	name := string(head)
+	if name == entry.name || name == entry.namespace+"/"+entry.name {
+		return vm.NIL, true
+	}
+	start := -1
+	switch name {
+	case "do", "clojure.core/do":
+		start = 1
+	case "when-not", "clojure.core/when-not":
+		parts := lst.Unbox().([]vm.Value)
+		if len(parts) < 3 || !isCompilingAOTGuard(parts[1]) {
+			return form, false
+		}
+		start = 2
+	default:
+		return form, false
+	}
+	parts := lst.Unbox().([]vm.Value)
+	changed := false
+	for i := start; i < len(parts); i++ {
+		var omitted bool
+		parts[i], omitted = omitTopLevelEntryCall(parts[i], entry)
+		changed = changed || omitted
+	}
+	if !changed {
+		return form, false
+	}
+	return vm.NewList(parts).(*vm.List).WithMeta(lst.Meta()), true
+}
+
+func isCompilingAOTGuard(form vm.Value) bool {
+	sym, ok := form.(vm.Symbol)
+	return ok && (sym == "*compiling-aot*" || sym == "clojure.core/*compiling-aot*")
 }
 
 func (c *Context) emit(op int32) {
