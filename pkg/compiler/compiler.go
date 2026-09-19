@@ -1416,23 +1416,23 @@ func tryCompiler(c *Context, form vm.Value) error {
 		bodyForms = append(bodyForms, f)
 	}
 
-	if len(catchClauses) == 1 && catchClauses[0].class == "" {
-		// let-go's native bare catch compiles directly as the handler.
-		catchSym = catchClauses[0].binding
-		catchForms = catchClauses[0].body
-	} else if len(catchClauses) > 0 {
-		// Desugar typed and/or multiple clauses into a single handler that
-		// dispatches on exception class in source order and rethrows when
-		// nothing matches (the IR builder's parse-try generates the same
-		// form — keep them in lockstep):
+	if len(catchClauses) > 0 {
+		// Desugar typed and/or multiple clauses (bare included) into a single
+		// handler that dispatches on exception class in source order and
+		// rethrows when nothing matches (the IR builder's parse-try generates
+		// the same form — keep them in lockstep):
 		//
 		//   (catch <caught>
 		//     (if (core/instance? Class1 <caught>) (let* [b1 <caught>] body1...)
 		//       ... (core/throw <caught>)))
 		//
 		// core/-qualified so a user shadowing instance? or throw cannot
-		// capture the dispatch. A bare clause tests as always-true, making
-		// any later clauses dead, like Clojure's ordered catch clauses.
+		// capture the dispatch. A bare clause is dispatched as Throwable —
+		// catch-everything, but (per catch-matches?) never the scope-
+		// cancellation condition — making any later clauses dead, like
+		// Clojure's ordered catch clauses. There is deliberately no fast
+		// path for a lone bare clause: routing it through catch-matches? is
+		// what keeps (catch e ...) from swallowing cancellation.
 		caught := freshCaughtSym()
 		acc, err := makeList(vm.Symbol("core/throw"), caught)
 		if err != nil {
@@ -1445,14 +1445,15 @@ func tryCompiler(c *Context, form vm.Value) error {
 			if err != nil {
 				return NewCompileError("building catch dispatch").Wrap(err)
 			}
-			if cl.class == "" {
-				acc = arm
-				continue
+			class := cl.class
+			if class == "" {
+				class = "Throwable"
 			}
 			// catch-matches? resolves the class at dispatch time (a JVM-only
 			// class let-go does not model never matches, rather than failing
-			// compilation) and gives Throwable its catch-everything role.
-			test, err := makeList(vm.Symbol("core/catch-matches?"), mustQuote(cl.class), caught)
+			// compilation) and gives Throwable its catch-everything role
+			// EXCEPT the scope-cancellation condition.
+			test, err := makeList(vm.Symbol("core/catch-matches?"), mustQuote(class), caught)
 			if err != nil {
 				return NewCompileError("building catch dispatch").Wrap(err)
 			}

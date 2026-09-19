@@ -15,14 +15,19 @@ import (
 
 // TestBoundFnKeepsInvokingScope: bound-fn* conveys dynamic bindings but must
 // not detach the call from the invoking execution's scope. A sleep inside a
-// bound fn called from a scoped future is interrupted when that scope closes
-// (sleep returns early on cancellation), and the captured binding is still
-// visible inside the call. A bound fn detached from the scope sleeps its full
-// ten seconds, so the deref times out instead.
+// bound fn called from a scoped future is interrupted when that scope closes,
+// and the captured binding is still visible inside the call. A bound fn
+// detached from the scope sleeps its full ten seconds, so the deref times out
+// instead.
+//
+// Post-#920 an interrupted sleep raises the Cancelled condition instead of
+// returning early and silently; (catch Cancelled e nil) absorbs it so the fn
+// can still report :woke, preserving this test's original pass/fail
+// discriminator (fast [:caller :woke] vs. :timeout).
 func TestBoundFnKeepsInvokingScope(t *testing.T) {
 	bin := buildLG(t)
 	src := `(def ^:dynamic *x* :root) ` +
-		`(def f (binding [*x* :caller] (bound-fn* (fn [] (sleep 10000) [*x* :woke])))) ` +
+		`(def f (binding [*x* :caller] (bound-fn* (fn [] (try (sleep 10000) (catch Cancelled e nil)) [*x* :woke])))) ` +
 		`(def parent (scope-open)) ` +
 		`(def seen (promise)) ` +
 		`(future (deliver seen (f))) ` +

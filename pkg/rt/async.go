@@ -341,23 +341,26 @@ func (p *PromiseChan) put(v vm.Value) {
 
 // take returns the cached value, blocking until one is delivered or the
 // chan is closed. ctx (the registry context) lets a blocked take be
-// drained on shutdown; cancellation returns nil.
-func (p *PromiseChan) take(ctx context.Context) vm.Value {
+// drained on shutdown; cancelled reports whether ctx ended the wait instead
+// of a delivery/close, so the caller (<!) can surface the Cancelled
+// condition rather than a value-shaped nil indistinguishable from a
+// legitimately empty closed promise-chan.
+func (p *PromiseChan) take(ctx context.Context) (v vm.Value, cancelled bool) {
 	p.mu.Lock()
 	if p.set || p.closed {
 		v := p.value
 		p.mu.Unlock()
-		return v
+		return v, false
 	}
 	p.mu.Unlock()
 	select {
 	case <-p.ready:
 	case <-ctx.Done():
-		return vm.NIL
+		return vm.NIL, true
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.value // the delivered value, or NIL if closed empty
+	return p.value, false // the delivered value, or NIL if closed empty
 }
 
 // doClose marks the chan closed. No-op once a value is set, so the value
