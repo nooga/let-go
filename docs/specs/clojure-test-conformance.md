@@ -49,11 +49,11 @@ This spec rewrites let-go's `test` namespace (aliased as `clojure.test`) to matc
 
 ### 1.2 Problem Statement
 
-**Status quo.** let-go's `test.lg` provides `deftest`, `is`, `testing`, `are`, fixtures, `run-tests`, `run-test-var`, and `run-test`. There is no `run-all-tests`. Assertions print `PASS`/`FAIL` lines directly. Tests are discovered via a registry populated by `register-test!` rather than through var metadata. The namespace lacks a `report` multimethod, `*test-out*`, `with-test-out`, `do-report`, `test-var`, and summary map returns. Fixtures are process-global rather than per-namespace. Runtime errors carry stack traces, but `ex-info` throws do not, and no function exposes the current stack.
+**Status quo.** `clojure.test` and `clojure.test.tap` are ported (`pkg/rt/core/test.lg`, `pkg/rt/core/test/tap.lg`): `deftest`, `deftest-`, `with-test`, `set-test`, `is`, `testing`, `are`, per-namespace fixtures, the `report` multimethod, `do-report`, `test-var`, `*test-out*`, `with-test-out`, `run-tests`, `run-all-tests`, `run-test-var`, `run-test`, `test-ns-hook`, and `successful?` all exist, at the contract Sections 6 through 11 specify, and tests are discovered through `:test` var metadata rather than a registry. The Go harness (`test/language_test.go`) drives this API directly through `rt.LookupVar`/`rt.InvokeValue`: it snapshots `:test` and `test-ns-hook` metadata before and after loading a file, runs every namespace that gained a test through one `run-tests` call, and reads the result off `(successful? summary)` — Section 12.2's summary mode. What has not landed is the trace mechanism Sections 3.5, 4.8, 4.10, and 5 add: `ExecutionError` carries no `kind`/`fn` frame-link fields yet, so `ex-trace`, `Throwable->map`, and `clojure.stacktrace` do not exist. Without them, `do-report`'s `error-position` (Section 10.1) falls back to the assertion's own line rather than the throw site, and the Go harness's summary map carries no per-var attribution, so it cannot turn a failing `deftest` into its own Go subtest or honor a var's `^:expected-failure` marker.
 
-**Pain.** External harnesses fail. kaocha discovers tests via `(filter (comp :test meta val) (ns-interns ns))`, reads fixtures from namespace metadata, and rebinds `do-report`. cognitect test-runner (upstream issue #738) calls `(apply run-tests nses)` and extracts `:fail` and `:error` from the returned map. `clojure.test.tap` relies on `(binding [report tap-report] ...)`, which requires a `report` var. Each harness breaks against the current namespace. The console also prints `ERROR in test:` lines with traces for conditions that are ordinary assertion failures, because library code throws bare strings and assertion machinery prints outside any reporting seam. The Go harness sees only a boolean and cannot attribute failures to specific deftests.
+**Pain.** The gap that remains is attribution and trace fidelity, not harness compatibility with `clojure.test` itself: kaocha-style discovery via `(filter (comp :test meta val) (ns-interns ns))`, per-namespace fixture metadata, and the `report` seam `clojure.test.tap` and any harness wanting to intercept events would rebind are already in place (Sections 2, 3.4). `run-tests` and `run-all-tests` return the summary map cognitect test-runner (upstream issue #738) extracts `:fail`/`:error` from. What a harness still cannot do is attribute a failure to the deftest that produced it: `run-tests`'s summary is an aggregate, an assertion or test body that throws is reported at the assertion's own line rather than the throw site because there is no trace to read one from, and there is no `clojure.stacktrace` to print or inspect the chain. The Go corpus harness itself is one such caller: it runs every touched namespace through one `run-tests` call and reads `successful?` off the aggregate, so it cannot yet turn each `deftest` into its own Go subtest or honor a var's `^:expected-failure` marker.
 
-**Solution.** Port `clojure.test` semantically. Add the runtime capabilities the port requires. Port `clojure.test.tap`. Bridge the Go harness to the public `clojure.test` API through interop, using the `report` multimethod as the connection to Go's `testing` package.
+**Solution.** The `clojure.test` and `clojure.test.tap` ports are in place (Sections 2 through 11, 13). What remains is the error-chain trace (Sections 3.5, 4.8, 4.10, 5) and the report bridge that replaces the Go harness's summary-mode integration (Section 12.2) with per-deftest Go subtests carrying attributed failures (Section 12.3), using the `report` multimethod as the connection to Go's `testing` package.
 
 ### 1.3 Design Principles
 
@@ -123,15 +123,15 @@ Examples and transcripts throughout this document use the test file `test/tap/ta
 
 The work lands as three pull requests, each independently valuable and each leaving the corpus green:
 
-| Slice | Sections | Delivers on its own |
-|---|---|---|
-| 1. Traces | 3.5, 4.8, 4.10, 5 | Structured traces from the existing unwind chain for every thrown exception, on both backends, plus `Throwable->map`, `clojure.stacktrace`, and better uncaught-error output for every user. |
-| 2. Test port | 4.1 through 4.7, 6 through 11, 13 | `clojure.test` and `clojure.test.tap` at Clojure fidelity; harness in summary mode (Section 12.2). |
-| 3. Bridge | 12.3 | Per-deftest Go subtests with attributed failures. |
+| Slice | Sections | Delivers on its own | Status |
+|---|---|---|---|
+| 1. Traces | 3.5, 4.8, 4.10, 5 | Structured traces from the existing unwind chain for every thrown exception, on both backends, plus `Throwable->map`, `clojure.stacktrace`, and better uncaught-error output for every user. | Not started. `ExecutionError` carries no `kind`/`fn` fields; `ex-trace`, `Throwable->map`, and `clojure.stacktrace` do not exist. |
+| 2. Test port | 4.1 through 4.7, 6 through 11, 13 | `clojure.test` and `clojure.test.tap` at Clojure fidelity; harness in summary mode (Section 12.2). | Delivered, with two exceptions: the call-position accuracy fix in Section 4.2 (a multi-line call still resolves to its last argument's position, not the call form's) and the `test/tap/tap-example.lg` migration row below, both of which wait on later slices. |
+| 3. Bridge | 12.3, 4.11 | Per-deftest Go subtests with attributed failures. | Not started. Section 4.11 is its prerequisite: a `deftest` whose name carries reader metadata does not compile today. |
 
-Slice 2 depends on slice 1 for `:file` and `:line`. Slice 3 depends on slice 2 for the `report` seam. The Definition of Done subsections map onto the slices by the section numbers above.
+Slice 2 landed ahead of slice 1 rather than depending on it: `error-position` (Section 10.1) resolves `ex-trace` defensively and, finding no such function yet, falls back to the assertion's own `{:file :line}` — an `ERROR` from a throw inside a helper reports the enclosing `is` form's line today, not the throw site, until Slice 1 lands. Slice 3 depends on slice 2 for the `report` seam. The Definition of Done subsections map onto the slices by the section numbers above.
 
-Section 13's `test/tap/tap-example.lg` carries `^:expected-failure` (Section 1.7). Summary mode has no per-var attribution and cannot honor that marker (Section 12.2), so this one file ships with Slice 3, once the bridge exists, rather than with the rest of Slice 2's migration.
+Section 13's `test/tap/tap-example.lg` carries `^:expected-failure` (Section 1.7). Summary mode has no per-var attribution and cannot honor that marker (Section 12.2), so this one file ships with Slice 3, once the bridge exists, rather than with the rest of Slice 2's migration; the file does not exist on either path yet.
 
 ---
 
@@ -165,12 +165,12 @@ Layers depend on those below. `clojure.test` knows nothing of TAP or Go. The Go 
 | Canonical namespace | Alias | File | Notes |
 |---|---|---|---|
 | `test` | `clojure.test` | `pkg/rt/core/test.lg` | Alias exists in the `nsAliases` table in `pkg/rt/lang.go`. |
-| `test.tap` | `clojure.test.tap` | `pkg/rt/core/test/tap.lg` | Add alias entry to `nsAliases`. Delete any existing shim namespace named `clojure.test.tap`. |
+| `test.tap` | `clojure.test.tap` | `pkg/rt/core/test/tap.lg` | Alias exists in the `nsAliases` table in `pkg/rt/lang.go`. No shim namespace named `clojure.test.tap` remains. |
 | `stacktrace` | `clojure.stacktrace` | `pkg/rt/core/stacktrace.lg` | New. |
 
 An alias makes `(require '[clojure.test :as t])`, `(:require [clojure.test :refer :all])`, `(find-ns 'clojure.test)`, and `clojure.test/report` resolve to the canonical namespace. Vars interned in `test` are visible under both names.
 
-All three namespaces are included in the compiled bundle and none is marked `lgbgen:skip`, since nothing in them depends on source-loading.
+`test` and `test.tap` are included in the compiled bundle and neither is marked `lgbgen:skip`, since nothing in them depends on source-loading; `stacktrace` does not exist yet and follows the same rule once it lands.
 
 ### 2.3 Namespace Metadata Keys
 
@@ -419,23 +419,23 @@ Scalars have no trace. A thrown string, keyword, number, boolean, or `nil` is a 
 
 ## 4. Runtime Extensions
 
-These are the Go-side capabilities the ported namespaces require and the runtime lacks (September 2026), verified against the working tree. They are general-purpose rather than test-specific. Most are small. Trace primitives are in Section 5.
+These are the Go-side capabilities the ported namespaces require, verified against the working tree (September 2026). A subsection marked *(existing)* is already in place; the others are what the runtime still lacks. They are general-purpose rather than test-specific. Most are small. Trace primitives are in Section 5.
 
-### 4.1 Namespace Metadata
+### 4.1 Namespace Metadata (existing)
 
-`(meta ns-obj)` returns the namespace's metadata map. `(alter-meta! ns-obj f & args)` updates it. Currently `alter-meta!` raises "expected Atom or Var" for a namespace. Since `*ns*` inside a file is the namespace object, `(alter-meta! *ns* assoc k v)` works without further lookup.
+No change. `(meta ns-obj)` already returns the namespace's metadata map, and `(alter-meta! ns-obj f & args)` already updates it: `alter-meta!` (`pkg/rt/lang.go`) handles `*vm.Namespace` alongside `Atom` and `Var`. Since `*ns*` inside a file is the namespace object, `(alter-meta! *ns* assoc k v)` works without further lookup.
 
 ### 4.2 Form Source Positions
 
-The reader already records a `SourceInfo` for every identity-bearing list or cons form it produces, nested forms included, in the `vm.FormSource` side table (`readList` in `pkg/compiler/reader.go`). Calls attempting to record non-hashable vector and map values are intentionally ignored by the current table and are not part of this slice. The compiler and macroexpander copy entries onto rewritten and expanded list forms, and `compileForm` emits them per instruction. What is missing is the Clojure-facing surface: `(meta form)` does not consult the table and `&form` inside a macro is nil.
+The reader already records a `SourceInfo` for every identity-bearing list or cons form it produces, nested forms included, in the `vm.FormSource` side table (`readList` in `pkg/compiler/reader.go`). Calls attempting to record non-hashable vector and map values are intentionally ignored by the current table and are not part of this slice. The compiler and macroexpander copy entries onto rewritten and expanded list forms, and `compileForm` emits them per instruction. The Clojure-facing surface over that table already exists: `(meta form)` on a `*List` or `*Cons` consults it, and `&form` inside a macro carries it.
 
 **A call's position at the invoke instruction is the call form's, not its last argument's.** `compileForm` records a form's `SourceInfo` once, at the instruction offset where that form's code starts (`c.chunk.AddSourceInfo`, `pkg/compiler/compiler.go`), and `SourceMap.Lookup` returns the entry with the greatest `startIP` not after the instruction (`pkg/vm/source.go`). A call compiles its callee and each argument before emitting `OP_INVOKE` or `OP_TAIL_CALL`, and only a list or cons argument records its own entry (non-hashable vector and map values are intentionally ignored by the table, above, and a symbol or scalar argument records nothing), so today the position resolved at the invoke instruction is the most recently recorded entry before it — the last argument's own entry when that argument is itself a list or cons form, or the call form's own entry, still standing from when the call itself began compiling, when the last argument records nothing: a multi-line `(throw (ex-info ...))` reports the `ex-info` form's line, not the `throw` form's, but `(throw x)` with `x` a bound symbol already reports the `throw` form's own position, since `x` adds no later entry to displace it. The compiler gains one more source-map entry: it records the call form's `SourceInfo` again immediately before emitting `OP_INVOKE` and `OP_TAIL_CALL`, once the callee and arguments are compiled, so `LookupSource` at the invoke instruction resolves to the call form. This is one extra source-map entry per call with arguments; it costs compile time and source-map size only, nothing on the execution path. The IR builder does not share this gap: `build-form` sets the current form's `SourceInfo` before dispatching into it and restores the caller's on return, so by the time a `:call` instruction is added the context's `SourceInfo` is back to the call form's own, not the last argument's, on both backends alike.
 
-Three readers are added, none of which changes the reader or the bundle format:
+Three readers already expose it, none of which changed the reader or the bundle format:
 
-1. `meta` on a `*List` or `*Cons` merges `{:line L :column C}` from the form's `FormSource` entry when one exists.
-2. Macro invocation passes the call form so `&form` sees that metadata.
-3. `def` copies `:file`, `:line`, and `:column` from the def form's entry into var metadata (Section 4.4).
+1. `meta` on a `*List` or `*Cons` merges `{:line L :column C}` from the form's `FormSource` entry when one exists. (existing)
+2. Macro invocation passes the call form so `&form` sees that metadata. (existing)
+3. `def` copies `:file`, `:line`, and `:column` from the def form's entry into var metadata (Section 4.4). (existing)
 
 Granularity is per supported list/cons form. An `ERROR` resolves to the throwing subform because that instruction carries its own entry; a `FAIL` resolves to the `is` form because expansion inherits the `is` form's entry. `do-report` (Section 10.1) reads the stack first and var metadata second; neither path needs `&form`.
 
@@ -449,7 +449,7 @@ No change. `def` already attaches `:ns`, `:name`, `:file`, `:line`, and `:column
 
 ### 4.5 `*out*` Handle Coercion
 
-The `*out*` resolver in `pkg/rt/iort.go` accepts an `IOHandle` or a raw `os.File` and falls back to stdout for anything else. It also accepts the values `io/buffer` and `io/writer` produce, so `(binding [*out* (io/buffer)] (println "x"))` writes into the buffer. Currently the text goes to the terminal and the buffer stays empty. This seam lets a test bind `*test-out*` to a buffer and read it with `io/buffer-str`.
+The `*out*` resolver in `pkg/rt/iort.go` accepts an `IOHandle`, a raw `os.File`, or the buffer `io/buffer` produces, and falls back to stdout for anything else. `(binding [*out* (io/buffer)] (println "x"))` already writes into the buffer, not the terminal (existing). `io/writer`'s boxed writer is not one of the resolved cases and still falls through to stdout. This seam lets a test bind `*test-out*` to a buffer and read it with `io/buffer-str`.
 
 ### 4.6 Typed Catch Dispatch (existing)
 
@@ -537,6 +537,12 @@ The happy path is unchanged, so this does not affect the bench ratchet. Position
 **Natives preserve the chain.** A native that re-wraps an error with `fmt.Errorf("...: %v", err)` flattens the chain to a string and loses the `ThrownError` inside it, so a user's `(throw (ex-info ...))` passing through that native arrives at the catch as a generic exception. Every such site becomes `%w`. `unwrapThrown` (`pkg/vm/errors.go`) walks only `ExecutionError` links today, so a `ThrownError` under a `%w` wrap is invisible to it; `unwrapThrown` gains `step` (Section 3.5) as its walk, the same one `thrown_value`, `frames_of`, `host_error`, and `next_link` use, so a `%w` wrap is an ordinary link it steps through rather than a barrier. A test asserts that a value thrown from a callback survives, with its trace, through `map` (once its lazy sequence is realized — Section 5.2 rule 9), `reduce`, `sort`, `apply`, and every native that invokes let-go code. The survival requirement — class, message, data, and trace intact — holds through `map` regardless of the frames a crossing there produces; `map` never contributes a `NATIVE` crossing frame of its own (Section 5.2 rule 9).
 
 **Go errors are boxed at two points.** `box_caught` (Section 3.5) is the box a catch binds for a runtime error or recovered panic; it represents `h = host_error(err)`, the first link in the Go chain that is not an `ExecutionError` frame link, directly — its message is `h.Error()` and its `cause` is `next_link(h)`, not `h` itself, so the head host error is not duplicated as its own cause. `ex-cause` builds a second, lazier box on each read, for a Go error reached as a cause: its class is `Exception` (Section 14 puts finer host classes out of scope), its message is `Error()`, and its own `cause` is `next_link` of the error it boxes rather than that error again, so repeated `ex-cause` calls advance one link at a time down the chain, and `Throwable->map` (Section 5.3) walks it to `None`.
+
+### 4.11 `var` on a Metadata-Carrying Name
+
+The reader turns `^:k sym` into the list `(with-meta sym {:k true})`. `def` unwraps that list and attaches the map to the var, so `(def ^:k x 1)`, `(defn ^:k f [] ...)`, and a macro that splices such a name into `(def ~name ...)` all work. The `var` special form does not unwrap it: `varCompiler` (`pkg/compiler/compiler.go`) asserts its operand is a `Symbol`, so `(var (with-meta sym m))` fails with a Go type-assertion panic rather than a compile error. `deftest` splices its name into `(var ~name)` to attach `:test` metadata, so `(deftest ^:expected-failure math-test ...)` — the form Sections 1.7 and 3.4 rely on — does not compile today, and neither does any other reader metadata on a `deftest` name.
+
+`var` accepts a `(with-meta sym m)` operand and resolves `sym`, ignoring `m`; the metadata reaches the var through the `def` in the same expansion, exactly as it does now. Any other non-symbol operand is a compile error that names the form, not a panic. The IR builder's `var` handling follows the same rule, so both backends agree.
 
 ---
 
@@ -1231,7 +1237,7 @@ Behavior:
 
 ## 12. Go Harness Integration
 
-The Go harness in `test/language_test.go` runs every `.lg` file under `test/` in one shared runtime. It currently compiles `(clear-registered-tests!)` and `(run-tests)` as strings and reads `*test-result*`. Those vars no longer exist. The harness is delivered in two steps: a summary-based run first, then the report bridge. Both share the same discovery and invocation shape; only the `report` binding differs.
+The Go harness in `test/language_test.go` runs every `.lg` file under `test/` in one shared runtime, through `rt.LookupVar` and `rt.InvokeValue` rather than compiling source strings. Section 12.2's summary-based run is in place: it drives `run-tests` and reads the result off `(successful? summary)`. What remains is the report bridge, which turns that same invocation into per-deftest Go subtests with attributed failures (Section 12.3). Both steps share the same discovery and invocation shape; only the `report` binding differs.
 
 Discovery follows which namespaces gained a `deftest` or a `test-ns-hook` while the file loaded: the harness snapshots every var carrying `:test` metadata, plus every namespace's `test-ns-hook` var, immediately before loading a file and, once the load returns, runs every namespace holding a `:test` var that is new or changed, or a `test-ns-hook` var that is new or changed, since that snapshot, in one `(run-tests 'a 'b ...)` call (Section 9.4). A file that interns `deftest`s in several namespaces of its own, whether it reaches each one with `ns` or `in-ns`, gets all of them tested under that one call. The harness keeps no namespace-to-file map; it compares one before/after snapshot of `:test` and `test-ns-hook` vars per file.
 
@@ -1671,7 +1677,7 @@ Existing `test/*.lg` files use `deftest`, `is`, `testing`, `are`, and `use-fixtu
 | `(run-tests)` runs everything registered | Runs the current namespace | Harness change (Section 12). Scripts wanting everything call `(run-all-tests)`. |
 | `*test-result*` boolean | `(successful? summary)` | `.lg` or Go readers of `*test-result*` must switch. |
 | `use-fixtures` global | Per namespace | Update files relying on fixtures leaking across namespaces. |
-| `(throw (str ...))` in core library code | `(throw (ex-info ...))` | Convert the 40 core sites. Behavior under `catch Throwable` and bare `catch` is unchanged. |
+| `(throw (str ...))` in core library code | `(throw (ex-info ...))` | Done: no `(throw (str ...))` site remains under `pkg/rt/core`. Behavior under `catch Throwable` and bare `catch` is unchanged. |
 | `:trace` under `ex-data` as strings | Vector of `Frame` maps, derived from the chain on read, excluded from equality | Readers of the string form must switch. |
 
 Add the reference example, `^:expected-failure` marker included, as `test/tap/tap-example.lg`. Its failure line reads `(math-test) (test/tap/tap-example.lg:9)`. This file ships with Slice 3 (Section 1.8), not with the rest of this migration: summary mode has no per-var attribution and cannot honor `:expected-failure` (Section 12.2), so the summary harness skips a file holding a marked var, with `expected-failure requires the report bridge`, and the example would never run before the bridge exists. Remove any demonstration scripts that print TAP output without asserting from `test/`, since the harness runs every `.lg` file there.
@@ -1889,6 +1895,7 @@ The costs are on the error path and in generated code, not the happy path. The l
 - [ ] Bridge: a deftest invoked from another deftest becomes a nested subtest, and events after its matching end remain on the outer subtest
 - [ ] Bridge: harness stdout is empty; all text flows through `t.Log`/`t.Error`, and percent signs in messages remain literal
 - [ ] Bridge: load/invoke errors, panics, cancellation, premature channel close, and mismatched scope IDs each produce one terminal result without panic, timeout, deadlock, or a stranded producer
+- [ ] `(deftest ^:k name ...)` compiles on both backends and `(:k (meta #'name))` is `true`; `(var 5)` is a compile error naming the form, not a Go panic (Section 4.11)
 - [ ] Bridge: a `deftest` var marked `^:expected-failure` that produces a `:fail` or `:error` passes its subtest, with the failure logged via `t.Log`
 - [ ] Bridge: a `deftest` var marked `^:expected-failure` that produces none fails its subtest with `t.Error("expected failure passed")`
 - [ ] A single marked deftest with two failing `is` forms passes its Go subtest, and the file's overall result is success — derived from that one var's outcome, never from comparing `fail + error` against a count of marked vars
@@ -1992,7 +1999,7 @@ Prose-only cases that remain:
 
 `docs/specs/executable-evidence.md` (#861) specifies a general mechanism for a spec to carry its own runnable evidence: the fence grammar, vocabularies, engines, promotion, tooling, and the coverage rule. `specs` there gates a document once it carries at least one `@R-` requirement tag, unless its masthead opts out with `evidence: skip`.
 
-This specification carries `@R-` tags in Sections 4.9, 11.1, and 16.13, and it opts out of the gate with `evidence: skip` in its masthead: `clojure.test`, `clojure.test.tap`, and the trace primitives this spec describes are not yet implemented, so a spec-evidence run against this document would exercise runtime capabilities that do not exist. Section 16 is the Definition of Done as written. Once the implementation lands, a Section 16 case that can be stated as a form and an expected result can become an evidence block without changing its meaning, and the opt-out is dropped.
+This specification carries `@R-` tags in Sections 4.9, 11.1, and 16.13, and it opts out of the gate with `evidence: skip` in its masthead: the trace primitives of Sections 3.5, 4.10, and 5, and the report bridge of Section 12.3, are not yet implemented, so a spec-evidence run against the cases that depend on them would exercise runtime capabilities that do not exist. `@R-string-split-limit-zero` (4.9) and `@R-tap-diagnostic-split` (11.1) already pass against current main, since `clojure.string/split` and `clojure.test.tap` are in place; `@R-smoke-run-and-tap` (16.13) exercises the `^:expected-failure` marker end to end and still depends on work this document has not shipped: the bridge, and Section 4.11, without which the marked `deftest` form does not compile. Section 16 is the Definition of Done as written. Once the implementation lands, a Section 16 case that can be stated as a form and an expected result can become an evidence block without changing its meaning, and the opt-out is dropped.
 
 ---
 
