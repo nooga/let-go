@@ -6729,6 +6729,34 @@ func CoreRefer(vs ...vm.Value) (vm.Value, error) {
 	return vm.NIL, nil
 }
 
+// formatNewlines rewrites Java's %n (platform line separator) to \n, which
+// Go's Sprintf has no verb for: left alone it renders as "%!n(MISSING)". A
+// single pass copies %% as-is so %%n stays a literal %n. Runs before the
+// argument scan and Sprintf both, so %n never consumes an argument.
+func formatNewlines(s string) string {
+	if !strings.Contains(s, "%n") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+1 < len(s) {
+			switch s[i+1] {
+			case '%':
+				b.WriteString("%%")
+				i++
+				continue
+			case 'n':
+				b.WriteByte('\n')
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 //lg:native
 //lg:name format
 func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
@@ -6739,7 +6767,7 @@ func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("format expected String")
 	}
-	fmts := string(fmtStr)
+	fmts := formatNewlines(string(fmtStr))
 	args := make([]any, len(vs)-1)
 
 	vi := 0
@@ -6780,7 +6808,9 @@ func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
 		}
 		vi++
 	}
-	return vm.String(fmt.Sprintf(string(fmtStr), args...)), nil
+	// Java's Formatter ignores surplus arguments; Go would append an
+	// "%!(EXTRA ...)" diagnostic for every slot the scan left unconsumed.
+	return vm.String(fmt.Sprintf(fmts, args[:vi]...)), nil
 }
 
 //lg:native

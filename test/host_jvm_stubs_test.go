@@ -36,6 +36,11 @@ func TestJVMStubs(t *testing.T) {
 		_, runErr := evalJVMStubs(`(FutureTask. nil)`)
 		assert.Error(t, runErr)
 	})
+	t.Run("Thread/currentThread resolves and evaluates", func(t *testing.T) {
+		v, err := evalJVMStubs(`(.isInterrupted (Thread/currentThread))`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.FALSE, v)
+	})
 	t.Run("java.time chain threads at load, .format throws", func(t *testing.T) {
 		v, err := evalJVMStubs(`(some? (-> (DateTimeFormatterBuilder.) (.appendPattern "x") (.toFormatter)))`)
 		assert.NoError(t, err)

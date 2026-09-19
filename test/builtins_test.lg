@@ -14,7 +14,16 @@
   (testing "format sprintf-style"
     (is (= "hello world" (format "%s %s" "hello" "world")))
     (is (= "num: 42" (format "num: %d" 42)))
-    (is (= "pi: 3.14" (format "pi: %.2f" 3.14)))))
+    (is (= "pi: 3.14" (format "pi: %.2f" 3.14))))
+  (testing "format honors Java's %n as a newline"
+    (is (= "a\nb" (format "a%nb")))
+    (is (= "100%\n" (format "%d%%%n" 100)))
+    (is (= "%n" (format "%%n")))
+    (is (= "a\nb" (format "%s%n%s" "a" "b"))))
+  (testing "format ignores surplus arguments like Java's Formatter"
+    (is (= "\n" (format "%n" 42)))
+    (is (= "a\n" (format "%s%n" "a" "b")))
+    (is (= "plain" (format "plain" 1 2)))))
 
 (deftest re-find-test
   (testing "re-find finds first match"
