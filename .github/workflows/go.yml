@@ -224,9 +224,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      # Pinned rather than "latest" so a TinyGo release cannot turn this gate
-      # red on its own schedule. Bump deliberately; the version is also what
-      # docs/guide/tinygo.md's limitations are measured against.
+      # Pin TinyGo so a new release cannot turn this gate red on its own;
+      # bump deliberately and let this job verify the WASI build and core boot.
       - name: Install TinyGo
         run: |
           wget -q https://github.com/tinygo-org/tinygo/releases/download/v0.42.0/tinygo_0.42.0_amd64.deb
