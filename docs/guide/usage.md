@@ -92,8 +92,8 @@ emulation via xterm.js: ANSI colors, cursor positioning, raw keyboard input.
 
 ## Compile-time vars
 
-`*compiling-aot*` is `true` during `-c`/`-b`/`-w` compilation and `false` at
-runtime, useful for keeping side effects out of compile time:
+`*compiling-aot*` is `true` during `-c`/`-b`/`-w` compilation and `false` during
+ordinary runtime execution, useful for keeping side effects out of compile time:
 
 ```clojure
 (defn -main []
