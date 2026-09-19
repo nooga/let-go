@@ -122,7 +122,13 @@ func (r *NSResolver) loadFile(path string) (*vm.Namespace, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return r.loadSource(path, f, true)
+	var ns *vm.Namespace
+	err = rt.WithFile(path, func() error {
+		var lerr error
+		ns, lerr = r.loadSource(path, f, true)
+		return lerr
+	})
+	return ns, err
 }
 
 func (r *NSResolver) loadSource(sourceName string, reader io.Reader, recordChunk bool) (*vm.Namespace, error) {

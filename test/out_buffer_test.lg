@@ -1,0 +1,13 @@
+(ns test.out-buffer-test
+  (:require
+   [test :refer :all]))
+
+(deftest binding-out-to-buffer-captures
+  (let [b (io/buffer)]
+    (binding [*out* b]
+      (println "x")
+      (print "y"))
+    (is (= "x\ny" (io/buffer-str b)))))
+
+(deftest with-out-str-still-works
+  (is (= "z\n" (with-out-str (println "z")))))

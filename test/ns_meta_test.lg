@@ -1,0 +1,28 @@
+(ns test.ns-meta-test
+  (:require
+   [test :refer :all]))
+
+;; Both tests here mutate namespace metadata, and deftest order within a
+;; namespace is unspecified: the runner walks (vals (ns-interns ns)), as JVM
+;; Clojure does. A test that asserts a namespace STARTS with nil metadata must
+;; therefore use a namespace no other test touches. Asserting it on *ns* was
+;; order-dependent — whenever the reentrancy test below ran first, its :seen
+;; key was already present and this test failed on its first assertion
+;; (7 of 8 runs on one binary).
+(deftest ns-meta-starts-nil-and-alters
+  (let [n (create-ns 'test.ns-meta-fresh)]
+    (is (nil? (meta n)))
+    (alter-meta! n assoc :k 1)
+    (is (= 1 (:k (meta n))))
+    (alter-meta! n update :k inc)
+    (is (= 2 (:k (meta (find-ns 'test.ns-meta-fresh)))))
+    (is (= {:k 2} (meta n)))
+    (remove-ns 'test.ns-meta-fresh)))
+
+(deftest ns-meta-alter-is-reentrant
+  (let [before (meta *ns*)]
+    (alter-meta! *ns* (fn [m] (assoc m :seen (meta *ns*))))
+    (is (= before (:seen (meta *ns*))))
+    (is (map? (alter-meta! *ns* (fn [m]
+                                  (alter-meta! *ns* assoc :inner 1)
+                                  m))))))

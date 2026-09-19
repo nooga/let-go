@@ -1,0 +1,61 @@
+;; test/macro_form_test.lg
+(ns test.macro-form-test
+  (:require
+   [test :refer :all]))
+
+(defmacro capture-form [& _] `(quote ~&form))
+(defmacro capture-line [& _] (:line (meta &form)))
+(defmacro capture-env [& _] `(quote ~&env))
+
+(deftest form-is-the-call-form
+  (is (= '(capture-form 1 2) (capture-form 1 2))))
+
+(deftest form-has-line-metadata
+  (is (= 14 (capture-line))))
+
+(deftest env-is-nil
+  (is (nil? (capture-env))))
+
+(deftest nested-macros-see-their-own-form
+  (is (= '(capture-form (capture-form x)) (capture-form (capture-form x)))))
+
+;; Regression (mparrett on #863): defmacro injects &form/&env with a `let`
+;; around the body. Wrapping the WHOLE body moved a leading pre/post
+;; condition map out of the position `fn-expand` inspects, silently
+;; disabling :pre on every macro. The map must stay the first body form.
+(defmacro only-pos [x]
+  {:pre [(pos? x)]}
+  x)
+
+(deftest macro-precondition-still-fires
+  (is (= 1 (macroexpand '(only-pos 1))))
+  (is (thrown? Throwable (macroexpand '(only-pos -1)))))
+
+;; A single-form body that IS a map is a return value, not a condition map —
+;; the same rule fn-expand uses — so the hoist must not misread it.
+(defmacro lone-map [] {:a 1})
+
+(deftest macro-body-that-is-a-map-is-a-value
+  (is (= {:a 1} (macroexpand '(lone-map)))))
+
+;; Regression: a multi-arity macro's arity clauses are built with `cons`, so
+;; they are Cons values, not Lists. `fn`'s multi-arity arm tested `list?` and
+;; fell through to its nil :else arm, making the whole macro evaluate to nil.
+(defmacro two-ways
+  ([x] (list 'inc x))
+  ([x y] (list '+ x y)))
+
+(deftest multi-arity-macro-defines-a-value
+  (is (fn? (var-get (resolve 'two-ways))))
+  (is (= 2 (two-ways 1)))
+  (is (= 3 (two-ways 1 2))))
+
+;; Regression (mparrett on #863): *macro-form* was pushed on the var's own
+;; (root) binding stack, so a macro expanded on a child ExecContext — inside
+;; a future, say — saw &form as nil. The binding is pushed through the
+;; invoking context now.
+(deftest form-visible-in-a-child-context
+  ;; capture-form expands to (quote <the call form>), so the expansion read
+  ;; back from the child context is that quote form, not the call form.
+  (is (= '(quote (capture-form 1 2))
+         @(future (macroexpand '(capture-form 1 2))))))

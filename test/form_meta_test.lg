@@ -1,0 +1,38 @@
+(ns test.form-meta-test
+  (:require
+   [test :refer :all]))
+
+(deftest read-string-list-carries-position
+  (let [m (meta (read-string "(a b)"))]
+    (is (= 1 (:line m)))
+    (is (= 1 (:column m))))
+  (let [outer (read-string "(is (= 4 (+ 2 2)))")
+        inner (nth (nth outer 1) 2)]
+    (is (= '(+ 2 2) inner))
+    (is (= 1 (:line (meta inner))))
+    (is (= 10 (:column (meta inner))))))
+
+(deftest explicit-meta-wins-and-merges
+  (let [f (with-meta (read-string "(a b)") {:x 1})]
+    (is (= 1 (:x (meta f))))))
+
+(deftest non-list-forms-have-no-position
+  (is (nil? (meta (read-string "[1 2]"))))
+  (is (nil? (meta (read-string "x")))))
+
+(deftest short-fn-body-carries-position
+  ;; readShortFn (#(...)) assembles the fn's single body expression from the
+  ;; individually-read top-level forms inside #( ... ) rather than returning
+  ;; it whole from a nested r.Read() call, so unlike every other list form it
+  ;; used to never get FormSource attached — the identical code spelled
+  ;; (fn [] (foo 1)) always carried its position, #(foo 1) did not. A macro
+  ;; that reads (meta &form) (e.g. clojure.test's try-expr) saw a nil
+  ;; position whenever it was the direct body of a short-fn.
+  (let [body (nth (read-string "#(foo 1)") 2)]
+    (is (= '(foo 1) body))
+    (is (= 1 (:line (meta body))))
+    ;; Points at the `(` (column 2: '#'=1 '('=2 'f'=3), matching how the
+    ;; identical form spelled (fn [] (foo 1)) attributes its body to its
+    ;; own opening paren via readList — not at the '#' (column 1), which
+    ;; is what the outer #(...) wrapper itself is attributed to.
+    (is (= 2 (:column (meta body))))))

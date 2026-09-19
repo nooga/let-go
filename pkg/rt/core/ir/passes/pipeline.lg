@@ -410,7 +410,7 @@
 ;; of functions a namespace contributes to lowering is NOT "the literal `defn`
 ;; forms" — it is every `(def NAME (fn ...))` that macroexpansion reveals,
 ;; including macro-generated ones (e.g. `deftest` -> `(do (def t (fn [] ...))
-;; (register-test! ...))`). This is the single source of truth for "what
+;; (alter-meta! (var t) assoc :test (fn [] ...)))`). This is the single source of truth for "what
 ;; lowering operates on", shared by the stress harness today and (eventually)
 ;; production form-selection — so coverage measurement never drifts from what
 ;; the pipeline actually lowers. Requires the file's macros to be loaded first.
@@ -796,7 +796,7 @@
             defn-form (apply list 'defn (symbol def-name) args-vec (rest tail))
             chunk     (compile-form defn-form the-ns)]
         (chunk->fn arity variadic? chunk))
-      (throw "compile-def-fn-value: multi-arity fn form unsupported"))))
+      (throw (ex-info "compile-def-fn-value: multi-arity fn form unsupported" {:fn :compile-def-fn-value :type (type args-vec) :value args-vec})))))
 
   ;; --- Go bootstrap generation -------------------------------------------
 
