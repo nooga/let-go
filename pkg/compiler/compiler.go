@@ -347,7 +347,7 @@ func omitTopLevelEntryCall(form vm.Value, entry entryFrameCall) (vm.Value, bool)
 	if name == entry.name || name == entry.namespace+"/"+entry.name {
 		return vm.NIL, true
 	}
-	start := -1
+	var start int
 	switch name {
 	case "do", "clojure.core/do":
 		start = 1
