@@ -92,6 +92,26 @@ func isEphemeralBackup(path string) bool {
 // closure, then records every non-test build source in those package directories.
 // Following imports from all Go variants makes the result a stable superset of
 // the files that can build lgbgen on any host, rather than a Linux-only graph.
+// goModToolchain returns the toolchain the module pins, as a GOTOOLCHAIN value.
+// It reports go.mod's `toolchain` line when there is one, and otherwise "auto",
+// which lets the go command honor the `go` line. Anything unreadable also
+// yields "auto": failing to pin is recoverable, refusing to run is not.
+func goModToolchain(root string) string {
+	file, err := os.Open(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return "auto"
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 2 && fields[0] == "toolchain" {
+			return fields[1]
+		}
+	}
+	return "auto"
+}
+
 func goModuleBuildInputs(repoRoot, packagePattern string, buildTags ...string) ([]string, error) {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
@@ -131,10 +151,18 @@ func goModuleBuildInputs(repoRoot, packagePattern string, buildTags ...string) (
 	// Linux/amd64 is the CI generation target; explicit values also prevent
 	// ambient workspaces, GOFLAGS, experiments, and user GOENV state from
 	// silently changing the selected package graph.
+	//
+	// The toolchain is pinned from go.mod rather than to GOTOOLCHAIN=local.
+	// "local" reads as a pin but is not one: it means "whichever toolchain
+	// this host's go binary happens to be", which differs per contributor --
+	// and it fails outright once go.mod requires a newer Go than the go on
+	// PATH, with "go.mod requires go >= X (running Y; GOTOOLCHAIN=local)".
+	// Naming go.mod's own toolchain makes every host agree on one graph and
+	// lets the go command fetch that toolchain when the local one is older.
 	cmd.Env = append(cmd.Env,
 		"GOOS=linux", "GOARCH=amd64", "GOAMD64=v1", "CGO_ENABLED=1",
 		"GO111MODULE=on", "GOWORK=off", "GOFLAGS=", "GOENV=off",
-		"GOEXPERIMENT=", "GOTOOLCHAIN=local",
+		"GOEXPERIMENT=", "GOTOOLCHAIN="+goModToolchain(root),
 	)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
