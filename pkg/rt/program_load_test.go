@@ -239,9 +239,8 @@ func TestRunExecUnitReplayOrderAndMainOnce(t *testing.T) {
 // the entry. The end-to-end proof is the guarded_entry fixture under
 // test/native-entry/, which fails with a doubled line if either half regresses.
 func TestRunProgramMainChunkForEntryFrameBracketsCompilingAOT(t *testing.T) {
-	if _, err := BootCore(); err != nil {
-		t.Fatalf("BootCore: %v", err)
-	}
+	// No BootCore: the var is installed with CoreNS itself, so this runs in
+	// the -tags bootstrap lane too, where the embedded core is empty.
 	v := CoreNS.LookupLocal(vm.Symbol("*compiling-aot*"))
 	if v == nil {
 		t.Fatal("*compiling-aot* missing from core")
