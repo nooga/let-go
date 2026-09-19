@@ -8,7 +8,7 @@ authoritative-for:
 supersedes:
   - testing-and-conformance.md (on clojure-test-api-design — the clojure.test layer is now specified here; the older doc remains authoritative for conformance strategy)
 human-verified:
-# evidence: skip until clojure.test, clojure.test.tap, and the trace primitives this spec describes are implemented
+# evidence: skip until the trace primitives (3.5, 4.10, 5) and the report bridge (12.3) are implemented; clojure.test and clojure.test.tap already are (see Section 17)
 evidence: skip
 ---
 
@@ -88,7 +88,7 @@ This spec defines the `clojure.test` public API and its printed output, the `clo
 
 This spec excludes `clojure.test.junit`, namespace discovery from the filesystem (`clojure.tools.namespace`), and running kaocha or cognitect test-runner end to end. See Section 14.
 
-**Relationship to the current `test.lg`.** Three recent changes invested in the registry-based design this spec replaces: #673 (register each test var once), #671 (`run-test-var` and `run-test` over the registry), and #754 (`thrown?` and `thrown-with-msg?` by hand-written expansion in `is`). Their behavior survives: a re-evaluated `deftest` still runs once (Section 7), `run-test-var` and `run-test` keep their contracts (Section 9.4), and `thrown?` keeps its pass, fail, and error semantics (Section 6.4). Their mechanisms do not: metadata discovery replaces the registry, and the `assert-expr` multimethod replaces the special-cased expansion. The typed-catch dispatch from #472 and #476 is kept as-is and relied on (Section 4.6).
+**Relationship to the earlier `test.lg`.** Three changes invested in the registry-based design the port replaced: #673 (register each test var once), #671 (`run-test-var` and `run-test` over the registry), and #754 (`thrown?` and `thrown-with-msg?` by hand-written expansion in `is`). Their behavior survived the port: a re-evaluated `deftest` still runs once (Section 7), `run-test-var` and `run-test` keep their contracts (Section 9.4), and `thrown?` keeps its pass, fail, and error semantics (Section 6.4). Their mechanisms did not: metadata discovery replaced the registry, and the `assert-expr` multimethod replaced the special-cased expansion. The typed-catch dispatch from #472 and #476 is kept as-is and relied on (Section 4.6).
 
 ### 1.6 Notation
 
@@ -1674,7 +1674,7 @@ Existing `test/*.lg` files use `deftest`, `is`, `testing`, `are`, and `use-fixtu
 | `PASS <form>` printed per assertion | Nothing printed on pass | None. |
 | `FAIL <form> - msg` on one line | Multi-line FAIL block (Section 10.4) | None. |
 | `Testing: a > b` printed by `testing` | Nothing printed. Contexts appear only in failure blocks, joined by spaces. | Update tests asserting on `>` separators. |
-| `(run-tests)` runs everything registered | Runs the current namespace | Harness change (Section 12). Scripts wanting everything call `(run-all-tests)`. |
+| `(run-tests)` runs everything registered | Runs the current namespace | Harness change (Section 12). An aggregate runner — a namespace that `:require`s every test namespace and calls a bare `(run-tests)` — holds no test vars of its own, so it now runs nothing, reports no failures and exits 0. Such a script calls `(run-all-tests #"myproj\.test\..*")`: `all-ns` sees only loaded namespaces, so the `:require` list stays the source of truth, and the pattern keeps unrelated loaded namespaces out. |
 | `*test-result*` boolean | `(successful? summary)` | `.lg` or Go readers of `*test-result*` must switch. |
 | `use-fixtures` global | Per namespace | Update files relying on fixtures leaking across namespaces. |
 | `(throw (str ...))` in core library code | `(throw (ex-info ...))` | Done: no `(throw (str ...))` site remains under `pkg/rt/core`. Behavior under `catch Throwable` and bare `catch` is unchanged. |
