@@ -306,6 +306,23 @@ func cIdentName(v vm.Value) (vm.Value, error) {
 	return vm.String(id.Name), nil
 }
 
+// ident-names returns identifiers in AST order, including nested expressions.
+// Emitters use these names to avoid shadowing captured Go expressions.
+func cIdentNames(v vm.Value) (vm.Value, error) {
+	n, err := unboxNode(v)
+	if err != nil {
+		return vm.NIL, err
+	}
+	names := []vm.Value{}
+	ast.Inspect(n, func(node ast.Node) bool {
+		if id, ok := node.(*ast.Ident); ok {
+			names = append(names, vm.String(id.Name))
+		}
+		return true
+	})
+	return vm.NewArrayVector(names), nil
+}
+
 // type-expr: (gogen/type "spec") -> parsed type expression
 // Uses go/parser so the full Go type grammar is supported.
 //
@@ -2376,6 +2393,7 @@ func installGogenNS() {
 		mk(wrap1Named("ident", cIdent)),
 		mk(wrap1Named("ident?", cIdentP)),
 		mk(wrap1Named("ident-name", cIdentName)),
+		mk(wrap1Named("ident-names", cIdentNames)),
 		mk(wrap1Named("type", cType)),
 		mk(wrap1Named("int-lit", cIntLit)),
 		mk(wrap1Named("float-lit", cFloatLit)),

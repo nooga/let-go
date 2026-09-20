@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"go/ast"
 	"go/format"
+	"go/parser"
 	"go/token"
 	"math"
 	"strings"
@@ -706,6 +707,20 @@ func TestGogenIdentAccessors(t *testing.T) {
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "String") && !strings.Contains(errMsg, "*ast.Ident") {
 		t.Errorf("cIdentName error should mention type issue, got: %v", err)
+	}
+}
+
+func TestGogenIdentNamesIncludesNestedCapture(t *testing.T) {
+	expr, err := parser.ParseExpr(`vm.Int(captured + captured)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := cIdentNames(box(expr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names.String(); got != `["vm" "Int" "captured" "captured"]` {
+		t.Fatalf("identifier traversal = %s", got)
 	}
 }
 

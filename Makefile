@@ -575,10 +575,14 @@ browser-inspector:
 # reads the rule, so a later assignment would leave the prerequisite empty.
 GO-CALLABLES = $(BUILD-DIR)/go-callables
 
-.PHONY: quality
-quality: build $(GO-CALLABLES)
+.PHONY: quality quality-aot
+quality: build
+# Generated output has its own corpus; rebuild it before measuring the emitter.
+quality-aot: generate
+quality-aot: QUALITY-FLAGS = --generated
+quality quality-aot: $(GO-CALLABLES)
 	QUALITY_GO_CALLABLES=$(GO-CALLABLES) QUALITY_LG=$(LG) \
-	LG_SOURCE_PATHS=scripts $(LG) scripts/quality.lg \
+	LG_SOURCE_PATHS=scripts $(LG) scripts/quality.lg $(QUALITY-FLAGS) \
 	  --since $${QUALITY_SINCE:-$$(date -v-180d +%Y-%m-%d 2>/dev/null || date -d '180 days ago' +%Y-%m-%d)} \
 	  $${QUALITY_GO_COVER:+--go-cover $$QUALITY_GO_COVER} $${QUALITY_CI_SECONDS:+--ci-seconds $$QUALITY_CI_SECONDS} \
 	  $${QUALITY_EDN:+--edn $$QUALITY_EDN} $${QUALITY_TOP:+--top $$QUALITY_TOP}

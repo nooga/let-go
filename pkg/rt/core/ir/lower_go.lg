@@ -1954,6 +1954,46 @@
 
 (declare trampoline-call-stmts)
 
+(defn- fresh-local-name [f extra-names base]
+  (let [used0 (into #{"ec" "callErr"} extra-names)
+        used1 (reduce (fn [s nid] (conj s (value-name f nid)))
+                      used0 (range (ir/inst-count f)))
+        used2 (reduce (fn [s i] (conj s (go-arg-name "arg" i) (go-arg-name "a" i)))
+                      used1 (range (ir/fn-arity f)))]
+    (loop [i 0]
+      (let [candidate (if (zero? i) base (str base "_" i))]
+        (if (contains? used2 candidate)
+          (recur (inc i))
+          candidate)))))
+
+(defn- shared-closure-args
+  "Materialize closure arguments once across direct and fallback branches.
+   Keep registration deferred until both branches can be emitted."
+  [f closed-exprs nid arg-rids param-specs arg-exprs]
+  (into {}
+        (keep-indexed
+          (fn [i rid]
+            (when (and (= "vm.Value" (nth param-specs i))
+                       (closure-value? f rid))
+              [i {:name (fresh-local-name
+                          f (mapcat gogen/ident-names closed-exprs)
+                          (str "ca" nid "_" i))
+                  :expr (nth arg-exprs i)}]))
+          arg-rids)))
+
+(defn- shared-closure-inits [shared]
+  (mapv (fn [[_ {:keys [name expr]}]]
+          (register-typed-call-temp! name "vm.Value")
+          (gogen/assign "=" (gogen/ident name) expr))
+        (sort-by first shared)))
+
+(defn- shared-arg-exprs [shared args expr-fn]
+  (mapv (fn [i arg]
+          (if-let [entry (get shared i)]
+            (gogen/ident (:name entry))
+            (expr-fn arg)))
+        (range (count args)) args))
+
 (defn- emit-typed-direct-call
   "Direct-call emit with per-arg coercion + result boxing. Branches on
    the call entry's typed signature (param-specs + result-spec).
@@ -2008,15 +2048,19 @@
               ;; branch, and only register the guard temps once both
               ;; are known non-nil; registering earlier would leak
               ;; unused function-scoped var decls (Go compile error).
-              (let [fallback (trampoline-call-stmts f closed-exprs nid
-                                                    target refs)]
+              (let [shared (shared-closure-args f closed-exprs nid arg-rids param-specs arg-exprs)
+                    direct-args (shared-arg-exprs shared arg-exprs identity)
+                    fallback-args (shared-arg-exprs shared arg-rids
+                                    (fn [rid] (box-as-value f closed-exprs rid)))
+                    fallback (trampoline-call-stmts f closed-exprs nid
+                                                    target refs fallback-args)]
                 (if (nil? fallback)
                   ;; No trampoline branch can be built: only the flat,
                   ;; unguarded form remains (pre-root-guard behavior).
                   (when (empty? guard-idx)
                     (typed-call-result-stmts f nid target entry arg-exprs))
                   (let [then (typed-call-result-stmts f nid target
-                                                      entry arg-exprs)]
+                                                      entry direct-args)]
                     (when then
                       (doseq [i guard-idx]
                         (let [g (:guard (nth descs i))]
@@ -2046,7 +2090,7 @@
                               (nil? root-guard) type-cond
                               (nil? type-cond)  root-guard
                               :else (gogen/binary "&&" root-guard type-cond))]
-                        (conj asserts
+                        (conj (into (shared-closure-inits shared) asserts)
                               (gogen/if-stmt nil cond-e
                                              then fallback))))))))))]
     (when stmts
@@ -2196,13 +2240,16 @@
          (keyword? (ir/aux callee f))
          (or (= 1 arg-count) (= 2 arg-count)))))
 
-(defn- trampoline-call-stmts [f closed-exprs nid target refs]
+(defn- trampoline-call-stmts
   "Emit the runtime-dispatch trampoline for a :call, assigning the result to
    `target`. This is the always-correct fallback path: a cross-ns cached-var
    IFn dispatch when the callee var is recorded (base set), else the boxed
    rt.InvokeValueEC path. Extracted from call-assign-stmts so the native
    multimethod type-switch can reuse the IDENTICAL trampoline for its default:
    arm (open/late/unmapped-type dispatch must behave exactly as today)."
+  ([f closed-exprs nid target refs]
+   (trampoline-call-stmts f closed-exprs nid target refs nil))
+  ([f closed-exprs nid target refs prepared-args]
   (let [nn         (load-var-ns+name f (first refs))
         ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
         ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
@@ -2214,7 +2261,8 @@
         ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
         ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
         base       (when nn (record-cross-ns-var! (first nn) (second nn)))
-        arg-exprs  (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
+        arg-exprs  (or prepared-args
+                       (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))
         args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
     (when (every? identity arg-exprs)
       (if base
@@ -2247,7 +2295,7 @@
               ;; Total keyword lookup: the error is always nil at arity
               ;; 1-2, so discard it (`_`) and skip the dead check.
               [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
-              (emit-call-stmts f target invoke))))))))
+              (emit-call-stmts f target invoke)))))))))
 
 ;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
 ;; Shape: {multifn-name-str {:dispatch-type :type
@@ -3191,20 +3239,7 @@
 (defn- fresh-keyword-tag-name [f bid]
   ;; A type-switch binding scopes over every clause, including the non-keyword
   ;; default body. Avoid shadowing any source/local identifier referenced there.
-  (let [used0 #{"ec" "callErr"}
-        used1 (reduce (fn [s nid] (conj s (value-name f nid)))
-                      used0
-                      (range (ir/inst-count f)))
-        used2 (loop [i 0 s used1]
-                (if (< i (ir/fn-arity f))
-                  (recur (inc i) (conj s (go-arg-name "arg" i) (go-arg-name "a" i)))
-                  s))
-        base (str "_kw" bid)]
-    (loop [i 0]
-      (let [candidate (if (zero? i) base (str base "_" i))]
-        (if (contains? used2 candidate)
-          (recur (inc i))
-          candidate)))))
+  (fresh-local-name f nil (str "_kw" bid)))
 
 (defn- lower-tree [f closed-exprs node]
   "Lower a structurized control tree to Go statements.

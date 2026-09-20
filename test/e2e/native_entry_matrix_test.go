@@ -48,6 +48,23 @@ func TestNativeEntryMatrix(t *testing.T) {
 
 	cases := []nativeEntryCase{
 		{
+			name: "shared closure native guard and redefinition",
+			files: map[string]string{
+				"app.lg": `(ns app)
+(defn store-thunk [a x]
+  (let [ca8_1 (identity x)] (reset! a (fn [] (fn [] ca8_1)))))
+(defn replacement-reset [a thunk] (+ 100 ((thunk))))
+(defn -main []
+  (let [a (atom nil)]
+    (store-thunk a 42)
+    (println ((@a)))
+    (with-redefs [clojure.core/reset! replacement-reset]
+      (println (store-thunk a 7)))
+    (println ((@a)))))`,
+			},
+			wantStdout: "42\n107\n42",
+		},
+		{
 			name: "public -main []",
 			files: map[string]string{
 				"app.lg": "(ns app)\n(defn -main [] (println \"PUB\"))\n",
