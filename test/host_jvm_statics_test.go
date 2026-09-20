@@ -68,6 +68,19 @@ func TestJVMStatics(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "[42 3.5 3.5 true]", v.String())
 	})
+	t.Run("Integer/parseInt keeps 32-bit bounds", func(t *testing.T) {
+		v, err := evalJVMStatics(`[(Integer/parseInt "2147483647") (Integer/parseInt "-2147483648")
+                                   (Long/parseLong "2147483648") (Long/parseLong "-2147483649")]`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[2147483647 -2147483648 2147483648 -2147483649]", v.String())
+		for _, expr := range []string{
+			`(Integer/parseInt "2147483648")`,
+			`(Integer/parseInt "-2147483649")`,
+		} {
+			_, err := evalJVMStatics(expr)
+			assert.Error(t, err, expr)
+		}
+	})
 	t.Run("System/arraycopy over object arrays", func(t *testing.T) {
 		v, err := evalJVMStatics(`(let [src (object-array 3) dst (object-array 3)]
                                    (aset src 0 :x) (aset src 1 :y) (aset src 2 :z)

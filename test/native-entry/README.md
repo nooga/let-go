@@ -82,8 +82,14 @@ loophole:
   evidence that its generated Go body is dead code.
 - `toplevel_effect` — top-level side effect plus a VM-backed callee. Pins the frame's
   main-chunk replay: `lg -c` bundles carry an empty NS table, so without
-  `rt.RunProgramMainChunk` the VM-backed callee resolves a Nil var and panics; with a
-  double replay the banner would print twice and the byte-exact `.expect` fails.
+  `rt.RunProgramMainChunk` the VM-backed callee resolves a Nil var and
+  panics; with a double replay the banner would print twice and the byte-exact
+  `.expect` fails.
+- `guarded_entry` — the documented `(when-not *compiling-aot* (-main))` guard at the
+  top level (#796). The frame owns the entry call, so `lg -c -entry-frame-entry`
+  omits that call from the bytecode while retaining its other top-level forms.
+  The multi-namespace replay shape is covered by `TestNativeEntryNamespaceReplay`
+  in `test/e2e`.
 
 ### Regression pinned by `toplevel_effect` + `vm_backed`
 

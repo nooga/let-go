@@ -296,7 +296,7 @@
                           :expected '~expr :actual t#}))))))
 
 (defmacro is
-  ([form] `(is ~form nil))
+  ([form] `(try-expr nil ~form))
   ([form msg] `(try-expr ~msg ~form)))
 
 ;;; ---- testing / are (spec 6.5, 6.6) ----------------------------------------

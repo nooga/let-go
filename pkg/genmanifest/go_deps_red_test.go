@@ -217,7 +217,7 @@ func goListModuleInputsOracle(t *testing.T, root, packagePattern string, tags ..
 	cmd.Env = append(cmd.Env,
 		"GOOS=linux", "GOARCH=amd64", "GOAMD64=v1", "CGO_ENABLED=1",
 		"GO111MODULE=on", "GOWORK=off", "GOFLAGS=", "GOENV=off",
-		"GOEXPERIMENT=", "GOTOOLCHAIN=local",
+		"GOEXPERIMENT=", "GOTOOLCHAIN="+goModToolchain(root),
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

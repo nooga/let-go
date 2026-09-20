@@ -132,7 +132,7 @@ func installMathInto(nsName string) {
 		if err != nil {
 			return vm.NIL, err
 		}
-		return vm.MakeInt(int(math.Round(a))), nil
+		return vm.MakeInt64(int64(math.Round(a))), nil
 	})
 	ns.Def("round", roundf)
 
@@ -158,7 +158,7 @@ func installMathInto(nsName string) {
 		if (a^b) >= 0 && (a^r) < 0 {
 			return vm.NIL, fmt.Errorf("integer overflow")
 		}
-		return vm.MakeInt(int(r)), nil
+		return vm.MakeInt64(int64(r)), nil
 	})
 	ns.Def("add-exact", addExact)
 
@@ -179,7 +179,7 @@ func installMathInto(nsName string) {
 		if (a^b) < 0 && (a^r) < 0 {
 			return vm.NIL, fmt.Errorf("integer overflow")
 		}
-		return vm.MakeInt(int(r)), nil
+		return vm.MakeInt64(int64(r)), nil
 	})
 	ns.Def("subtract-exact", subtractExact)
 
@@ -199,7 +199,7 @@ func installMathInto(nsName string) {
 		if a != 0 && r/a != b {
 			return vm.NIL, fmt.Errorf("integer overflow")
 		}
-		return vm.MakeInt(int(r)), nil
+		return vm.MakeInt64(int64(r)), nil
 	})
 	ns.Def("multiply-exact", multiplyExact)
 
@@ -214,7 +214,7 @@ func installMathInto(nsName string) {
 		if a == math.MaxInt64 {
 			return vm.NIL, fmt.Errorf("integer overflow")
 		}
-		return vm.MakeInt(int(a + 1)), nil
+		return vm.MakeInt64(int64(a + 1)), nil
 	})
 	ns.Def("increment-exact", incrementExact)
 
@@ -229,7 +229,7 @@ func installMathInto(nsName string) {
 		if a == math.MinInt64 {
 			return vm.NIL, fmt.Errorf("integer overflow")
 		}
-		return vm.MakeInt(int(a - 1)), nil
+		return vm.MakeInt64(int64(a - 1)), nil
 	})
 	ns.Def("decrement-exact", decrementExact)
 
@@ -244,7 +244,7 @@ func installMathInto(nsName string) {
 		if a == math.MinInt64 {
 			return vm.NIL, fmt.Errorf("integer overflow")
 		}
-		return vm.MakeInt(int(-a)), nil
+		return vm.MakeInt64(int64(-a)), nil
 	})
 	ns.Def("negate-exact", negateExact)
 
@@ -269,7 +269,7 @@ func installMathInto(nsName string) {
 		if (a^b) < 0 && d*b != a {
 			d--
 		}
-		return vm.MakeInt(int(d)), nil
+		return vm.MakeInt64(int64(d)), nil
 	})
 	ns.Def("floor-div", floorDiv)
 
@@ -292,7 +292,7 @@ func installMathInto(nsName string) {
 		if r != 0 && (r > 0) != (b > 0) {
 			r += b
 		}
-		return vm.MakeInt(int(r)), nil
+		return vm.MakeInt64(int64(r)), nil
 	})
 	ns.Def("floor-mod", floorMod)
 
