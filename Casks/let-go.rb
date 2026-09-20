@@ -34,8 +34,10 @@ cask "let-go" do
 
   binary "lg"
 
-  postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lg"] if OS.mac?
+  postflight_steps do
+    on_macos do
+      run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{staged_path}}/lg"]
+    end
   end
 
   # No zap stanza required
