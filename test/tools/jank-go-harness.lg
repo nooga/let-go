@@ -23,9 +23,10 @@
   (os/exit 2))
 
 (defn target-defs [target form]
-  ;; Post-#863 deftest puts the body in the var's :test metadata:
+  ;; deftest puts the test body in the var's :test metadata, not in the def:
   ;;   (alter-meta! (var name) assoc :test (fn* [] body...))
-  ;; and the def itself is only the test-var wrapper. Select the :test fn.
+  ;; The def is only the test-var wrapper, so match the alter-meta! form and
+  ;; rebuild a (def target body) from its :test fn.
   (let [self (if (and (seq? form)
                       (= 'alter-meta! (first form))
                       (seq? (second form))
@@ -78,9 +79,9 @@
 
 (def adapted (apply list 'defn target (second fn-form) (drop 2 fn-form)))
 (def runner
-  ;; clojure.test's contract since #863: *report-counters* is a REF bound by
-  ;; the runner (inc-report-counter commutes it), and the selected fn is the
-  ;; var's :test body, so it never passes through test-var and :test stays 0.
+  ;; clojure.test's contract: *report-counters* is a REF bound by the runner
+  ;; (inc-report-counter commutes it), and the selected fn is the var's :test
+  ;; body, so it never passes through test-var and :test stays 0.
   ;; Success is "assertions ran, none failed or errored, body returned truthy".
   (read-string
     (str "(defn run-selected-test [] "

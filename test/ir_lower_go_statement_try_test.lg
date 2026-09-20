@@ -6,12 +6,11 @@
    [test :refer :all]))
 
 ;; A `try` in statement position runs for its effects, so the Go lowering must
-;; keep it even though nothing reads its value. It used to vanish: the DCE
-;; read-set seeded only from terminators and :call, so a let-local captured
-;; only by the try's body closure was dead, the emitter could not materialise
-;; the closure, and the whole region was skipped without any fallback (#925).
-;; clojure.test's `is` expands to exactly this shape, which is how the jank
-;; direct-ABI gate found it.
+;; keep it even though nothing reads its value. If the DCE read-set does not
+;; seed from :try, a let-local captured only by the try's body closure reads as
+;; dead, the emitter cannot materialise the closure, and the region is skipped
+;; with no fallback. clojure.test's `is` expands to exactly this shape, so the
+;; generated-Go test suites are what this protects.
 
 (defn probe-effect [v] v)
 

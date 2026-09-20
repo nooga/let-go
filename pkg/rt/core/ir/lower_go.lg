@@ -2631,13 +2631,12 @@
                            (let [op (ir/op (first remaining) f)]
                              ;; A nil result means "no statement". Side-effect-free
                              ;; ops (loads/const/block-arg, and any other dead value)
-                             ;; can be skipped. A :call that returns nil, however, is
-                             ;; an un-lowerable side-effecting call (e.g. push-binding!
-                             ;; with a (var X) arg) — dropping it would change behavior,
-                             ;; so the whole function must fall back instead.
-                             ;; :call and :try run for their effects: a nil from their lowering is
-                             ;; a failure that must surface as bytecode fallback, never a silently
-                             ;; skipped statement (#925).
+                             ;; can be skipped. A nil from :call or :try is
+                             ;; different: both run for their effects — an
+                             ;; un-lowerable side-effecting call (push-binding!
+                             ;; with a (var X) arg), a guarded region — so
+                             ;; dropping the statement would change behavior and
+                             ;; the whole function must fall back instead.
                              (if (and (not (contains? #{:call :try} op))
                                       (or (= op :load-arg)
                                           (= op :load-var)
@@ -3182,11 +3181,13 @@
         (let [stmts (lower-inst-stmts f closed-exprs (first remaining))]
           (if (nil? stmts)
             (let [op (ir/op (first remaining) f)]
-              ;; A nil result means "no statement". Side-effect-free
-              ;; ops (loads/const/block-arg, and any other dead value)
-              ;; can be skipped. A nil from :call or :try means that a
-              ;; side-effecting operation could not be lowered, so the whole
-              ;; function must fall back instead of dropping it.
+              ;; A nil result means "no statement". Side-effect-free ops
+              ;; (loads/const/block-arg, and any other dead value) can be
+              ;; skipped. A nil from :call or :try is different: both run for
+              ;; their effects — an un-lowerable side-effecting call
+              ;; (push-binding! with a (var X) arg), a guarded region — so
+              ;; dropping the statement would change behavior and the whole
+              ;; function must fall back instead.
               (if (and (not (contains? #{:call :try} op))
                        (or (= op :load-arg)
                            (= op :load-var)
