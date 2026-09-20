@@ -101,17 +101,19 @@ func TestJankSuiteDirectABIGeneratedGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated selected Go: %v", err)
 	}
+	// Pin a native ABI call in the fixture's map setup. Assertions invoke
+	// predicates through apply, so a predicate lookup alone proves no direct call.
 	oracle := gofragment.GoMatchRequest{
 		Kind:     gofragment.GoExpression,
 		Target:   "TestIdenticalQmark",
-		Expected: `ec.Invoke(rt.CachedVarFn(&__v_clojure_core_identical_QMARK_, "clojure.core", "identical?"), []vm.Value{x, y})`,
+		Expected: `rt.CoreHashMap(vm.Keyword("a-key"), vm.Keyword("a-val"))`,
 	}
 	if err := gofragment.MatchGeneratedGoFragment(oracle, string(generated)); err != nil {
 		t.Fatalf("inline Go AST oracle mismatch: %v", err)
 	}
 
 	badOracle := oracle
-	badOracle.Expected = strings.Replace(oracle.Expected, `"identical?"`, `"not-identical?"`, 1)
+	badOracle.Expected = strings.Replace(oracle.Expected, `"a-val"`, `"wrong-value"`, 1)
 	if err := gofragment.MatchGeneratedGoFragment(badOracle, string(generated)); err == nil {
 		t.Fatal("structural falsifiability: mismatched inline Go oracle unexpectedly passed")
 	}
@@ -139,12 +141,30 @@ func TestJankSuiteDirectABIGeneratedGo(t *testing.T) {
 	}
 }
 
+// rootGoDirective returns the `go` directive of the checkout's go.mod, so a
+// generated module that depends on it declares a language version at least as
+// new as let-go's own.
+func rootGoDirective(t *testing.T, root string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatalf("read root go.mod: %v", err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == "go" {
+			return fields[1]
+		}
+	}
+	t.Fatalf("no go directive in %s/go.mod", root)
+	return ""
+}
+
 // prepareJankGeneratedModule turns the generated directory into a standalone Go
 // module resolving github.com/nooga/let-go to this checkout, so the generated
 // package can be built and run without ever being written into the repository.
 func prepareJankGeneratedModule(ctx context.Context, t *testing.T, root, dir string) {
 	t.Helper()
-	mod := "module " + jankGeneratedPackage + "\n\ngo 1.23\n\n" +
+	mod := "module " + jankGeneratedPackage + "\n\ngo " + rootGoDirective(t, root) + "\n\n" +
 		"require github.com/nooga/let-go v0.0.0\n" +
 		"replace github.com/nooga/let-go => " + root + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0o644); err != nil {

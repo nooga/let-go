@@ -2629,13 +2629,9 @@
                        (let [stmts (lower-inst-stmts f closed-exprs (first remaining))]
                          (if (nil? stmts)
                            (let [op (ir/op (first remaining) f)]
-                             ;; A nil result means "no statement". Side-effect-free
-                             ;; ops (loads/const/block-arg, and any other dead value)
-                             ;; can be skipped. A :call that returns nil, however, is
-                             ;; an un-lowerable side-effecting call (e.g. push-binding!
-                             ;; with a (var X) arg) — dropping it would change behavior,
-                             ;; so the whole function must fall back instead.
-                             (if (and (not= op :call)
+                             ;; Calls and guarded regions execute even when their
+                             ;; result is unused; failed lowering requires fallback.
+                             (if (and (not (contains? #{:call :try} op))
                                       (or (= op :load-arg)
                                           (= op :load-var)
                                           (= op :load-closed)
@@ -3179,13 +3175,9 @@
         (let [stmts (lower-inst-stmts f closed-exprs (first remaining))]
           (if (nil? stmts)
             (let [op (ir/op (first remaining) f)]
-              ;; A nil result means "no statement". Side-effect-free
-              ;; ops (loads/const/block-arg, and any other dead value)
-              ;; can be skipped. A :call that returns nil, however, is
-              ;; an un-lowerable side-effecting call (e.g. push-binding!
-              ;; with a (var X) arg) — dropping it would change behavior,
-              ;; so the whole function must fall back instead.
-              (if (and (not= op :call)
+              ;; Calls and guarded regions execute even when their result is
+              ;; unused; failed lowering requires whole-function fallback.
+              (if (and (not (contains? #{:call :try} op))
                        (or (= op :load-arg)
                            (= op :load-var)
                            (= op :load-closed)
