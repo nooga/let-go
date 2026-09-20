@@ -3184,11 +3184,10 @@
             (let [op (ir/op (first remaining) f)]
               ;; A nil result means "no statement". Side-effect-free
               ;; ops (loads/const/block-arg, and any other dead value)
-              ;; can be skipped. A :call that returns nil, however, is
-              ;; an un-lowerable side-effecting call (e.g. push-binding!
-              ;; with a (var X) arg) — dropping it would change behavior,
-              ;; so the whole function must fall back instead.
-              (if (and (not= op :call)
+              ;; can be skipped. A nil from :call or :try means that a
+              ;; side-effecting operation could not be lowered, so the whole
+              ;; function must fall back instead of dropping it.
+              (if (and (not (contains? #{:call :try} op))
                        (or (= op :load-arg)
                            (= op :load-var)
                            (= op :load-closed)

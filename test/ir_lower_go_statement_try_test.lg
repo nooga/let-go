@@ -1,6 +1,7 @@
 (ns test.ir-lower-go-statement-try-test
   (:require
    [clojure.string :as str]
+   [ir.ops :as ops]
    [ir.passes.pipeline :as pipeline]
    [test :refer :all]))
 
@@ -29,3 +30,18 @@
         go   (pipeline/lower-ns-to-go "probe" 'test.ir-lower-go-statement-try-test [form])]
     (testing "both try bodies reach the generated Go"
       (is (= 2 (occurrences go "\"probe-effect\")"))))))
+
+(deftest unlowerable-statement-try-falls-back
+  ;; Simulate a closure that try-assign-stmts cannot materialise. A missing
+  ;; statement-position try must prevent a native override for the whole fn.
+  (let [form '(defn unlowerable-statement-try []
+                (let [x (hash-map)]
+                  (try (probe-effect x) (catch Throwable e nil))
+                  :done))
+        _ (eval form)
+        original (get (deref ops/lower-impls) :try)]
+    (try
+      (ops/register-lower-impl! :try (fn [& _] nil))
+      (let [go (pipeline/lower-ns-to-go "probe" 'test.ir-lower-go-statement-try-test [form])]
+        (is (not (str/includes? go "\"unlowerable-statement-try\":"))))
+      (finally (ops/register-lower-impl! :try original)))))
