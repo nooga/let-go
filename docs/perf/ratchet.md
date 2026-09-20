@@ -500,6 +500,14 @@ own — and prints what it declined:
     ! pkg/ir.BenchmarkIRCompile [bytecode]   bytes/op  kept 4941030 (since 477a5d36e25f), measured 5232922
 ```
 
+A forced update is gated on **both** bars, not just this machine's. A value can
+be an improvement over a stale local row and still be a regression against the
+newest row any profile carries; since the gate selects by newest provenance,
+adopting it would stamp it as the newest evidence and raise the bar everyone is
+measured against, so the regression it represents would stop being reported.
+Either violation keeps the stored value and its date, and the rejection names
+whichever bar was exceeded.
+
 An improvement needs no ceremony: it is lower, so it ratchets and takes this
 run's stamp. So does a value measured **equal** to the stored one: a timing
 recapture that re-measures the same allocations is current evidence for them,

@@ -501,6 +501,13 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 func forceRebaseline(existing *Baseline, key string, current MachineBaseline, acceptDeterministic bool) []deterministicRejection {
 	stampAll(&current)
 	var rejected []deterministicRejection
+	// The bar every profile is gated against, resolved BEFORE this write. A
+	// value can be an improvement over THIS machine's stale row and still be a
+	// regression against the newest row any profile carries; since selection
+	// is by newest provenance, adopting and stamping it would make the worse
+	// value the bar and the regression would stop being reported. So a forced
+	// timing update is gated on both: the local row (below) and this.
+	globalBar := machineIndependentBar(*existing)
 	if previous, ok := existing.Machines[key]; ok {
 		for name, entry := range previous.Benchmarks {
 			cur, measured := current.Benchmarks[name]
@@ -520,11 +527,28 @@ func forceRebaseline(existing *Baseline, key string, current MachineBaseline, ac
 			// rule ratchetMerge applies.
 			keptAllocsSHA, keptAllocsAt := allocsProvenance(previous, entry)
 			keptBytesSHA, keptBytesAt := bytesProvenance(previous, entry)
+			bar, barred := globalBar[name]
+			// A metric better than this machine's stale row can still be worse
+			// than the bar every profile is gated against. Adopting it would
+			// stamp it as the newest provenance and RAISE that bar, so the
+			// regression it represents would stop being reported. Either
+			// violation keeps the stored value and its date; the rejection
+			// names whichever bar was actually exceeded.
+			overGlobalAllocs := barred && bar.AllocsPerOp > 0 && cur.AllocsPerOp > bar.AllocsPerOp
+			overGlobalBytes := barred && bar.BytesPerOp > 0 && cur.BytesPerOp > bar.BytesPerOp
 			if cur.AllocsPerOp > entry.AllocsPerOp {
 				rejected = append(rejected, deterministicRejection{
 					Name: name, Metric: "allocs/op",
 					Kept: entry.AllocsPerOp, Measured: cur.AllocsPerOp,
 					SinceSHA: keptAllocsSHA,
+				})
+				cur.AllocsPerOp = entry.AllocsPerOp
+				cur.AllocsSinceSHA, cur.AllocsSinceAt = keptAllocsSHA, keptAllocsAt
+			} else if overGlobalAllocs {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "allocs/op",
+					Kept: bar.AllocsPerOp, Measured: cur.AllocsPerOp,
+					SinceSHA: bar.AllocsSinceSHA,
 				})
 				cur.AllocsPerOp = entry.AllocsPerOp
 				cur.AllocsSinceSHA, cur.AllocsSinceAt = keptAllocsSHA, keptAllocsAt
@@ -537,6 +561,49 @@ func forceRebaseline(existing *Baseline, key string, current MachineBaseline, ac
 				})
 				cur.BytesPerOp = entry.BytesPerOp
 				cur.BytesSinceSHA, cur.BytesSinceAt = keptBytesSHA, keptBytesAt
+			} else if overGlobalBytes {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "bytes/op",
+					Kept: bar.BytesPerOp, Measured: cur.BytesPerOp,
+					SinceSHA: bar.BytesSinceSHA,
+				})
+				cur.BytesPerOp = entry.BytesPerOp
+				cur.BytesSinceSHA, cur.BytesSinceAt = keptBytesSHA, keptBytesAt
+			}
+			current.Benchmarks[name] = cur
+		}
+	}
+	if !acceptDeterministic {
+		// A benchmark this machine has no prior row for is never visited by
+		// the loop above, so stampAll would publish it as the newest
+		// provenance unchecked. There is no local value to fall back to here,
+		// so a metric over the bar keeps the bar's own value and date.
+		previous := existing.Machines[key]
+		for name, cur := range current.Benchmarks {
+			if _, hadLocal := previous.Benchmarks[name]; hadLocal {
+				continue
+			}
+			bar, ok := globalBar[name]
+			if !ok {
+				continue
+			}
+			if bar.AllocsPerOp > 0 && cur.AllocsPerOp > bar.AllocsPerOp {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "allocs/op",
+					Kept: bar.AllocsPerOp, Measured: cur.AllocsPerOp,
+					SinceSHA: bar.AllocsSinceSHA,
+				})
+				cur.AllocsPerOp = bar.AllocsPerOp
+				cur.AllocsSinceSHA, cur.AllocsSinceAt = bar.AllocsSinceSHA, bar.AllocsSinceAt
+			}
+			if bar.BytesPerOp > 0 && cur.BytesPerOp > bar.BytesPerOp {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "bytes/op",
+					Kept: bar.BytesPerOp, Measured: cur.BytesPerOp,
+					SinceSHA: bar.BytesSinceSHA,
+				})
+				cur.BytesPerOp = bar.BytesPerOp
+				cur.BytesSinceSHA, cur.BytesSinceAt = bar.BytesSinceSHA, bar.BytesSinceAt
 			}
 			current.Benchmarks[name] = cur
 		}
