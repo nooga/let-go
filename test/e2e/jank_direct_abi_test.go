@@ -104,14 +104,14 @@ func TestJankSuiteDirectABIGeneratedGo(t *testing.T) {
 	oracle := gofragment.GoMatchRequest{
 		Kind:     gofragment.GoExpression,
 		Target:   "TestIdenticalQmark",
-		Expected: `ec.Invoke(rt.CachedVarFn(&__v_clojure_core_identical_QMARK_, "clojure.core", "identical?"), []vm.Value{x, y})`,
+		Expected: `ec.Invoke(rt.CachedVarFn(&__v_clojure_core_dissoc, "clojure.core", "dissoc"), []vm.Value{arg__3, vm.Keyword("a-key")})`,
 	}
 	if err := gofragment.MatchGeneratedGoFragment(oracle, string(generated)); err != nil {
 		t.Fatalf("inline Go AST oracle mismatch: %v", err)
 	}
 
 	badOracle := oracle
-	badOracle.Expected = strings.Replace(oracle.Expected, `"identical?"`, `"not-identical?"`, 1)
+	badOracle.Expected = strings.Replace(oracle.Expected, `"dissoc"`, `"not-dissoc"`, 1)
 	if err := gofragment.MatchGeneratedGoFragment(badOracle, string(generated)); err == nil {
 		t.Fatal("structural falsifiability: mismatched inline Go oracle unexpectedly passed")
 	}

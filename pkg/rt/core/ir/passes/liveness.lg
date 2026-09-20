@@ -190,7 +190,13 @@
               (doseq [r (ir/refs term f)] (seed r))))))
       (doseq [nid (ir/block-insts bid f)]
         ;; Seed from calls, but skip those in absorbed-insts
-        (when (and (= :call (ir/op nid f))
+        ;; :try is a root like :call: the guarded region runs for its effects
+        ;; whether or not its value is read, so its body/handler/finally
+        ;; closures (and everything they capture) must stay live. Without this
+        ;; an unused try in statement position lost its captured locals, the Go
+        ;; emitter could not materialise the body closure, and the whole region
+        ;; was dropped from the output (#925).
+        (when (and (contains? #{:call :try} (ir/op nid f))
                    (not (contains? absorbed-insts nid)))
           (doseq [r (ir/refs nid f)] (seed r)))))
     ;; Fixpoint: close over refs and block-arg edges

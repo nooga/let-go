@@ -2635,7 +2635,10 @@
                              ;; an un-lowerable side-effecting call (e.g. push-binding!
                              ;; with a (var X) arg) — dropping it would change behavior,
                              ;; so the whole function must fall back instead.
-                             (if (and (not= op :call)
+                             ;; :call and :try run for their effects: a nil from their lowering is
+                             ;; a failure that must surface as bytecode fallback, never a silently
+                             ;; skipped statement (#925).
+                             (if (and (not (contains? #{:call :try} op))
                                       (or (= op :load-arg)
                                           (= op :load-var)
                                           (= op :load-closed)

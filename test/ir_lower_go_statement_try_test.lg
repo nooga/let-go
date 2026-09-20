@@ -1,0 +1,31 @@
+(ns test.ir-lower-go-statement-try-test
+  (:require
+   [clojure.string :as str]
+   [ir.passes.pipeline :as pipeline]
+   [test :refer :all]))
+
+;; A `try` in statement position runs for its effects, so the Go lowering must
+;; keep it even though nothing reads its value. It used to vanish: the DCE
+;; read-set seeded only from terminators and :call, so a let-local captured
+;; only by the try's body closure was dead, the emitter could not materialise
+;; the closure, and the whole region was skipped without any fallback (#925).
+;; clojure.test's `is` expands to exactly this shape, which is how the jank
+;; direct-ABI gate found it.
+
+(defn probe-effect [v] v)
+
+(defn- occurrences [s sub]
+  (loop [i 0 n 0]
+    (let [j (str/index-of s sub i)]
+      (if (nil? j) n (recur (+ j (count sub)) (inc n))))))
+
+(deftest statement-position-try-survives-go-lowering
+  (let [form '(defn two-statement-trys []
+                (let [x (hash-map) y (hash-map)]
+                  (try (probe-effect x) (catch Throwable e nil))
+                  (try (probe-effect y) (catch Throwable e nil))
+                  :done))
+        _    (eval form)
+        go   (pipeline/lower-ns-to-go "probe" 'test.ir-lower-go-statement-try-test [form])]
+    (testing "both try bodies reach the generated Go"
+      (is (= 2 (occurrences go "\"probe-effect\")"))))))
