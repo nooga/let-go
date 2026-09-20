@@ -1905,6 +1905,13 @@ const pageStyle = `
       --accent: #245c73;
       --shadow: 0 18px 50px rgba(23, 23, 23, 0.08);
     }
+    /* iOS Safari's text autosizing boosts font sizes inside any block wider
+       than the viewport. The sparkline table is exactly that -- it is
+       display:block/overflow-x:auto on mobile with a 1124px content width and
+       a 520px benchmark cell, so on a 390px phone the 13px monospace names
+       rendered larger than the 16px lede above them. Opt out globally; the
+       page already sizes for small screens in its media queries. */
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     * { box-sizing: border-box; }
     body {
       margin: 0;
