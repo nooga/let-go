@@ -406,7 +406,16 @@ func (m *SortedMap) Count() Value  { return MakeInt(m.count) }
 
 // --- Collection ---
 
-func (m *SortedMap) Empty() Collection { return EmptySortedMap }
+// Empty returns an empty sorted map ordered the same way this one is. The
+// comparator is part of the collection's identity, not decoration: an empty
+// built by sorted-map-by that came back ordering by DefaultCompare would
+// reorder everything poured into it, with nothing reporting the change.
+func (m *SortedMap) Empty() Collection {
+	if m.UsesDefaultComparator() {
+		return EmptySortedMap
+	}
+	return NewSortedMap(m.cmp, nil)
+}
 
 func (m *SortedMap) Conj(value Value) Collection {
 	// Accept [k v] vectors or MapEntry-like things
