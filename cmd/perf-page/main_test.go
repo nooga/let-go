@@ -398,3 +398,27 @@ func TestRelLinkNamesTheFileNotTheDirectory(t *testing.T) {
 		}
 	}
 }
+
+// The page opts out of iOS Safari's text autosizing. Nothing else can catch
+// its loss: the declaration changes no desktop rendering and no headless
+// engine implements the behaviour it suppresses -- Playwright ships the macOS
+// WebKit port, which does not autosize -- so a regression is only visible on a
+// physical phone. Without it, the sparkline table (display:block/overflow-x
+// auto below 860px, ~1124px of content and a 520px benchmark cell) is wide
+// enough for Safari to boost the text inside it, and the 13px monospace
+// benchmark names render larger than the 16px lede above them.
+//
+// This asserts the declaration is present, not that it works. It is a guard
+// against a CSS edit dropping it silently, which is the realistic failure.
+func TestPageStyleOptsOutOfIOSTextAutosizing(t *testing.T) {
+	for _, want := range []string{"-webkit-text-size-adjust: 100%", "text-size-adjust: 100%"} {
+		if !strings.Contains(pageStyle, want) {
+			t.Errorf("pageStyle is missing %q; iOS Safari will inflate text in the sparkline table", want)
+		}
+	}
+	// It has to sit on the root: the boost applies per block, so scoping the
+	// opt-out to one selector leaves every other wide block eligible.
+	if !strings.Contains(pageStyle, "html { -webkit-text-size-adjust") {
+		t.Error("the text-size-adjust opt-out is not on the html element")
+	}
+}
