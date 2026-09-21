@@ -896,7 +896,14 @@
 
 (defn build-map [form ctx]
   "{:a 1 :b 2} → Const if all keys/values are literals; else (array-map :a 1 :b 2).
-   array-map preserves insertion order. Empty map → Const literal."
+   array-map preserves insertion order. Empty map → Const literal.
+
+   A sorted map with a non-literal entry is declined rather than rebuilt: the
+   array-map call would keep the entries and drop the ordering, and there is no
+   form that can carry a sorted-map-by comparator. Declining hands the fn to the
+   bytecode compiler, which rebuilds sorted maps as sorted maps and refuses a
+   custom comparator outright. All-literal sorted maps take the :const arm above
+   and carry the real collection, comparator included."
   (if (zero? (count form))
     (add-inst! ctx (ctx-block ctx) :const [] form)
     ;; Check if all keys and values are literals (not symbols/expressions).
@@ -905,10 +912,17 @@
                                (and (is-literal? (first e)) (is-literal? (second e))))
                              (seq form))
           pairs      (vec (mapcat (fn [e] [(first e) (second e)]) (seq form)))]
-      (if all-const?
+      (cond
+        all-const?
         (add-inst! ctx (ctx-block ctx) :const [] form)
-        (let [fn-id   (add-inst! ctx (ctx-block ctx)
-                        :load-var [] (resolve 'array-map))]
+
+        (sorted? form)
+        (throw (ex-info (str "build-map: can't rebuild a sorted map with non-literal entries " (pr-str form))
+                        {:fn :build-map :type (type form) :value form}))
+
+        :else
+        (let [fn-id (add-inst! ctx (ctx-block ctx)
+                      :load-var [] (resolve 'array-map))]
           (build-call-with-head fn-id pairs ctx))))))
 
 (defn build-try [form ctx]

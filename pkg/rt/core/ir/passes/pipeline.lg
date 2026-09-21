@@ -402,7 +402,12 @@
       (vector? form)
       (vec (doall (map expand-all form)))
       (map? form)
-      (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
+      ;; (empty form), not {}: {} is an array-map, so a sorted map walked here
+      ;; came out the other side with the same entries and no ordering — the
+      ;; kind of wrong answer nothing reports. `empty` carries the receiver's
+      ;; comparator, so the rebuild is faithful for sorted-map-by too.
+      (into (empty form)
+            (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
       :else form)))
 
 ;; --- canonical enumeration of a namespace's lowerable fn-units -------------

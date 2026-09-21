@@ -1,0 +1,72 @@
+(ns test.ir-sorted-map-test
+  (:require [test :refer :all]
+            [ir.passes.pipeline]))
+
+;; A sorted map spliced into a macroexpansion used to come out of the IR path
+;; as a plain map: same entries, no ordering. pipeline/expand-all rebuilt every
+;; map it walked with (into {} ...), which is an array-map, and nothing further
+;; down noticed. The bytecode compiler rebuilds sorted maps as sorted maps
+;; (issue #943), so the two paths disagreed on the type of the same form.
+
+(def marker 99)
+
+(defmacro ^:private sm-const [] (sorted-map :c 3 :a 1))
+(defmacro ^:private sm-desc [] (sorted-map-by > 1 :a 3 :c 2 :b))
+(defmacro ^:private sm-subform [] (assoc (sorted-map :c 3 :a 1) :b 'marker))
+(defmacro ^:private pm-const [] {:c 3 :a 1})
+
+(defn- ir-call [defn-form]
+  "Compile defn-form through the IR path, then call the fn it defined.
+   Both steps go through eval: the fn does not exist when this file compiles."
+  (binding [*ir-compile* true]
+    (eval defn-form))
+  (eval (list (second defn-form))))
+
+(deftest ir-compiled-sorted-map-keeps-its-type
+  (let [out (ir-call '(defn ir-sm [] (sm-const)))]
+    (testing "the sorted type survives the IR path"
+      (is (= "let-go.lang.PersistentTreeMap" (str (type out)))))
+    (testing "and so do the entries and their order"
+      (is (= (sorted-map :c 3 :a 1) out))
+      (is (= [:a :c] (vec (keys out)))))))
+
+;; The comparator is the part with no other home: entries survive any rebuild,
+;; the ordering only survives if the rebuild carries the comparator.
+(deftest ir-compiled-sorted-map-keeps-a-custom-comparator
+  (let [out (ir-call '(defn ir-desc [] (sm-desc)))]
+    (is (= "let-go.lang.PersistentTreeMap" (str (type out))))
+    (is (= [3 2 1] (vec (keys out))))))
+
+;; A sorted map holding a subform has to be rebuilt by a call, and no call
+;; reproduces a comparator. The IR builder declines; the bytecode compiler
+;; picks it up and rebuilds it as a sorted map with the subform evaluated.
+(deftest ir-declines-sorted-map-with-subforms-and-falls-back
+  (let [out (ir-call '(defn ir-sub [] (sm-subform)))]
+    (is (= "let-go.lang.PersistentTreeMap" (str (type out))))
+    (is (= {:a 1 :b 99 :c 3} out))
+    (is (= [:a :b :c] (vec (keys out))))))
+
+;; Plain maps take the path they always took.
+(deftest ir-compiled-plain-map-is-unchanged
+  (let [out (ir-call '(defn ir-pm [] (pm-const)))]
+    (is (= "let-go.lang.Map" (str (type out))))
+    (is (= {:a 1 :c 3} out))))
+
+;; `empty` on a sorted collection carries the comparator, the way Clojure's
+;; does. This is what makes the expand-all rebuild faithful, and it is worth
+;; pinning on its own — a shared default-ordered singleton silently reorders
+;; anything poured into it.
+(deftest empty-preserves-the-comparator
+  (testing "sorted map"
+    (let [m (sorted-map-by > 1 :a 3 :c 2 :b)]
+      (is (= "let-go.lang.PersistentTreeMap" (str (type (empty m)))))
+      (is (= [3 2 1] (vec (keys (into (empty m) (seq m))))))))
+
+  (testing "sorted set"
+    (let [s (sorted-set-by > 1 2 3)]
+      (is (= "let-go.lang.PersistentTreeSet" (str (type (empty s)))))
+      (is (= [3 2 1] (vec (into (empty s) (seq s)))))))
+
+  (testing "the default comparator still round-trips ascending"
+    (let [m (sorted-map :c 3 :a 1)]
+      (is (= [:a :c] (vec (keys (into (empty m) (seq m)))))))))
