@@ -2334,6 +2334,15 @@ const pageStyle = `
       h1 { font-size: 42px; }
       .lede { font-size: 16px; }
       th, td { padding: 9px; }
+      /* The explorer controls size to their content: the benchmark <select> is
+         capped at 420px and the search box floored at 180px, both wider than
+         the label can give back, since a flex item's min-width defaults to
+         auto. Below this width that pushed the whole document 115px past the
+         viewport. Let the chain shrink -- the cap and the floor still hold
+         everywhere the screen can afford them. */
+      .explorer-controls label { max-width: 100%; min-width: 0; }
+      .explorer-controls select,
+      .explorer-controls input[type="search"] { min-width: 0; max-width: 100%; flex: 1 1 auto; }
     }
     .explorer-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
     .cpu-filter { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0 0 0.5rem; }
