@@ -52,6 +52,12 @@ func NewSortedSet(cmp Comparator, vals []Value) *SortedSet {
 
 // --- Value ---
 
+// UsesDefaultComparator reports whether s orders elements with DefaultCompare.
+// See SortedMap.UsesDefaultComparator.
+func (s *SortedSet) UsesDefaultComparator() bool {
+	return s.impl == nil || s.impl.UsesDefaultComparator()
+}
+
 func (s *SortedSet) Type() ValueType { return SortedSetType }
 func (s *SortedSet) Unbox() any      { return s.elements() }
 
