@@ -44,10 +44,10 @@ capture-then-aggregate-then-(compare|write|print).
 | `docs/perf/baseline.json` | The current committed baseline. |
 | `docs/perf/historical/*.json` | Frozen historical snapshots (e.g. `v1.8.0.json`). Captured against the same anchor so any current run can `-baseline docs/perf/historical/v1.8.0.json check` and see "how much have we drifted since release N." |
 | `docs/perf/timeline/*.json` | Append-only full perf snapshots captured on pushes to `main`. These drive trend charts and record actual runs over time. |
-| `docs/perf/index.html` | Static "Are we fast yet?" page generated from the committed baseline, historical snapshots, and timeline snapshots. |
+| `docs/perf/index.html` | Static "Are we fast yet?" page, generated on demand by `make perf-page` from the committed baseline and historical snapshots. Gitignored: the deployed page is built fresh by `pages.yml`, which also pulls timeline snapshots from the `perf-data` branch. |
 | `cmd/perf-page/main.go` | Static page generator. It renders HTML only; it never runs benchmarks. |
 | `docs/perf/.runs/*.jsonl` | Raw capture output. Gitignored; recreated on each run. |
-| `.github/workflows/perf-timeline.yml` | Main-only CI job that records timeline snapshots and commits the regenerated static page. |
+| `.github/workflows/perf-timeline.yml` | Main-only CI job that records timeline snapshots and pushes them to the `perf-data` branch. It does not touch the static page. |
 | `Makefile` targets | `bench-ratchet`, `bench-ratchet-update`, `bench-ratchet-show`, `perf-snapshot`, `perf-page`. |
 
 ## Scope
@@ -104,7 +104,7 @@ One-shot (Makefile):
 make bench-ratchet           # check current vs baseline (CI mode)
 make bench-ratchet-update    # overwrite baseline with current numbers
 make bench-ratchet-show      # capture & print, write nothing
-make perf-page               # refresh docs/perf/index.html from committed JSON
+make perf-page               # render docs/perf/index.html locally from committed JSON
 make perf-snapshot           # full capture into docs/perf/timeline/<ts>-<sha>.json
 ```
 
