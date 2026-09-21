@@ -177,7 +177,17 @@ generate: build
 # previously reported commit="none", so SHA pins always warn-and-skipped.
 # `version` deliberately stays "dev" (no honest release version on an untagged
 # build). Falls back to "none" outside a git checkout.
-COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+#
+# NOT `git rev-parse HEAD`: a colocated jj repo keeps one git HEAD for the whole
+# repository, tracking whatever the default workspace last exported, so a build
+# from any jj workspace stamped the WRONG commit — and this value becomes
+# let-go.semver/current-commit, which SHA-pinned require-letgo constraints
+# prefix-match against. scripts/current-commit.sh asks jj for this workspace's
+# commit and verifies plain git can resolve it, falling back to rev-parse where
+# jj is absent. It emits 12 characters rather than git's default abbreviation:
+# still a valid pin (the spec accepts 7-40 hex, prefix-matched) and less
+# ambiguous, while goreleaser continues to stamp the full 40.
+COMMIT := $(shell scripts/current-commit.sh 2>/dev/null || echo none)
 PERF-TIMELINE-DIR ?= docs/perf/timeline
 PERF-SNAPSHOT ?= $(PERF-TIMELINE-DIR)/$(shell date -u +%Y%m%dT%H%M%SZ)-$(COMMIT).json
 

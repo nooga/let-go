@@ -367,6 +367,31 @@ into a second `.jsonl` and aggregating both.
   identity only for a row that was never ratcheted (see that section for the two
   cases).
 
+### Where the recorded SHA comes from
+
+Every stamp above, and the `<sha>-<ts>.jsonl` capture filename, names the commit
+whose tree was benchmarked. It is resolved from the version control state of the
+directory the run started in:
+
+- **In a jj repository**, from this workspace's own commit — `@` when the working
+  copy differs from its parent, the parent when it does not (a clean checkout's
+  `@` is an empty commit that describes nothing). jj keeps its commits in the git
+  object store, so the result is an ordinary git sha that `git cat-file` resolves;
+  the tool verifies that before recording it, exporting first if jj has not yet.
+- **Otherwise**, from `git rev-parse HEAD`.
+
+`git rev-parse HEAD` is deliberately *not* used in a jj repository. A colocated
+jj repo keeps one git HEAD for the whole repository, tracking whatever the
+default workspace last exported, so every workspace reports the same value no
+matter which commit it is on — a capture taken in a workspace sitting on `main`
+can be stamped with an unrelated local commit. The failure is silent and the
+recorded sha looks plausible.
+
+A run whose commit is not reachable from any remote-tracking ref prints a
+warning. Such a baseline is still valid evidence locally, but nobody who has not
+fetched that commit can reproduce it, so publish the commit or pass `-sha
+<published commit>` when the run represents one.
+
 ## How the check works
 
 For each benchmark in the baseline:
