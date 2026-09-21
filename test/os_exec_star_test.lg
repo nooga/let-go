@@ -10,3 +10,15 @@
     (is (= 3 (os/exec* "sh" "-c" "exit 3"))))
   (testing "coerces non-string args to strings"
     (is (= 0 (os/exec* "sh" "-c" "exit 0")))))
+
+(deftest exec-star-follows-out-binding
+  (testing "a writer-backed *out* (with-out-str) captures the child's stdout"
+    (is (= "captured\n" (with-out-str (os/exec* "sh" "-c" "echo captured")))))
+  (testing "a file-backed *out* receives the child's stdout directly"
+    (let [tmp (str (os/temp-dir) "/exec-star-out-" (rand-int 1000000) ".txt")
+          h (open tmp :append)]
+      (binding [*out* h]
+        (os/exec* "sh" "-c" "echo to-file"))
+      (close! h)
+      (is (= "to-file\n" (slurp tmp)))
+      (delete-file tmp))))
