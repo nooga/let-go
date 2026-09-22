@@ -119,7 +119,14 @@ func (s *SortedSet) Count() Value  { return MakeInt(s.impl.count) }
 
 // --- Collection ---
 
-func (s *SortedSet) Empty() Collection { return EmptySortedSet }
+// Empty returns an empty sorted set ordered the same way this one is.
+// See SortedMap.Empty.
+func (s *SortedSet) Empty() Collection {
+	if s.UsesDefaultComparator() {
+		return EmptySortedSet
+	}
+	return NewSortedSet(s.impl.cmp, nil)
+}
 
 func (s *SortedSet) Conj(value Value) Collection {
 	newImpl := s.impl.assocImpl(value, value)
