@@ -110,10 +110,14 @@ jobs:
       # TestCustomMain is -short-gated for the same reason (it builds three
       # custom lg binaries and runs -w through each); without a place in this
       # list it would never run in CI at all.
-      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip, custom main)
+      # TestJankSuiteDirectABIGeneratedGo is the direct-ABI half of
+      # `make native-entry-gate`: it lowers a pinned jank fixture to Go, builds
+      # and runs it. It was -short-gated and in no list, so it sat red on main
+      # from #863 until #923 noticed.
+      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip, custom main, jank direct-ABI)
         # No -short here so the testing.Short()-gated heavyweight e2e tests run
         # full; the fast `make test` loop passes -short to skip them.
-        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip|TestCustomMain'
+        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip|TestCustomMain|TestJankSuiteDirectABIGeneratedGo'
 
       # Standalone native-entry matrix (#425 / #628): lg-compile --entry-frame,
       # embed program.lgb, go build, run. Also covers --entry-frame opt-in.

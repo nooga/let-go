@@ -189,8 +189,14 @@
                        (not (contains? absorbed-insts term)))
               (doseq [r (ir/refs term f)] (seed r))))))
       (doseq [nid (ir/block-insts bid f)]
-        ;; Seed from calls, but skip those in absorbed-insts
-        (when (and (= :call (ir/op nid f))
+        ;; Seed from :call and :try, skipping those in absorbed-insts. Both
+        ;; are roots: the called fn and the guarded region run for their
+        ;; effects whether or not the value is read, so a try's
+        ;; body/handler/finally closures — and everything they capture — must
+        ;; stay live. Without this a try whose value goes unused loses its
+        ;; captured locals, the Go emitter cannot materialise the body
+        ;; closure, and the region disappears from the output.
+        (when (and (contains? #{:call :try} (ir/op nid f))
                    (not (contains? absorbed-insts nid)))
           (doseq [r (ir/refs nid f)] (seed r)))))
     ;; Fixpoint: close over refs and block-arg edges
