@@ -37,6 +37,13 @@ func installExceptionClasses(ns *vm.Namespace) {
 	ns.Def("ExceptionInfo", vm.ExInfoType)
 	ns.Def("clojure.lang.ExceptionInfo", vm.ExInfoType)
 
+	// Cancelled resolves for (catch Cancelled e ...) dispatch (see
+	// catch-matches? below and vm.ClassCancelled's doc comment), but — unlike
+	// every class in the loop above — gets no exceptionConstructor: nothing
+	// in Lisp can construct a value of this class, which is what makes a
+	// caught Cancelled trustworthy as a real scope-cancellation signal.
+	ns.Def("Cancelled", vm.ClassCancelled)
+
 	// catch-matches? [class-symbol caught] backs typed catch dispatch. Both
 	// compilers desugar (catch SomeClass e ...) into a test through it, so
 	// the semantics live in one place:
@@ -47,8 +54,20 @@ func installExceptionClasses(ns *vm.Namespace) {
 	//     values (strings), and (catch Throwable e ...) is the conventional
 	//     catch-everything. instance? itself stays honest — a thrown string
 	//     is not (instance? Throwable s);
+	//   - EXCEPT the scope-cancellation condition (vm.ClassCancelled, see
+	//     pkg/vm/cancelled.go): Throwable and Exception do not match it, so
+	//     an idiomatic (catch Throwable e (log e) (recur)) worker loop can't
+	//     swallow its own termination. Only (catch Cancelled e ...) —
+	//     naming it explicitly — matches, the same way catching
+	//     java.lang.Exception in Java never catches an Error. Both compilers
+	//     desugar a bare (catch e ...) into a Throwable-classed clause (see
+	//     pkg/compiler/compiler.go tryCompiler and
+	//     pkg/rt/core/ir/build.lg desugar-catch-clauses), so this single
+	//     check also covers the bare form;
 	//   - any other class matches by type identity or registered ancestry,
-	//     like instance?.
+	//     like instance?. Cancelled's own ancestry (Throwable, Any) never
+	//     includes Exception, so (catch Exception e ...) already misses it
+	//     without a special case.
 	catchMatches, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("catch-matches? expects 2 args")
@@ -66,6 +85,9 @@ func installExceptionClasses(ns *vm.Namespace) {
 			return vm.FALSE, nil
 		}
 		if class == vm.ValueType(vm.ClassThrowable) {
+			if vm.IsCancelled(vs[1]) {
+				return vm.FALSE, nil
+			}
 			return vm.TRUE, nil
 		}
 		if vs[1].Type() == class {

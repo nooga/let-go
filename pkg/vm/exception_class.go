@@ -47,3 +47,21 @@ var (
 	ClassNullPointer          = newExceptionClass("java.lang.NullPointerException", ClassRuntimeException)
 	ClassUnsupportedOperation = newExceptionClass("java.lang.UnsupportedOperationException", ClassRuntimeException)
 )
+
+// ClassCancelled is the class of the scope-cancellation condition (see
+// Cancelled/NewCancelled/IsCancelled in cancelled.go): a third leaf sitting
+// beside Error and Exception directly under Throwable, in the spirit of
+// Java's Throwable -> {Error, Exception} split.
+//
+// Deliberately built with the raw struct literal rather than
+// newExceptionClass: that helper appends to ExceptionClasses, which
+// pkg/rt.installExceptionClasses walks to Def both the class name AND an
+// interop constructor (Cancelled., ->Cancelled, ...) for every entry. Every
+// java.lang.* class needs that constructor so Lisp code can build and throw
+// its own instances; Cancelled must not get one, because the runtime being
+// the only source of a Cancelled-tagged value is what makes it
+// "distinguishable by identity from any user-thrown value" — nothing else
+// can fabricate one to catch or to pass off as a real cancellation. pkg/rt
+// still Defs the bare name itself (installExceptionClasses does it there)
+// so (catch Cancelled e ...) can resolve the symbol.
+var ClassCancelled = &ExceptionClass{name: "let_go.lang.Cancelled", parent: ClassThrowable}

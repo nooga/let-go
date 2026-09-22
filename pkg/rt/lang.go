@@ -2682,16 +2682,23 @@ func installLangNS() {
 		ec.Scope().Go(func(ctx context.Context) {
 			v, err := childEc.Invoke(at, nil)
 			if err != nil {
-				// Async (go ...) error — route to *err*. Previously
+				// Async (go ...) error — route to *err*, UNLESS it's the
+				// scope-cancellation condition (issue #920): a with-scope
+				// that cancels N parked workers ends the block via exactly
+				// this path on each of them, and that is ordinary teardown,
+				// not a failure — it must print nothing. An ordinary error
+				// still routes to *err* exactly as before. Previously
 				// fmt.Println, which targets stdout despite being error
 				// output: double-wrong.
-				_ = WriteToErr(childEc, fmt.Sprintln(err))
+				if !vm.IsCancelled(vm.ErrorToValue(err)) {
+					_ = WriteToErr(childEc, fmt.Sprintln(err))
+				}
 			}
-			// The result send is cancellable via the registry. (Channel
-			// ops <!/>! INSIDE the block are still synchronous and not yet
-			// ctx-aware — cancelling a go-block blocked on a take won't
-			// interrupt it; tracked as the same follow-up as the async.go
-			// channel primitives.)
+			// The result send is cancellable via the registry. Channel ops
+			// <!/>! INSIDE the block ARE ctx-aware (they select on the
+			// block's own ExecContext scope, same as here) — cancelling a
+			// go-block blocked on a take/put does interrupt it, surfacing
+			// the Cancelled condition through childEc.Invoke's err above.
 			select {
 			case ret <- v:
 			case <-ctx.Done():
@@ -2757,10 +2764,12 @@ func installLangNS() {
 		// selects on the registry context so a put parked on a full/unread
 		// channel — e.g. inside a (go ...) block — is released by a
 		// CancelAll/Drain on shutdown instead of leaking the goroutine.
-		// Cancellation returns nil (the put did not complete).
+		// Cancellation raises the Cancelled condition (issue #920) rather
+		// than returning a nil the caller can't tell apart from "not
+		// accepted".
 		accepted, cancelled := putWithPolicy(ec.Context(), ch, vs[1])
 		if cancelled {
-			return vm.NIL, nil
+			return vm.NIL, vm.NewThrownError(vm.NewCancelled(ec.Context().Err()))
 		}
 		if accepted {
 			return vm.TRUE, nil
@@ -2773,7 +2782,11 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		if pc, ok := asPromiseChan(vs[0]); ok {
-			return pc.take(ec.Context()), nil
+			v, cancelled := pc.take(ec.Context())
+			if cancelled {
+				return vm.NIL, vm.NewThrownError(vm.NewCancelled(ec.Context().Err()))
+			}
+			return v, nil
 		}
 		ch, ok := vs[0].(vm.Chan)
 		if !ok {
@@ -2781,8 +2794,9 @@ func installLangNS() {
 		}
 		// Select on the registry context so a take parked on an empty
 		// channel — e.g. inside a (go ...) block — is released by a
-		// CancelAll/Drain on shutdown instead of leaking the goroutine.
-		// Both a closed channel and a cancel yield nil.
+		// CancelAll/Drain on shutdown instead of leaking the goroutine. A
+		// closed channel still yields nil (not an error); cancellation
+		// raises the Cancelled condition (issue #920).
 		select {
 		case v, ok := <-ch:
 			if !ok {
@@ -2790,7 +2804,7 @@ func installLangNS() {
 			}
 			return v, nil
 		case <-ec.Context().Done():
-			return vm.NIL, nil
+			return vm.NIL, vm.NewThrownError(vm.NewCancelled(ec.Context().Err()))
 		}
 	})
 
@@ -4563,12 +4577,15 @@ func installLangNS() {
 		// context is cancelled (e.g. a Drain between bench iterations or
 		// process shutdown), so a `(future (sleep 10000))` doesn't pin
 		// its goroutine — and the Consts pool it captured — for the full
-		// duration. Matches Clojure where an interrupted sleep aborts.
+		// duration. Matches Clojure where an interrupted sleep aborts —
+		// surfaced as the Cancelled condition (issue #920) through the
+		// error slot this native already has, rather than a silent nil.
 		t := time.NewTimer(d)
 		defer t.Stop()
 		select {
 		case <-t.C:
 		case <-ec.Context().Done():
+			return vm.NIL, vm.NewThrownError(vm.NewCancelled(ec.Context().Err()))
 		}
 		return vm.NIL, nil
 	})
