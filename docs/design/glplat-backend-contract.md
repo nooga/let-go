@@ -1,23 +1,33 @@
 ---
-status: planning
-last-verified: 2026-09-18
+status: active
+last-verified: 2026-09-21
 authoritative-for:
   - glplat-backend-contract
   - glplat-host-capability-seam
+shipped:
+  - The provisional landing (§5) — #744 merged 2026-09-19: registry under `internal/`, both backends behind build tags, `glplat` namespace marked experimental
+  - §3 C1-C15 accepted as written (§5.1), nnunley's display-implies-no-GL-or-window condition checked and met
+remaining-open:
+  - §2 seam — `rt.Display` bound at `*display*` with `api.WithDisplay`, retiring `pkg/glplat/internal/registry`
+  - §5.1's amendment — the presentation target may be a bound `*surface*` rather than the backend's own window; `Init`'s title and the `Window*` names generalise with it
+  - C3 (straight alpha), C4 (painter's order), C10 (modifiers in the event) — the three behavior-changing rules
+  - A carrier for all of the above; #392 was named for it and closed unmerged (§5.2)
 human-verified:
 ---
 
 # glplat backend contract and host-capability seam
 
-**Status:** planning, with a provisional landing agreed on 2026-09-18 (§5).
-nooga/let-go#744 lands with the registry under `internal/` and the `glplat`
-namespace marked experimental; the §2 seam and the behavior-changing rules
-move to nooga/let-go#392's re-scope.
+**Status:** the design question is settled (§5.1); the work is not done.
+nooga/let-go#744 merged 2026-09-19 with the registry under `internal/` and the
+`glplat` namespace marked experimental. §2's seam and the behavior-changing
+rules are agreed but unimplemented, and **no open PR or issue carries them** —
+see §5.2.
 
-**Decision requested:** adopt §2 (bind the backend as a host capability at a
-dynamic var, retire the package-level registry) and §3 (the backend-independent
-contract). Both are written as concrete rules with defaults, so the useful
-answer is yes, no, or an amendment to a numbered rule.
+**The decision this document requested has been answered.** §2 (bind the backend
+as a host capability at a dynamic var, retire the package-level registry) and §3
+(the backend-independent contract) both carry, §3 as written. §5.1 records the
+answers and the one amendment. Amendments to a numbered rule are still welcome;
+the open question is no longer whether, but who and when.
 
 ## 1. Where this came from
 
@@ -251,3 +261,22 @@ Answers collected on nooga/let-go#744.
   `*surface*` rather than the backend's own window, and `Init`'s title and
   the `Window*` names generalise with it. C3, C4, and C10 are implemented
   there as well.
+
+### 5.2 The named carrier is gone, 2026-09-20
+
+§5.1 assigns the §2 seam, the surface-presentation amendment, and C3/C4/C10 to
+"the re-scope in #392". **#392 closed unmerged on 2026-09-20**, and no re-scope
+PR was ever opened.
+
+Closing it was correct: #744 was stacked on #392 and carried its commits, so
+that code is in `main`. But a stacked PR absorbs commits, not plans, and the
+work in §5.1's Outcome was future work at the time. #931 rescued #392's
+outstanding *review findings* and is explicitly scoped to those; it does not
+carry the seam, the amendment, or C3/C4/C10.
+
+As of 2026-09-21 nothing tracks them. `pkg/glplat`, `pkg/rt/interop_glplat.go`
+and this file have been untouched since #744 merged, and no open issue names
+`rt.Display`, `*display*`, `api.WithDisplay`, or C3/C4/C10.
+
+This section records that gap so the decision above is not read as work in
+flight. Assigning it a carrier is a maintainer call.
