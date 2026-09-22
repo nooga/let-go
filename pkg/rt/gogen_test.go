@@ -825,3 +825,33 @@ func TestAllocPosConcurrentUniqueness(t *testing.T) {
 		}
 	}
 }
+
+func TestCIdentNamesNilAndEmptyNode(t *testing.T) {
+	got, err := cIdentNames(vm.NIL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != vm.EmptyList {
+		t.Fatalf("expected vm.EmptyList for nil node, got %#v", got)
+	}
+
+	emptyExpr := must(t)(cIntLit(vm.Int(42)))
+	got, err = cIdentNames(emptyExpr)
+	if err != nil {
+		t.Fatalf("unexpected error on int lit: %v", err)
+	}
+	if got != vm.EmptyList {
+		t.Fatalf("expected vm.EmptyList for int lit, got %#v", got)
+	}
+
+	identExpr := must(t)(cIdent(vm.String("myVar")))
+	got, err = cIdentNames(identExpr)
+	if err != nil {
+		t.Fatalf("unexpected error on ident: %v", err)
+	}
+	vec, ok := got.(vm.ArrayVector)
+	if !ok || len(vec) != 1 || string(vec[0].(vm.String)) != "myVar" {
+		t.Fatalf("expected [myVar], got %#v", got)
+	}
+}
+

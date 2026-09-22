@@ -39,3 +39,21 @@
 
 (deftest generated-corpus-cannot-invent-a-git-baseline
   (is (thrown? Throwable (q/parse-args ["--generated" "--base" "HEAD"]))))
+
+(deftest generated-corpus-counts-unmarked-files-correctly
+  (let [dir (str (os/temp-dir) "/quality-generated-unmarked-" (System/nanoTime))
+        path (str dir "/sample.go")
+        report (str dir "/report.edn")]
+    (os/sh "mkdir" "-p" dir)
+    (try
+      ;; File without any "// Code generated..." comment marker
+      (spit path "package sample\nfunc Plain(x int) int {\nreturn x\n}\n")
+      (let [out (with-out-str
+                  (is (= 0 (q/main ["--generated" "--since" "2000-01-01"
+                                    "--edn" report dir]))))
+            r (read-string (slurp report))]
+        (is (= 1 (get-in r [:inputs :corpus :files])))
+        (is (= 1 (get-in r [:inputs :corpus :generated-included])))
+        (is (str/includes? out "1 generated files included")))
+      (finally (os/delete-tree dir)))))
+

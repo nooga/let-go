@@ -836,7 +836,7 @@
                                  (some (fn [[from to]]
                                          (and from to (<= from end) (<= start to)))
                                        (get regions-by-path (:path c) [])))))
-        top (score/top-complexity callables (:top opts) duplicated-region?)
+        top (score/top-complexity callables (or (:top opts) (:top-default score/thresholds)) duplicated-region?)
         ;; Keyed on the PRINTED name: .lg definitions carry symbols and the Go
         ;; tool reports strings, and a silent key mismatch here zeroes every
         ;; Go mass -- which is exactly what it did.
@@ -887,7 +887,7 @@
                      :corpus {:files (count loaded) :tracked-by (:source tracked)
                               :generated (if (:generated opts) 0 (count generated))
                               :generated-paths (if (:generated opts) [] generated)
-                              :generated-included (when (:generated opts) (count generated))}}
+                              :generated-included (when (:generated opts) (count loaded))}}
             :coverage {:lg (select-keys lg-cov [:reached :total :percent :untested])
                        :go (when go-cov (select-keys go-cov [:covered :total :percent]))
                        :combined combined
@@ -923,8 +923,7 @@
                         :flagged-code-lines (when (:findings lint) flagged-code-total)}
             ;; Worst first: debt DESCENDING, ties broken by path -- the same
             ;; visual order as the old ascending-score table.
-            :files (vec (sort-by (juxt (comp - :debt) :path)
-                                 (mapv #(dissoc % :definitions) files)))
+            :files (vec (sort-by (juxt (comp - :debt) :path) files))
             :issues (score/issues files lg-cov dup-pairs)
             :cost {:value (cost/cost-share costs)
                    :definitions (count costs)

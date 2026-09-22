@@ -313,6 +313,9 @@ func cIdentNames(v vm.Value) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, err
 	}
+	if n == nil {
+		return vm.EmptyList, nil
+	}
 	names := []vm.Value{}
 	ast.Inspect(n, func(node ast.Node) bool {
 		if id, ok := node.(*ast.Ident); ok {
@@ -320,6 +323,9 @@ func cIdentNames(v vm.Value) (vm.Value, error) {
 		}
 		return true
 	})
+	if len(names) == 0 {
+		return vm.EmptyList, nil
+	}
 	return vm.NewArrayVector(names), nil
 }
 
