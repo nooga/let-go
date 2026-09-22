@@ -148,7 +148,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "go-callables: %s: %v\n", f, err)
 				continue
 			}
-			es, err := goExtents(string(src))
+			es, err := goExtents(f, string(src))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "go-callables: %s: %v\n", f, err)
 				continue
@@ -240,7 +240,7 @@ func analyzeFiles(files []string) analysisReport {
 			report.errors = append(report.errors, fileError{f, err.Error()})
 			continue
 		}
-		cs, ds, counts, err := analyzeSource(string(src))
+		cs, ds, counts, err := analyzeSource(f, string(src))
 		if err != nil {
 			report.errors = append(report.errors, fileError{f, err.Error()})
 			continue

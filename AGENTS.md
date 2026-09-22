@@ -17,6 +17,11 @@ regenerated files commit together with the edit. `make check-generated` proves f
 - `make build`, `make test`, `make lint`, `make generate`; the full map is in
   `docs/contributor-workflow.md`. Install the CI-mirroring hooks once with
   `prek install --install-hooks --hook-type pre-commit --hook-type pre-push`.
+- `make test` supports variable-driven narrowing: `RUN=<pattern>`, `LG_TEST=<pattern>`,
+  `PKG=<pkg>`, `SHORT=false` for e2e gates. See `docs/specs/test-runner-narrowing.md`.
+- Canonical binary is `build/lg` (promoted to `bin/lg` after `make smoke`). Never build
+  ad-hoc binaries (e.g. `go build -o letgo`) or run loose binaries from the repo root;
+  execute scripts and tests with `build/lg` (e.g. `LG_SOURCE_PATHS=scripts build/lg ...`).
 - No test files at the repo root; `.lg` tests under `test/`, Go tests beside their package.
 - Docs under `docs/` carry frontmatter; run `python3 scripts/docs_frontmatter_hook.py --check`
   on the files you touch.

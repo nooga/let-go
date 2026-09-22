@@ -220,13 +220,40 @@ $(LG-PROFILE): $(GO) $(ROOT-GO-FILES) pkg/**/* pkg/rt/core_compiled.lgb
 # (.github/workflows/go.yml "Expensive lowering e2e" + the gogen-diff job), so
 # the local `make test` loop stays fast without losing CI coverage.
 
+# Unified test narrowing parameters:
+PKG ?= ./test/...
+RUN ?= $(TEST)
+SHORT ?= true
+TAGS ?=
+COUNT ?= 1
+
+ifeq ($(SHORT),false)
+  SHORT_FLAG := -short=false
+else ifeq ($(SHORT),0)
+  SHORT_FLAG := -short=false
+else
+  SHORT_FLAG := -short
+endif
+
+TAGS_FLAG := $(if $(TAGS),-tags $(TAGS),)
+RUN_PATTERN := $(if $(RUN),$(if $(findstring /,$(RUN)),$(RUN),TestRunner/.*$(RUN)|^$(RUN)|Test.*$(RUN)),)
+RUN_FLAG := $(if $(RUN_PATTERN),-run '$(RUN_PATTERN)',)
+
+# Deprecated: use `make test` instead.
 .PHONY: test-gogen-diff-gate
 test-gogen-diff-gate:
+	@echo "Notice: target 'test-gogen-diff-gate' is deprecated; use 'make test' instead." >&2
 	@scripts/test-gogen-diff-short.sh
 
 test: pkg/**/* pkg/rt/core_compiled.lgb $(GO)
+ifeq ($(strip $(RUN)$(LG_TEST)),)
+ifeq ($(PKG),./test/...)
+ifeq ($(COUNT),1)
 	@scripts/test-gogen-diff-short.sh
-	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -short -count=1 -v ./test/...
+endif
+endif
+endif
+	$(GO-TEST-ENV) LG_TEST=$(LG_TEST) go test $(GO-TEST-FLAGS) $(SHORT_FLAG) -count=$(COUNT) $(TAGS_FLAG) $(RUN_FLAG) -v $(PKG)
 
 # Manual entrypoint for the stderr-sensitive shell harness. The Go wrapper in
 # test/namespace_shadow_warning_harness_test.go runs it under direct `go test`
@@ -293,11 +320,10 @@ check-selfhost: lowered $(GO)
 	fi; \
 	rm -rf "$$tmp" $(BUILD-DIR)/selfhost-lgbgen; exit $$rc
 
-# Differential engine-output gate: first run the complete-corpus strict
-# capability/parity census, then retain the existing non-strict differential
-# check. Both mandatory legs force full mode even when GOFLAGS contains -short.
+# Deprecated: use `make lowered && make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff'` instead.
 .PHONY: gogen-diff
 gogen-diff: engine-parity-gate
+	@echo "Notice: target 'gogen-diff' is deprecated; use 'make lowered && make test SHORT=false PKG=./test/e2e RUN=\"TestEngineParityGate|TestGogenAOTDiff\"' instead." >&2
 	go test -short=false -run TestGogenAOTDiff -count=1 -v ./test/e2e/
 
 # Complete-corpus engine-output parity and strict-capability gate. The strict
@@ -325,8 +351,10 @@ gogen-diff: engine-parity-gate
 #   LETGO_PARITY_LEDGER_CLEANUP=1 LETGO_PARITY_REDERIVE=1 make engine-parity-gate
 # A revision is the jj change id when available, else the git commit; when the
 # revision cannot be resolved, cleanup is skipped and nothing is dropped.
+# Deprecated: use `make test SHORT=false PKG=./test/e2e RUN=TestEngineParityGate` instead.
 .PHONY: engine-parity-gate
 engine-parity-gate: lowered $(GO)
+	@echo "Notice: target 'engine-parity-gate' is deprecated; use 'make test SHORT=false PKG=./test/e2e RUN=TestEngineParityGate' instead." >&2
 	go test -short=false -run TestEngineParityGate -count=1 -v ./test/e2e/
 
 # Historical compatibility aliases for existing local automation. The names
@@ -357,8 +385,10 @@ parity-gate-phase1 strict-audit: engine-parity-gate
 # and by some local shells — would otherwise turn the whole gate into a silent
 # skip: strip it from GOFLAGS AND pass -short=false explicitly (the later flag
 # wins over anything GOFLAGS injects).
+# Deprecated: use `make test SHORT=false PKG=./test/e2e RUN='TestNativeEntryASTGate|TestJankSuiteDirectABIGeneratedGo'` instead.
 .PHONY: native-entry-gate
 native-entry-gate: $(GO)
+	@echo "Notice: target 'native-entry-gate' is deprecated; use 'make test SHORT=false PKG=./test/e2e RUN=\"TestNativeEntryASTGate|TestJankSuiteDirectABIGeneratedGo\"' instead." >&2
 	GOFLAGS="$(filter-out -short -test.short,$(GOFLAGS))" $(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -run 'TestNativeEntryASTGate|TestJankSuiteDirectABIGeneratedGo' -short=false -count=1 -v ./test/e2e/
 
 .PHONY: bench-ratchet

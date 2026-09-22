@@ -329,6 +329,9 @@ func TestRunner(t *testing.T) {
 			return nil
 		}
 		name := info.Name()
+		if filter := os.Getenv("LG_TEST"); filter != "" && !strings.Contains(name, filter) {
+			return nil
+		}
 		t.Run(name, func(t *testing.T) {
 			ok, msg := runFileTests(path)
 			assert.True(t, ok, "some tests failed in "+name+": "+msg)
