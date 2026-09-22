@@ -1,0 +1,89 @@
+(ns test.compile-form-types-test
+  (:require [test :refer :all]))
+
+;; Issue #943: compileForm's type switch had no PersistentVector case and no
+;; default, so a vector that conj had promoted past 32 elements compiled to no
+;; bytecode at all. The compile succeeded and the call crashed on a short stack,
+;; which made it read as a size threshold rather than a missing case.
+
+(defmacro fold-32 [] (reduce conj [] (range 32)))
+(defmacro fold-33 [] (reduce conj [] (range 33)))
+(defmacro fold-200 [] (reduce conj [] (range 200)))
+
+(defn use-32 [] (fold-32))
+(defn use-33 [] (fold-33))
+(defn use-200 [] (fold-200))
+
+(deftest macro-folded-vector-survives-the-conj-promotion
+  (testing "a conj-built vector folded into an expansion works at any size"
+    (is (= 32 (count (use-32))))
+    (is (= 33 (count (use-33))))
+    (is (= 200 (count (use-200)))))
+
+  (testing "the folded vector equals the same vector built with vec"
+    (is (= (vec (range 33)) (use-33)))))
+
+;; The two representations are the same literal to the compiler: what differs
+;; is only which one conj happened to produce.
+(deftest both-vector-representations-compile-alike
+  (let [av (vec (range 33))
+        pv (reduce conj [] (range 33))]
+    (testing "the fixture covers both representations"
+      (is (not= (type av) (type pv))))
+    (testing "both compile to the same value"
+      (is (= av ((eval (list 'fn [] av)))))
+      (is (= pv ((eval (list 'fn [] pv))))))))
+
+;; A vector form is not a constant — its elements are subforms — and that holds
+;; for the promoted representation too.
+(deftest persistent-vector-elements-are-evaluated
+  (let [big (conj (reduce conj [] (range 31)) '(+ 1 2) '(* 6 7))
+        out ((eval (list 'fn [] big)))]
+    (is (= 33 (count out)))
+    (is (= 3 (nth out 31)))
+    (is (= 42 (nth out 32)))))
+
+;; Same class of bug, different types: SortedMap and SortedSet also report
+;; distinct ValueTypes and were also absent from the switch.
+(deftest sorted-collections-compile-keeping-type-and-order
+  (testing "a sorted map keeps its type and its ordering"
+    (let [sm (sorted-map :c 3 :a 1 :b 2)
+          out ((eval (list 'fn [] sm)))]
+      (is (= sm out))
+      (is (= (type sm) (type out)))
+      (is (= [:a :b :c] (vec (keys out))))))
+
+  (testing "a sorted set keeps its type and its ordering"
+    (let [ss (sorted-set 3 1 2)
+          out ((eval (list 'fn [] ss)))]
+      (is (= ss out))
+      (is (= (type ss) (type out)))
+      (is (= [1 2 3] (vec out))))))
+
+;; A custom comparator cannot be carried by any form. Rebuilding with the
+;; default one would reorder the collection silently, so the compiler refuses.
+(deftest custom-comparator-is-refused-not-reordered
+  (testing "sorted-map-by"
+    (is (= :caught (try ((eval (list 'fn [] (sorted-map-by > :a 1 :b 2))))
+                        (catch e :caught)))))
+  (testing "sorted-set-by"
+    (is (= :caught (try ((eval (list 'fn [] (sorted-set-by > 1 2))))
+                        (catch e :caught))))))
+
+;; Seqs are call forms, whichever representation they arrive in. Lazy seqs
+;; already behaved this way; Range, Repeat and the vector seqs did not.
+(deftest seq-forms-compile-as-calls
+  (testing "a seq whose head is a function is invoked"
+    (is (= 42 ((eval (list 'fn [] (seq (list '+ 41 1))))))))
+
+  (testing "the other seq representations reach the same path"
+    (doseq [s [(range 3) (repeat 2 1) (seq (reduce conj [] (range 33)))]]
+      ;; every element is an Int, so the call fails on the head rather than
+      ;; compiling to nothing and crashing the process on a short stack
+      (is (= :caught (try ((eval (list 'fn [] s))) (catch e :caught)))))))
+
+;; The exhaustiveness guard: a value no form can carry is a compile error
+;; naming the type, not a chunk that is quietly one value short.
+(deftest opaque-values-are-refused-at-compile-time
+  (doseq [v [(atom 1) (volatile! 1) (delay 1) (transient [])]]
+    (is (= :caught (try ((eval (list 'fn [] v))) (catch e :caught))))))

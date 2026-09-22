@@ -565,6 +565,26 @@ func (c *Context) compileError(msg string) *CompileError {
 	return NewCompileError(msg)
 }
 
+// vectorFormElements returns the elements of a vector form, whichever
+// representation it arrived in. ArrayVector and PersistentVector are the same
+// literal as far as the compiler is concerned — conj promotes one to the
+// other past 32 elements, so a vector folded into a macroexpansion can be
+// either depending only on how many elements it ended up with (issue #943).
+// MapEntry rides along because an entry is a two-element vector.
+func vectorFormElements(o vm.Value) ([]vm.Value, error) {
+	switch v := o.(type) {
+	case vm.ArrayVector:
+		return []vm.Value(v), nil
+	case vm.PersistentVector:
+		return v.Unbox().([]vm.Value), nil
+	case *vm.PersistentVector:
+		return v.Unbox().([]vm.Value), nil
+	case vm.MapEntry:
+		return []vm.Value{v.Key, v.Value}, nil
+	}
+	return nil, fmt.Errorf("expected vector form, got %T", o)
+}
+
 func (c *Context) compileForm(o vm.Value) error {
 	// Track current form for error reporting
 	prevForm := c.currentForm
@@ -576,7 +596,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.chunk.AddSourceInfo(*info)
 	}
 	switch o.Type() {
-	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType:
+	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType, vm.TypeType:
 		n := c.constant(o)
 		c.emitWithArg(vm.OP_LOAD_CONST, n)
 		c.incSP(1)
@@ -629,24 +649,13 @@ func (c *Context) compileForm(o vm.Value) error {
 		varn := c.constant(v)
 		c.emitWithArg(vm.OP_LOAD_VAR, varn)
 		c.incSP(1)
-	case vm.ArrayVectorType:
+	case vm.ArrayVectorType, vm.PersistentVectorType:
 		tp := c.tailPosition
 		c.tailPosition = false
-		v, ok := o.(vm.ArrayVector)
-		if !ok {
-			if me, ok := o.(vm.MapEntry); ok {
-				v = vm.ArrayVector{me.Key, me.Value}
-			} else {
-				return c.compileError("expected vector form")
-			}
+		v, err := vectorFormElements(o)
+		if err != nil {
+			return c.compileError(err.Error())
 		}
-		// Optimization: const vectors could be pushed as constants
-		//if len(v) == 0 {
-		//	n := c.constant(v)
-		//	c.emitWithArg(vm.OP_LOAD_CONST, n)
-		//	c.incSP(1)
-		//	return nil
-		//}
 		vector := c.constant(rt.CoreNS.Lookup("vector"))
 		c.emitWithArg(vm.OP_LOAD_CONST, vector)
 		c.incSP(1)
@@ -659,12 +668,19 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.emitWithArg(vm.OP_INVOKE, len(v))
 		c.decSP(len(v))
 		c.tailPosition = tp
-	case vm.MapType:
+	case vm.MapType, vm.SortedMapType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
-		arrayMap := c.constant(rt.CoreNS.Lookup("array-map"))
-		c.emitWithArg(vm.OP_LOAD_CONST, arrayMap)
+		ctor := "array-map"
+		if sm, ok := o.(*vm.SortedMap); ok {
+			if !sm.UsesDefaultComparator() {
+				return c.compileError("can't compile a sorted map with a custom comparator as a form: no literal can carry the comparator")
+			}
+			ctor = "sorted-map"
+		}
+		mapCtor := c.constant(rt.CoreNS.Lookup(vm.Symbol(ctor)))
+		c.emitWithArg(vm.OP_LOAD_CONST, mapCtor)
 		c.incSP(1)
 
 		// Get entries via Seq for both Map and PersistentMap
@@ -693,12 +709,19 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.emitWithArg(vm.OP_INVOKE, count*2)
 		c.decSP(count * 2)
 		c.tailPosition = tp
-	case vm.SetType:
+	case vm.SetType, vm.SortedSetType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
-		hashSet := c.constant(rt.CoreNS.Lookup("hash-set"))
-		c.emitWithArg(vm.OP_LOAD_CONST, hashSet)
+		ctor := "hash-set"
+		if ss, ok := o.(*vm.SortedSet); ok {
+			if !ss.UsesDefaultComparator() {
+				return c.compileError("can't compile a sorted set with a custom comparator as a form: no literal can carry the comparator")
+			}
+			ctor = "sorted-set"
+		}
+		setCtor := c.constant(rt.CoreNS.Lookup(vm.Symbol(ctor)))
+		c.emitWithArg(vm.OP_LOAD_CONST, setCtor)
 		c.incSP(1)
 
 		count := 0
@@ -714,7 +737,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.emitWithArg(vm.OP_INVOKE, count)
 		c.decSP(count)
 		c.tailPosition = tp
-	case vm.ListType:
+	case vm.ListType, vm.SequenceType, vm.RangeType, vm.RepeatType, vm.IterateType:
 		prevList := c.currentList
 		c.currentList = o
 		defer func() { c.currentList = prevList }()
@@ -921,6 +944,13 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.decSP(argc)
 
 		c.tailPosition = tp
+	default:
+		// Every type that can appear as a form is enumerated above. Falling out
+		// of the switch used to emit no bytecode at all: the compile succeeded
+		// and the call blew up later on a stack one value short, with nothing
+		// pointing back here (issue #943). An unhandled type is a compiler gap,
+		// so say so at compile time instead of inheriting that silence.
+		return c.compileError(fmt.Sprintf("can't compile a value of type %s as a form: %s", o.Type().Name(), o))
 	}
 	return nil
 }
