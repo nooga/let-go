@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-11
+last-verified: 2026-09-21
 human-verified: 2026-08-11
 ---
 
@@ -46,7 +46,10 @@ publishing a complete file without exposing a partial write:
 - `(os/sh command & args)` buffers a child process and returns
   `{:exit code :out stdout :err stderr}`.
 - `(os/exec* command & args)` streams through the current `*out*` and `*err*`
-  bindings, keeps stdin interactive, and returns the exit code.
+  bindings, keeps stdin interactive, and returns the exit code. When a binding
+  is file-backed (the std streams by default, or a handle from `open`) the
+  child receives that descriptor directly, so an interactive child keeps the
+  terminal; other writers (`with-out-str`, `io/buffer`) are piped.
 - `os/exec` and `os/with-stdin` expose the lower-level Go command value when a
   caller needs to configure a process before running it.
 - `os/args` is the full process argv vector. Prefer `*command-line-args*` for
