@@ -1759,8 +1759,10 @@ func compileBindings(c *Context, binds []vm.Value, opName string) (int, error) {
 		}
 		value := binds[i+1]
 		// Decided before addLocal so the init sees the enclosing bindings,
-		// not the name it is about to bind.
-		known := tagged || c.hostTargetStaticallyKnown(value)
+		// not the name it is about to bind. Only let infers from the init: a
+		// loop local can be rebound to anything by recur, so only its hint
+		// counts.
+		known := tagged || (opName == "let" && c.hostTargetStaticallyKnown(value))
 		err := c.compileForm(value)
 		if err != nil {
 			return 0, NewCompileError(fmt.Sprintf("compiling %s binding", opName)).Wrap(err)

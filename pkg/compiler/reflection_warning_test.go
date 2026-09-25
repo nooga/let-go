@@ -114,6 +114,8 @@ func TestReflectionWarningHonoursHintedAndConstructorBoundLocals(t *testing.T) {
 		{"hinted param through a closure", "(fn [^String s]\n  (fn []\n    (.length s)))", nil},
 		{"unhinted inner param shadows a hinted outer one", "(fn [^String s]\n  (fn [s]\n    (.length s)))", []string{"3:5"}},
 		{"let bound to a known local", "(fn [^String s]\n  (let [t s]\n    (.length t)))", nil},
+		{"loop init does not survive recur", "(fn [x]\n  (loop [s \"initial\"]\n    (.length s)\n    (recur x)))", []string{"3:5"}},
+		{"hinted loop local", "(fn [x]\n  (loop [^String s \"initial\"]\n    (.length s)\n    (recur x)))", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
