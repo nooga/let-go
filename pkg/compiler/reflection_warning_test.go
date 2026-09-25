@@ -115,6 +115,8 @@ func TestReflectionWarningHonoursHintedAndConstructorBoundLocals(t *testing.T) {
 		{"unhinted inner param shadows a hinted outer one", "(fn [^String s]\n  (fn [s]\n    (.length s)))", []string{"3:5"}},
 		{"let bound to a known local", "(fn [^String s]\n  (let [t s]\n    (.length t)))", nil},
 		{"loop init does not survive recur", "(fn [x]\n  (loop [s \"initial\"]\n    (.length s)\n    (recur x)))", []string{"3:5"}},
+		{"threading macro is not a record constructor", "(fn [x]\n  (let [s (-> x identity)]\n    (.length s)))", []string{"3:5"}},
+		{"thread-last target is not a record constructor", "(fn [x]\n  (.length (->> x identity)))", []string{"2:3"}},
 		{"hinted loop local", "(fn [x]\n  (loop [^String s \"initial\"]\n    (.length s)\n    (recur x)))", nil},
 	}
 	for _, tc := range cases {

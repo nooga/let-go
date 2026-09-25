@@ -580,7 +580,9 @@ func (c *Context) hostTargetStaticallyKnown(target vm.Value) bool {
 		return false
 	}
 	name := string(head)
-	return name == "with-meta" || strings.HasPrefix(name, "->") || strings.HasSuffix(name, ".")
+	// `->` and `->>` are the threading macros, not ->Record constructors.
+	isRecordCtor := strings.HasPrefix(name, "->") && name != "->" && name != "->>"
+	return name == "with-meta" || isRecordCtor || strings.HasSuffix(name, ".")
 }
 
 // compileError creates a CompileError with source info from the current form context.
