@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-09-18
+last-verified: 2026-09-25
 human-verified: 2026-08-11
 ---
 
@@ -73,13 +73,22 @@ site for:
   generic `InvokeValueEC` trampoline.
 
 Ordinary higher-order IFn calls, protocol dispatch, known host targets, and
-successfully direct/native-lowered calls stay silent. A concrete receiver
-shape (a literal, a fresh constructor call) can resolve host warnings.
-**Known phase-1 limitation:** *dispatch* type hints (`^String s`) are NOT yet
-consulted — the compiler does not attach `:tag` metadata to fn params or
-locals, so a hinted receiver still warns; expect the host warning on most
-interop whose receiver is a plain symbol. Direct/native warnings need a
-supported call signature or native registration.
+successfully direct/native-lowered calls stay silent. A host receiver counts
+as known when the source names its type: a literal, a fresh constructor call,
+a `^Tag` hint on the receiver form, or a local whose nearest binding is known.
+A binding is known when it carries a `^Tag` hint (fn params and `let`/`loop`
+locals) or, for `let`, when its init is itself a known receiver. A `loop`
+local counts only through its hint, since `recur` can rebind it. A call whose
+receiver is another call's result, such as `(.concat (.toString a) b)`, still
+warns: let-go does not model method return types. Direct/native warnings need
+a supported call signature or native registration.
+
+**Known limitation:** a known receiver silences the host warning, but no
+compile path dispatches host members statically yet. The bytecode compiler,
+`*ir-compile*`, and the Go lowering all route member calls through the
+generic `.` builtin, so a hint is neither checked against the runtime value
+nor used to pick the method. Only the bytecode compiler emits the host
+warning.
 
 This is separate from *numeric* parameter hints (`^double x`, `^long n`),
 which ARE honored: the AOT native-Go lowering pipeline uses them to run
