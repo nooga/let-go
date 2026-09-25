@@ -47,10 +47,15 @@ type Context struct {
 	consts     *vm.Consts
 	chunk      *vm.CodeChunk
 	formalArgs map[vm.Symbol]int
-	argCount   int // total fixed-arity parameter slots, including `_`s
-	source     string
-	variadric  bool
-	locals     []map[vm.Symbol]int
+	// knownArgs marks the formal args whose host type is statically known
+	// (they carried a :tag hint); knownLocals mirrors locals the same way.
+	// Only the reflection warning consults them.
+	knownArgs   map[vm.Symbol]bool
+	argCount    int // total fixed-arity parameter slots, including `_`s
+	source      string
+	variadric   bool
+	locals      []map[vm.Symbol]int
+	knownLocals []map[vm.Symbol]bool
 	// localSlotCounts mirrors locals: each entry is the raw count of stack
 	// slots in that scope. We track this separately because shadowed bindings
 	// (e.g. `(let [[a w] ... [b w] ...])`) overwrite the symbol→slot map
@@ -407,6 +412,7 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 		consts:         c.consts,
 		chunk:          fchunk,
 		formalArgs:     make(map[vm.Symbol]int),
+		knownArgs:      make(map[vm.Symbol]bool),
 		locals:         []map[vm.Symbol]int{},
 		closedOvers:    make(map[vm.Symbol]*closureCell),
 		closedOversSeq: []vm.Symbol{},
@@ -415,15 +421,11 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 	}
 
 	for i := range args {
-		a := args[i]
 		// Strip metadata wrappers from arg symbols: `[^String s]` is read as
-		// `[(with-meta s {:tag String})]`. We don't yet attach meta to locals,
-		// just drop it so the symbol check below succeeds.
-		if lst, ok := a.(*vm.List); ok && lst.First() == vm.Symbol("with-meta") {
-			if rest := lst.Next(); rest != nil {
-				a = rest.First()
-			}
-		}
+		// `[(with-meta s {:tag String})]`. We don't yet attach meta to locals;
+		// a :tag only marks the arg as a known host target for the reflection
+		// warning, and dispatch stays dynamic.
+		a, tagged := stripBindingMeta(args[i])
 		s, ok := a.(vm.Symbol)
 		if !ok {
 			return nil, NewCompileError("all fn formal arguments must be symbols")
@@ -448,6 +450,7 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 		// including `_`s, for arity checks.
 		fc.argCount++
 		fc.formalArgs[s] = i
+		fc.knownArgs[s] = tagged
 	}
 	return fc, nil
 }
@@ -537,9 +540,36 @@ func compileErrorAt(msg string, form vm.Value) *CompileError {
 	return NewCompileErrorWithSource(msg, info)
 }
 
-func hostTargetStaticallyKnown(target vm.Value) bool {
+// stripBindingMeta unwraps a `(with-meta sym meta)` binding form, as the reader
+// produces for `^Tag sym`, and reports whether the metadata carried a :tag.
+func stripBindingMeta(form vm.Value) (vm.Value, bool) {
+	lst, ok := form.(*vm.List)
+	if !ok || lst.First() != vm.Symbol("with-meta") {
+		return form, false
+	}
+	rest := lst.Next()
+	if rest == nil {
+		return form, false
+	}
+	tagged := false
+	if metaForm := rest.Next(); metaForm != nil {
+		if meta, ok := metaForm.First().(vm.Lookup); ok {
+			tagged = meta.ValueAt(vm.Keyword("tag")) != vm.NIL
+		}
+	}
+	return rest.First(), tagged
+}
+
+// hostTargetStaticallyKnown reports whether the target of a host member call
+// has a type the compiler can name: a literal, a constructor or ->Record call,
+// a with-meta form, or a local whose nearest declaration is known (a :tag hint,
+// or a let/loop init that is itself known).
+func (c *Context) hostTargetStaticallyKnown(target vm.Value) bool {
+	if sym, ok := target.(vm.Symbol); ok {
+		return c.lexicalKnown(sym)
+	}
 	if target.Type() != vm.ListType {
-		return target.Type() != vm.SymbolType
+		return true
 	}
 	seq, ok := target.(vm.Seq)
 	if !ok || seq == nil {
@@ -812,7 +842,7 @@ func (c *Context) compileForm(o vm.Value) error {
 					return c.compileForm(normalized)
 				}
 				args := lst.Next()
-				if args != nil && !hostTargetStaticallyKnown(args.First()) {
+				if args != nil && !c.hostTargetStaticallyKnown(args.First()) {
 					rt.EmitReflectionWarningForForm(o, "host-interop", "host target type is not statically known; using dynamic member dispatch")
 				}
 			}
@@ -1185,16 +1215,21 @@ func (c *Context) updatePlaceholderArg(placeholder int, arg int) {
 
 func (c *Context) pushLocals() {
 	c.locals = append(c.locals, map[vm.Symbol]int{})
+	c.knownLocals = append(c.knownLocals, map[vm.Symbol]bool{})
 	c.localSlotCounts = append(c.localSlotCounts, 0)
 }
 
 func (c *Context) popLocals() {
 	c.locals = c.locals[0 : len(c.locals)-1]
+	c.knownLocals = c.knownLocals[0 : len(c.knownLocals)-1]
 	c.localSlotCounts = c.localSlotCounts[0 : len(c.localSlotCounts)-1]
 }
 
 func (c *Context) addLocal(name vm.Symbol) {
 	c.locals[len(c.locals)-1][name] = c.sp - 1
+	// A new binding is unknown until the caller says otherwise, which also
+	// clears a known flag left by an earlier binding of the same name.
+	delete(c.knownLocals[len(c.knownLocals)-1], name)
 	// Record the source name for this slot as debug info (slot -> name), so it
 	// survives into the bundle and can name locals in crash traces.
 	if name != "_" {
@@ -1252,6 +1287,25 @@ func (c *Context) resolvesAsLexical(symbol vm.Symbol) bool {
 		}
 		if ctx.arg(symbol) >= 0 {
 			return true
+		}
+	}
+	return false
+}
+
+// lexicalKnown reports whether symbol's nearest lexical declaration is a
+// statically known host target. It walks scopes as resolvesAsLexical does and
+// stops at the first context that declares symbol, so an unhinted inner
+// binding masks a hinted outer one. A closed-over symbol is answered by the
+// enclosing context that declares it.
+func (c *Context) lexicalKnown(symbol vm.Symbol) bool {
+	for ctx := c; ctx != nil; ctx = ctx.parent {
+		for i := len(ctx.locals) - 1; i >= 0; i-- {
+			if _, ok := ctx.locals[i][symbol]; ok {
+				return ctx.knownLocals[i][symbol]
+			}
+		}
+		if _, ok := ctx.formalArgs[symbol]; ok {
+			return ctx.knownArgs[symbol]
 		}
 	}
 	return false
@@ -1691,16 +1745,12 @@ func parseBindingsVector(val vm.Value) ([]vm.Value, error) {
 func compileBindings(c *Context, binds []vm.Value, opName string) (int, error) {
 	bindn := 0
 	for i := 0; i < len(binds); i += 2 {
-		name := binds[i]
 		// Strip a metadata wrapper from the binding name: `^long x` is read as
 		// `(with-meta x {:tag long})`. As with fn params, we don't yet attach
-		// the tag to the local (a future hook for the IR typeinfer pass), just
-		// unwrap to the bare symbol so the check below succeeds.
-		if lst, ok := name.(*vm.List); ok && lst.First() == vm.Symbol("with-meta") {
-			if rest := lst.Next(); rest != nil {
-				name = rest.First()
-			}
-		}
+		// the tag to the local (a future hook for the IR typeinfer pass); the
+		// tag only marks the local as a known host target for the reflection
+		// warning.
+		name, tagged := stripBindingMeta(binds[i])
 		if name.Type() != vm.SymbolType {
 			return 0, c.compileError(fmt.Sprintf("%s binding name must be a symbol: %v", opName, name))
 		}
@@ -1708,11 +1758,17 @@ func compileBindings(c *Context, binds []vm.Value, opName string) (int, error) {
 			return 0, NewCompileError(fmt.Sprintf("%s bindings must have even number of forms", opName))
 		}
 		value := binds[i+1]
+		// Decided before addLocal so the init sees the enclosing bindings,
+		// not the name it is about to bind.
+		known := tagged || c.hostTargetStaticallyKnown(value)
 		err := c.compileForm(value)
 		if err != nil {
 			return 0, NewCompileError(fmt.Sprintf("compiling %s binding", opName)).Wrap(err)
 		}
 		c.addLocal(name.(vm.Symbol))
+		if known {
+			c.knownLocals[len(c.knownLocals)-1][name.(vm.Symbol)] = true
+		}
 		bindn++
 	}
 	return bindn, nil
