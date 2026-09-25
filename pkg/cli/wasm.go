@@ -316,19 +316,15 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		default:
 			fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_OPT=%q is not a known tinygo -opt level (0|1|2|s|z); passing as-is\n", optLevel)
 		}
-		tgArgs := []string{"build",
-			"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode,
-			"-stack-size=" + stack}
-		if gc := os.Getenv("LETGO_TINYGO_GC"); gc != "" {
+		gc := os.Getenv("LETGO_TINYGO_GC")
+		if gc != "" {
 			switch gc {
 			case "none", "leaking", "conservative", "precise":
 			default:
 				fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_GC=%q is not a known tinygo gc (none|leaking|conservative|precise); passing as-is\n", gc)
 			}
-			tgArgs = append(tgArgs, "-gc="+gc)
 		}
-		tgArgs = append(tgArgs, "-o", wasmPath, ".")
-		build = exec.Command("tinygo", tgArgs...)
+		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags)...)
 		build.Dir = tmpDir
 		build.Env = os.Environ()
 	} else {
@@ -433,6 +429,27 @@ func wasmBuildEnv(tmpDir string) []string {
 		"GOCACHE="+filepath.Join(tmpDir, ".gocache"),
 		"GOTMPDIR="+filepath.Join(tmpDir, ".gotmp"),
 	)
+}
+
+// tinyGoBuildArgs assembles the tinygo argv, the counterpart of
+// wasm.GoBuildArgs on the stock-Go arm. buildTags carries LG_WASM_BUILD_TAGS:
+// tinygo spells build tags the same way `go build` does, and a request that
+// reaches only one arm is worse than one that reaches neither — the gogen_ir
+// wireup is written to the build dir regardless of toolchain, so an unforwarded
+// tag yields an ordinary bytecode build that is indistinguishable from a
+// successful AOT one. optLevel, panicMode, stack and gc arrive already
+// defaulted and warned about by the caller; gc empty means "leave tinygo's".
+func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string) []string {
+	args := []string{"build",
+		"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode,
+		"-stack-size=" + stack}
+	if gc != "" {
+		args = append(args, "-gc="+gc)
+	}
+	if buildTags != "" {
+		args = append(args, "-tags", buildTags)
+	}
+	return append(args, "-o", wasmPath, ".")
 }
 
 // tinygoFdWriteRe matches TinyGo's WASI fd_write import in its wasm_exec.js.
