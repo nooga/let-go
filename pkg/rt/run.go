@@ -103,8 +103,8 @@ func RunExecUnit(unit *bytecode.ExecUnit) error {
 // ApplyGoOverrides after each so gogen_ir NativeFn overrides land on the Vars
 // the bytecode just installed. This is the program-half of an AOT native-entry
 // frame (#425): BootCore already owns core boot+reapply; the generated main.go
-// owns only this load, then either calls the lowered entry directly or falls
-// back to RunProgramMainChunk.
+// owns this load, then the main-chunk replay, then the entry — directly when
+// it lowered, else through InvokeProgramEntry.
 //
 // Unlike the historical RunExecUnit loop, this does NOT skip MainChunk —
 // for a single-ns program the ns chunk IS MainChunk, and the native entry

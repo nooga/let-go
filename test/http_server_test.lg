@@ -1,0 +1,31 @@
+;; http/start, http/stop and http/wait from the language side: a server on a
+;; free port, one request through it, a clean stop.
+(ns test.http-server-test
+  (:require [test :refer :all]))
+
+(defn- handler [req]
+  {:status 200
+   :headers {"Content-Type" "text/plain"}
+   :body (str "hello " (:uri req))})
+
+(deftest start-serves-and-stops
+  (let [srv (http/start handler "127.0.0.1:0")]
+    (testing "the record names the bound address"
+      (is (pos? (:port srv)))
+      (is (= (str "127.0.0.1:" (:port srv)) (:addr srv))))
+    (testing "requests are served"
+      (let [resp (http/get (str "http://" (:addr srv) "/x"))]
+        (is (= 200 (:status resp)))
+        (is (= "hello /x" (:body resp)))))
+    (testing "stop is nil, wait is nil, and the port is closed"
+      (is (nil? (http/stop srv)))
+      (is (nil? (http/wait srv)))
+      (is (thrown? Exception (http/get (str "http://" (:addr srv) "/x")))))))
+
+(deftest stop-accepts-the-boxed-handle
+  (let [srv (http/start handler "127.0.0.1:0")]
+    (is (nil? (http/stop (:server srv) 1000)))
+    (is (nil? (http/wait (:server srv))))))
+
+(deftest stop-rejects-a-non-server
+  (is (thrown? Exception (http/stop "nope"))))

@@ -161,7 +161,7 @@
 ;; reachable-nids answers a coarser question than compute-liveness: which nids'
 ;; VALUES are actually read by emitted code. Roots are the refs of value-reading
 ;; terminators (:return / :branch-if condition / :tail-call) and of every :call
-;; inst (calls always emit for their side effects, so their operands are read).
+;; and :try inst (both execute for their effects even when their result is unused).
 ;; The set is closed to a fixpoint: a reachable inst's refs are reachable, and a
 ;; reachable block-param's incoming edge-args are reachable — the SAME block-arg
 ;; threading rule compute-liveness uses (branch-targets-of). Dead duplicate
@@ -178,7 +178,7 @@
   (let [absorbed-insts (or (:absorbed-insts f) #{})
         reached (atom #{})
         seed    (fn [nid] (swap! reached conj nid))]
-    ;; Seed from value-reading terminators and all call instructions,
+    ;; Seed from value-reading terminators and all call/try instructions,
     ;; but skip terminators that are in absorbed-insts
     (doseq [bid (ir/blocks f)]
       (let [term (ir/block-term bid f)]
@@ -189,8 +189,8 @@
                        (not (contains? absorbed-insts term)))
               (doseq [r (ir/refs term f)] (seed r))))))
       (doseq [nid (ir/block-insts bid f)]
-        ;; Seed from calls, but skip those in absorbed-insts
-        (when (and (= :call (ir/op nid f))
+        ;; Try bodies, handlers, and finally closures must retain their captures.
+        (when (and (contains? #{:call :try} (ir/op nid f))
                    (not (contains? absorbed-insts nid)))
           (doseq [r (ir/refs nid f)] (seed r)))))
     ;; Fixpoint: close over refs and block-arg edges

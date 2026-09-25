@@ -100,19 +100,21 @@ func printResult(value vm.Value) error {
 
 func runFile(ctx *compiler.Context, filename string) error {
 	ctx.SetSource(filename)
-	f, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	_, _, err = ctx.CompileMultiple(f)
-	errc := f.Close()
-	if err != nil {
-		return err
-	}
-	if errc != nil {
-		return errc
-	}
-	return nil
+	return rt.WithFile(filename, func() error {
+		f, err := os.Open(filename)
+		if err != nil {
+			return err
+		}
+		_, _, err = ctx.CompileMultiple(f)
+		errc := f.Close()
+		if err != nil {
+			return err
+		}
+		if errc != nil {
+			return errc
+		}
+		return nil
+	})
 }
 
 func runLGB(filename string) error {
@@ -157,13 +159,17 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	dstAbs, _ := filepath.Abs(dst)
 	bundleStoreID := storageIDForScript(src)
 
-	f, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	chunk, _, err := ctx.CompileMultiple(f)
-	f.Close()
-	if err != nil {
+	var chunk *vm.CodeChunk
+	if err := rt.WithFile(src, func() error {
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		var cerr error
+		chunk, _, cerr = ctx.CompileMultiple(f)
+		f.Close()
+		return cerr
+	}); err != nil {
 		return err
 	}
 
@@ -267,15 +273,24 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	return nil
 }
 
-func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
+func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string, entryFrameEntry string) error {
 	ctx.SetSource(src)
-	f, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	chunk, _, err := ctx.CompileMultiple(f)
-	f.Close()
-	if err != nil {
+	var chunk *vm.CodeChunk
+	if err := rt.WithFile(src, func() error {
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		var cerr error
+		if entryFrameEntry == "" {
+			chunk, _, cerr = ctx.CompileMultiple(f)
+		} else {
+			slash := strings.LastIndexByte(entryFrameEntry, '/')
+			chunk, _, cerr = ctx.CompileMultipleForEntryFrame(f, entryFrameEntry[:slash], entryFrameEntry[slash+1:])
+		}
+		f.Close()
+		return cerr
+	}); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
@@ -366,6 +381,7 @@ var expr string
 var debug bool
 var showVersion bool
 var compileOutput string
+var entryFrameEntry string
 var bundleOutput string
 var compressBundle bool
 var bundleBase string
@@ -400,6 +416,7 @@ func registerFlags() {
 	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
+	flag.StringVar(&entryFrameEntry, "entry-frame-entry", "", "with -c: omit top-level calls to the selected namespace/main or namespace/-main entry; the generated frame invokes it")
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
 	flag.BoolVar(&compressBundle, "z", false, "with -c/-b: DEFLATE-compress the bundle body (smaller .lgb / standalone binary; transparently inflated at load)")
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
@@ -557,6 +574,14 @@ func runMain() int {
 	}
 
 	flag.Parse()
+	if entryFrameEntry != "" {
+		slash := strings.LastIndexByte(entryFrameEntry, '/')
+		name := entryFrameEntry[slash+1:]
+		if compileOutput == "" || slash <= 0 || (name != "main" && name != "-main") {
+			fmt.Fprintln(os.Stderr, "error: -entry-frame-entry requires -c and a namespace/main or namespace/-main value")
+			return 2
+		}
+	}
 	if compressBundle && compileOutput == "" && bundleOutput == "" {
 		fmt.Fprintln(os.Stderr, "error: -z requires -c or -b")
 		return 2
@@ -615,7 +640,7 @@ func runMain() int {
 			fmt.Fprintln(os.Stderr, "error: -c requires exactly one input file")
 			return 1
 		}
-		if err := compileLG(context, nsResolver, files[0], compileOutput); err != nil {
+		if err := compileLG(context, nsResolver, files[0], compileOutput, entryFrameEntry); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
 			return 1
 		}

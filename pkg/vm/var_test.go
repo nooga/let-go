@@ -86,12 +86,30 @@ func TestVarAlterMetaMaterializesCompactPairs(t *testing.T) {
 	}
 }
 
-func TestVarEmptyCompactMetadataMaterializesEmptyMap(t *testing.T) {
-	v := NewVar(NewNamespace("test.var-empty-meta"), "test.var-empty-meta", "x")
+func TestVarEmptyCompactMetadataMaterializesNSOnlyMap(t *testing.T) {
+	ns := NewNamespace("test.var-empty-meta")
+	v := NewVar(ns, "test.var-empty-meta", "x")
 	v.SetMetaPairs(DefMetaPairs{})
+	if !v.MetaDeferred() {
+		t.Fatal("SetMetaPairs should leave metadata deferred")
+	}
 	meta, ok := v.Meta().(*PersistentMap)
-	if !ok || meta.RawCount() != 0 {
-		t.Fatalf("Meta() = %v (%T), want empty PersistentMap", meta, meta)
+	if !ok || meta.RawCount() != 1 || meta.ValueAt(Keyword("ns")) != ns {
+		t.Fatalf("Meta() = %v (%T), want {:ns <ns>} only", meta, meta)
+	}
+	if v.MetaDeferred() {
+		t.Fatal("Meta() should have materialized the map")
+	}
+}
+
+func TestVarCompactMetadataKeepsExplicitNS(t *testing.T) {
+	ns := NewNamespace("test.var-explicit-ns")
+	other := NewNamespace("test.var-other-ns")
+	v := NewVar(ns, "test.var-explicit-ns", "x")
+	v.SetMetaPairs(DefMetaPairs{Keyword("ns"), other})
+	meta := v.Meta().(*PersistentMap)
+	if meta.RawCount() != 1 || meta.ValueAt(Keyword("ns")) != other {
+		t.Fatalf("Meta() = %v, want the explicit :ns kept", meta)
 	}
 }
 

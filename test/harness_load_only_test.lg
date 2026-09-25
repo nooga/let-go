@@ -1,0 +1,6 @@
+;; No ns form on purpose: the harness must treat this file as load-only
+;; (spec 12.2). It loads, its top-level assertions run, and because it
+;; defines no var with :test metadata there is nothing to run through
+;; run-tests — so the file passes without the harness ever looking for a
+;; namespace of its own.
+(assert (= 2 (+ 1 1)))

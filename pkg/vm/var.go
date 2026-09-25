@@ -312,12 +312,41 @@ func (v *Var) IsPrivate() bool {
 
 func (v *Var) materializeMetaLocked() Value {
 	if pairs, ok := v.meta.(DefMetaPairs); ok {
-		v.meta = NewArrayMap([]Value(pairs))
+		// :ns is the namespace OBJECT, which has no bundle encoding, so it is
+		// derived here at materialization instead of being attached at def
+		// time (rt.attachVarNSMeta); attaching then would force every var's
+		// metadata map to exist at bundle init.
+		if v.nsref != nil && !pairsHaveKey(pairs, Keyword("ns")) {
+			withNS := make([]Value, 0, len(pairs)+2)
+			withNS = append(withNS, pairs...)
+			withNS = append(withNS, Keyword("ns"), v.nsref)
+			v.meta = NewArrayMap(withNS)
+		} else {
+			v.meta = NewArrayMap([]Value(pairs))
+		}
 	}
 	if v.meta == nil {
 		return NIL
 	}
 	return v.meta
+}
+
+func pairsHaveKey(pairs DefMetaPairs, k Value) bool {
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if pairs[i] == k {
+			return true
+		}
+	}
+	return false
+}
+
+// MetaDeferred reports whether the var's metadata is still the lazy
+// DefMetaPairs form, i.e. no map has been built for it yet.
+func (v *Var) MetaDeferred() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	_, ok := v.meta.(DefMetaPairs)
+	return ok
 }
 
 func (v *Var) Meta() Value {
@@ -365,6 +394,12 @@ func (v *Var) NS() string { return v.ns }
 
 // VarName returns the var name.
 func (v *Var) VarName() string { return v.name }
+
+// NSRef returns the namespace OBJECT this var was interned into (nil for
+// vars constructed without one, e.g. some Go-side unit-test fixtures). Used
+// to attach def's :ns metadata (spec 4.4) at runtime rather than baking a
+// *Namespace into a compiled constant — see rt.ApplyVarMeta.
+func (v *Var) NSRef() *Namespace { return v.nsref }
 
 func (v *Var) SetMacro() {
 	v.isMacro = true

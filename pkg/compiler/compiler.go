@@ -17,6 +17,31 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+// invokeMacro runs a macro expander with core/*macro-form* bound to the
+// call form, which defmacro exposes as &form. The binding is pushed on the
+// root binding stack (package-level Var API) because the compiler has no
+// ExecContext of its own; expansion is synchronous so push/pop pair here.
+func invokeMacro(macroVar *vm.Var, callForm vm.Value, args []vm.Value) (vm.Value, error) {
+	if mf := macroFormVar(); mf != nil {
+		mf.PushBinding(callForm)
+		defer mf.PopBinding()
+	}
+	return macroVar.Deref().(vm.Fn).Invoke(args)
+}
+
+var macroFormVarCache *vm.Var
+
+func macroFormVar() *vm.Var {
+	if macroFormVarCache == nil {
+		if ns := rt.NS(rt.NameCoreNS); ns != nil {
+			if v := ns.LookupLocal(vm.Symbol("*macro-form*")); v != nil {
+				macroFormVarCache = v
+			}
+		}
+	}
+	return macroFormVarCache
+}
+
 type Context struct {
 	parent     *Context
 	consts     *vm.Consts
@@ -188,6 +213,25 @@ func (c *Context) Compile(s string) (chunk *vm.CodeChunk, err error) {
 }
 
 func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, result vm.Value, err error) {
+	return c.compileMultiple(reader, nil)
+}
+
+// CompileMultipleForEntryFrame compiles a program bundle whose native entry
+// frame will invoke namespace/name after replay. Only top-level calls to that
+// selected entry are omitted from the emitted chunk; every other top-level
+// form, including runtime initialization in required namespaces, remains.
+// Ordinary CompileMultiple and its bytecode bundles retain their usual entry
+// invocation semantics.
+func (c *Context) CompileMultipleForEntryFrame(reader io.Reader, namespace, name string) (compiled *vm.CodeChunk, result vm.Value, err error) {
+	return c.compileMultiple(reader, &entryFrameCall{namespace: namespace, name: name})
+}
+
+type entryFrameCall struct {
+	namespace string
+	name      string
+}
+
+func (c *Context) compileMultiple(reader io.Reader, entry *entryFrameCall) (compiled *vm.CodeChunk, result vm.Value, err error) {
 	defer vm.RecoverPanic(&err)
 	// Buffer source for error display
 	srcBytes, err := io.ReadAll(reader)
@@ -218,6 +262,9 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 				}
 				return nil
 			}
+		}
+		if entry != nil && c.CurrentNS().Name() == entry.namespace {
+			o, _ = omitTopLevelEntryCall(o, *entry)
 		}
 		if compiledForms > 0 {
 			chunk.Append(vm.OP_POP)
@@ -280,6 +327,55 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 	c.emit(vm.OP_RETURN)
 	c.decSP(1)
 	return c.chunk, result, nil
+}
+
+// omitTopLevelEntryCall removes only a call to the selected entry from a
+// top-level expression. The documented guard and sequential do forms are
+// traversed, while fn bodies, quotes, and other nested expressions are left
+// untouched. Replacing a call with nil preserves sibling side effects and the
+// surrounding form's result shape.
+func omitTopLevelEntryCall(form vm.Value, entry entryFrameCall) (vm.Value, bool) {
+	lst, ok := form.(*vm.List)
+	if !ok || lst.RawCount() == 0 {
+		return form, false
+	}
+	head, ok := lst.First().(vm.Symbol)
+	if !ok {
+		return form, false
+	}
+	name := string(head)
+	if name == entry.name || name == entry.namespace+"/"+entry.name {
+		return vm.NIL, true
+	}
+	var start int
+	switch name {
+	case "do", "clojure.core/do":
+		start = 1
+	case "when-not", "clojure.core/when-not":
+		parts := lst.Unbox().([]vm.Value)
+		if len(parts) < 3 || !isCompilingAOTGuard(parts[1]) {
+			return form, false
+		}
+		start = 2
+	default:
+		return form, false
+	}
+	parts := lst.Unbox().([]vm.Value)
+	changed := false
+	for i := start; i < len(parts); i++ {
+		var omitted bool
+		parts[i], omitted = omitTopLevelEntryCall(parts[i], entry)
+		changed = changed || omitted
+	}
+	if !changed {
+		return form, false
+	}
+	return vm.NewList(parts).(*vm.List).WithMeta(lst.Meta()), true
+}
+
+func isCompilingAOTGuard(form vm.Value) bool {
+	sym, ok := form.(vm.Symbol)
+	return ok && (sym == "*compiling-aot*" || sym == "clojure.core/*compiling-aot*")
 }
 
 func (c *Context) emit(op int32) {
@@ -758,7 +854,7 @@ func (c *Context) compileForm(o vm.Value) error {
 						}
 					}
 				}
-				newform, err := fvar.(*vm.Var).Deref().(vm.Fn).Invoke(argvec)
+				newform, err := invokeMacro(fvar.(*vm.Var), o, argvec)
 				if err != nil {
 					return NewCompileError(fmt.Sprintf("Executing macro %s (%s) failed", fvar, fvar.(*vm.Var).Deref())).Wrap(err)
 				}
@@ -2206,6 +2302,15 @@ func defCompiler(c *Context, form vm.Value) error {
 		meta = assocMeta(meta, vm.Keyword("column"), vm.MakeInt(info.Column+1))
 		meta = assocMeta(meta, vm.Keyword("file"), vm.String(info.File))
 	}
+	// :name, as Clojure's def attaches it (spec 4.4). A vm.Symbol constant
+	// serializes fine into an AOT bundle (see pkg/bytecode/encoder.go), so it
+	// is baked here like :file/:line/:column. :ns is NOT added here: it would
+	// need a *vm.Namespace bundle constant, which the encoder has no case
+	// for, so it is attached at runtime instead — see rt.ApplyVarMeta, which
+	// derives it from the Var's own NSRef() and therefore covers both the
+	// immediate apply below and the bytecode-replayed apply-def-meta! call
+	// (fresh process decoding a .lgb bundle).
+	meta = assocMeta(meta, vm.Keyword("name"), sym)
 	c.defName = sym.String()
 	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
 	if meta != vm.NIL {

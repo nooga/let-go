@@ -1,0 +1,18 @@
+(ns fixture.sloc)
+
+;; `spread` spans lines 5-12 (8 lines) but only 4 of them carry tokens
+;; (5, 6, 10, 12): the two blank lines and the two comment lines inside it
+;; do not count.
+(defn spread
+  [x]
+
+  ;; a comment inside the definition
+
+  (let [y (inc x)]
+    ;; another comment
+    (+ x y)))
+
+;; `tight` spans 3 lines, all of which carry tokens.
+(defn tight [a b]
+  (+ a
+     b))

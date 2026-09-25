@@ -122,3 +122,12 @@
                       (func F [(a int) (b int)] int
                         (return (+ a b)))))]
           (is (= first-output out)))))))
+
+;; --- query helpers ---------------------------------------------------
+
+(deftest ident-names-nil
+  (testing "nil AST node returns empty collection without panicking"
+    (is (empty? (g/ident-names nil)))
+    (is (= (g/ident-names nil) '()))
+    (is (= (g/ident-names nil) []))))
+

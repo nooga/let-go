@@ -1,6 +1,7 @@
 ;; Metadata tests: with-meta, meta
 (ns test.metadata-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 (deftest meta-on-vector
   (testing "with-meta and meta on vector"
@@ -30,7 +31,10 @@
   (testing "meta returns nil when no metadata"
     (is (nil? (meta [1 2 3])))
     (is (nil? (meta {:a 1})))
-    (is (nil? (meta '(1 2 3))))
+    ;; A quoted list literal is compiled to the exact list value the reader
+    ;; produced, so it now carries reader-recorded :line/:column (spec 4.2) —
+    ;; explicit metadata is still absent, hence dissoc-ing those keys is nil.
+    (is (empty? (dissoc (meta '(1 2 3)) :line :column)))
     (is (nil? (meta nil)))
     (is (nil? (meta (fn [x] x))))))
 

@@ -16,10 +16,11 @@
 #   scripts/gogen-parity.sh --quick     # jank only (~2 sec, smoke check)
 #   scripts/gogen-parity.sh --full      # all three suites (~5 min)
 #   scripts/gogen-parity.sh --jank-only # just the jank suite
+#   scripts/gogen-parity.sh --selftest  # verify the comparison oracle (~2 sec)
 #
 # Exit codes:
-#   0  all suites parity-identical (counts + buckets)
-#   1  semantic divergence detected (counts or buckets differ)
+#   0  all suites parity-identical, or selftest passed
+#   1  semantic divergence detected, or selftest failed
 #   2  setup error (missing submodule, no go binary, etc.)
 #
 # The wall-time delta is reported but not enforced (single-run noise is
@@ -43,6 +44,7 @@ case "$MODE" in
     # *typeinfer-max-drains* drain-count guard. This is the CI-safe parity gate.
     --ir-compile) RUN_JANK=0; RUN_LOWERGO=0; RUN_IRCOMPILE=1; RUN_DEFTYPE=0 ;;
     --full)       RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=1; RUN_DEFTYPE=1 ;;
+    --selftest)   RUN_SELFTEST=1; RUN_JANK=0; RUN_LOWERGO=0; RUN_IRCOMPILE=0; RUN_DEFTYPE=0 ;;
     default)      RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=0; RUN_DEFTYPE=1 ;;
     -h|--help)
         sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
@@ -58,7 +60,9 @@ esac
 # artifact, so regenerate it before any `-tags gogen_ir` build below. Cheap
 # relative to the parity runs; non-determinism is irrelevant here (we compare
 # program output across engines, not the generated Go bytes).
-go run -tags bootstrap ./cmd/lgbgen --target=go >/dev/null
+if [ "${RUN_SELFTEST:-0}" -ne 1 ]; then
+    go run -tags bootstrap ./cmd/lgbgen --target=go >/dev/null
+fi
 
 # IR corpus used by ir-stress. Order matters (data.lg must load first).
 IR_CORPUS=(
@@ -68,12 +72,16 @@ IR_CORPUS=(
 IR_DIR=pkg/rt/core/ir
 
 LOG_DIR="${TMPDIR:-/tmp}/gogen-parity-$$"
-mkdir -p "$LOG_DIR"
-trap 'rc=$?; [ $rc -eq 0 ] && rm -rf "$LOG_DIR" || echo "logs preserved at $LOG_DIR"' EXIT
+if [ "${RUN_SELFTEST:-0}" -ne 1 ]; then
+    mkdir -p "$LOG_DIR"
+    trap 'rc=$?; [ $rc -eq 0 ] && rm -rf "$LOG_DIR" || echo "logs preserved at $LOG_DIR"' EXIT
+fi
 
 # Preflight ---------------------------------------------------------------
 
-command -v go >/dev/null 2>&1 || { echo "go binary not on PATH" >&2; exit 2; }
+if [ "${RUN_SELFTEST:-0}" -ne 1 ]; then
+    command -v go >/dev/null 2>&1 || { echo "go binary not on PATH" >&2; exit 2; }
+fi
 
 if [ "$RUN_JANK" -eq 1 ]; then
     if [ ! -d test/clojure-test-suite/test/clojure/core_test ]; then
@@ -106,6 +114,39 @@ time_run() {
 
 # Extract the TOTALS line from a jank-suite -v log.
 jank_totals() { grep -m1 -E "TOTALS: " "$1" | sed 's/.*TOTALS: //'; }
+
+# --- Per-test IDENTITY ---------------------------------------------------
+#
+# Equal counts can hide different failing tests, and a green corpus gives both
+# engines the same hash of an empty failure list. Compare per-test identities
+# alongside the summaries so parity always has positive evidence.
+
+# Each jank suite file is a subtest. Include SKIP because equal skip counts can
+# still refer to different files.
+jank_identity() {
+    grep -oE -- "--- (PASS|FAIL|SKIP): TestClojureTestSuite/[^ ]+" "$1" | sort
+}
+
+# Compare every ir-stress fixture score, not only failures.
+ir_identity() {
+    grep -E "^[^ ]+: ([0-9]+/[0-9]+ ok|READ-ERROR)" "$1" | sort
+}
+
+# Empty identity listings are inconclusive rather than equal.
+compare_identity() {
+    local label="$1" a="$2" b="$3"
+    if [ ! -s "$a" ] && [ ! -s "$b" ]; then
+        echo "  $label identity: NO DATA (extractor matched nothing in either log)"
+        return 2
+    fi
+    if diff -q "$a" "$b" >/dev/null 2>&1; then
+        echo "  $label identity: $(wc -l <"$a" | tr -d ' ') tests agree"
+        return 0
+    fi
+    echo "  $label identity: DIVERGED — same counts can hide this"
+    diff "$a" "$b" | sed 's/^/      /' | head -40
+    return 1
+}
 
 # Extract the Passed/Failed line + bucket distribution from an ir-stress log.
 ir_summary()  { grep -E "^Total fixtures:|^Passed:|^Failed:" "$1"; }
@@ -153,6 +194,7 @@ run_jank() {
     require_ran "jank/$tag_label" "$log" 'TOTALS: '
     printf "%-10s %-50s %ss\n" "$tag_label" "$(jank_totals "$log")" "$wall"
     echo "$wall:$(jank_totals "$log")" >"$LOG_DIR/jank-${tag_label}.summary"
+    jank_identity "$log" >"$LOG_DIR/jank-${tag_label}.identity"
 }
 
 run_ir_stress() {
@@ -167,6 +209,7 @@ run_ir_stress() {
     buckets=$(ir_buckets "$log" | md5sum | cut -c1-8)
     printf "%-10s pass=%s fail=%s buckets=%s  %ss\n" "$tag_label" "$pass" "$fail" "$buckets" "$wall"
     echo "$wall:$pass:$fail:$buckets" >"$LOG_DIR/${mode}-${tag_label}.summary"
+    ir_identity "$log" >"$LOG_DIR/${mode}-${tag_label}.identity"
 }
 
 compare_summaries() {
@@ -186,6 +229,80 @@ compare_summaries() {
         return 1
     fi
 }
+
+# --- Selftest ------------------------------------------------------------
+#
+# Use synthetic log pairs to prove the summary comparison misses equal-count
+# divergences and the identity comparison catches them. No build or corpus is
+# required.
+if [ "${RUN_SELFTEST:-0}" -eq 1 ]; then
+    d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+    fails=0
+    ok()   { echo "  PASS  $1"; }
+    bad()  { echo "  FAIL  $1" >&2; fails=$((fails+1)); }
+
+    # Equal jank counts, different failing file.
+    cat >"$d/a.log" <<'EOF'
+    --- FAIL: TestClojureTestSuite/alpha_test
+    --- PASS: TestClojureTestSuite/beta_test
+    TOTALS: files=2 assertions: pass=1 fail=1 | skipped: compile=0 panic=0 runtime=0
+EOF
+    cat >"$d/b.log" <<'EOF'
+    --- PASS: TestClojureTestSuite/alpha_test
+    --- FAIL: TestClojureTestSuite/beta_test
+    TOTALS: files=2 assertions: pass=1 fail=1 | skipped: compile=0 panic=0 runtime=0
+EOF
+    echo "1.00:$(jank_totals "$d/a.log")" >"$d/a.summary"
+    echo "1.00:$(jank_totals "$d/b.log")" >"$d/b.summary"
+    jank_identity "$d/a.log" >"$d/a.identity"
+    jank_identity "$d/b.log" >"$d/b.identity"
+
+    if compare_summaries "selftest-jank" "$d/a.summary" "$d/b.summary" >/dev/null; then
+        ok "counts agree on a real divergence (the blind spot, as designed)"
+    else
+        bad "expected compare_summaries to be fooled; it was not -- update this test"
+    fi
+    if compare_identity "selftest-jank" "$d/a.identity" "$d/b.identity" >/dev/null; then
+        bad "identity MISSED a differing failing test"
+    else
+        ok "identity caught the differing failing test"
+    fi
+
+    # Equal ir-stress totals, different fixture scores.
+    printf 'alpha.lg: 3/5 ok\nbeta.lg: 5/5 ok\n'  >"$d/c.log"
+    printf 'alpha.lg: 5/5 ok\nbeta.lg: 3/5 ok\n'  >"$d/d.log"
+    ir_identity "$d/c.log" >"$d/c.identity"
+    ir_identity "$d/d.log" >"$d/d.identity"
+    if compare_identity "selftest-ir" "$d/c.identity" "$d/d.identity" >/dev/null; then
+        bad "identity MISSED a per-fixture score swap"
+    else
+        ok "identity caught the per-fixture score swap"
+    fi
+
+    # Empty listings provide no evidence of parity.
+    : >"$d/e.identity"; : >"$d/f.identity"
+    rc=0
+    compare_identity "selftest-empty" "$d/e.identity" "$d/f.identity" >/dev/null || rc=$?
+    if [ "$rc" -eq 2 ]; then
+        ok "two empty listings report NO DATA, not agreement"
+    else
+        bad "empty vs empty was reported as agreement"
+    fi
+
+    # Identical non-empty listings must still agree.
+    if compare_identity "selftest-same" "$d/a.identity" "$d/a.identity" >/dev/null; then
+        ok "identical listings agree (checker is not always-red)"
+    else
+        bad "identical listings were reported as divergence"
+    fi
+
+    if [ "$fails" -ne 0 ]; then
+        echo "SELFTEST FAILED: $fails case(s)." >&2
+        exit 1
+    fi
+    echo "selftest: all cases passed."
+    exit 0
+fi
 
 # deftype/defprotocol native lowering ------------------------------------
 # Delegates to the generalized trampoline (scripts/gogen-trampoline.lg), which
@@ -243,6 +360,12 @@ check() {
     local label="$1" untagged="$2" tagged="$3"
     if ! compare_summaries "$label" "$untagged" "$tagged"; then
         divergence=$((divergence+1))
+    fi
+    # NO DATA is a harness warning, not a semantic divergence.
+    local ia="${untagged%.summary}.identity" ib="${tagged%.summary}.identity"
+    if [ -f "$ia" ] && [ -f "$ib" ]; then
+        compare_identity "$label" "$ia" "$ib" || \
+            [ $? -eq 2 ] || divergence=$((divergence+1))
     fi
 }
 [ "$RUN_JANK"      -eq 1 ] && check jank       "$LOG_DIR/jank-untagged.summary"       "$LOG_DIR/jank-gogen_ir.summary"

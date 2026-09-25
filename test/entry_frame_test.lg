@@ -66,6 +66,9 @@
   ;; main chunk — after SetCommandLineArgs (top-level forms see real argv)
   ;; and after LoadProgramNamespaces (dependency replay order + the early
   ;; return that keeps top-level side effects running exactly once).
+  ;;
+  ;; The frame uses ordinary replay. The bytecode prepared for it omits the
+  ;; selected top-level entry call, leaving other runtime effects intact.
   (let [raw  (ef/find-program-entry '[(defn -main [] 1)])
         e    (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
                                          :needs-error? true :arity 0}})

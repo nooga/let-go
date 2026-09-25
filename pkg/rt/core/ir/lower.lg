@@ -155,8 +155,9 @@
           (when (pos? junk)
             (swap! l update :block-junk assoc bid junk)))
       (when (not= cur junk)
-        (throw (str "ir/lower: junk-below mismatch for block " bid
-                    " (" cur " vs " junk "); unsupported shape"))))))
+        (throw (ex-info (str "ir/lower: junk-below mismatch for block " bid
+                             " (" cur " vs " junk "); unsupported shape")
+                        {:fn :lower :type (type bid) :value bid}))))))
 
 (defn- bump-max-stack! [l]
   "If current runtime SP (= lower-sp + current block's junk-below)
@@ -193,6 +194,15 @@
    patching."
   (when inst-id (record-source-info! l inst-id))
   (ir/chunk-emit-placeholder (chunk-of l) op-kw (stack-sp l)))
+
+(defn- emit-jump! [l nid target]
+  "Emit a jump unless the target is next in block emission order."
+  (when (not= target (get (:next-of @l) (:current-block @l) -1))
+    (let [arg-ip (emit-placeholder! l nid :branch)]
+      (add-patch! l {:src-ip (dec arg-ip)
+                     :target-block target
+                     :offset-slot 1
+                     :negate? false}))))
 
 ;; --- cross-block use check -------------------------------------------
 
@@ -232,11 +242,12 @@
                   (let [user-block (ir/block-of user-id f)]
                     (when (and (not= user-block def-block)
                                (not (is-terminator-branch-arg-use? user-id i f)))
-                      (throw (str "ir/lower: cross-block use of value %"
-                                  i " via direct Refs (defined in block "
-                                  def-block ", used in block " user-block
-                                  ") — only branch-target args may cross blocks; "
-                                  "see follow-up issue D"))))))))))
+                      (throw (ex-info (str "ir/lower: cross-block use of value %"
+                                        i " via direct Refs (defined in block "
+                                        def-block ", used in block " user-block
+                                        ") — only branch-target args may cross blocks; "
+                                        "see follow-up issue D")
+                               {:fn :lower :type (type i) :value i}))))))))))
       (recur (inc i)))))
 
 ;; --- heuristics ------------------------------------------------------
@@ -364,12 +375,7 @@
 
 (defn- block-index-map [insts]
   "nid -> position within a block's inst vector."
-  (let [m (atom {})]
-    (loop [i 0]
-      (when (< i (count insts))
-        (swap! m assoc (nth insts i) i)
-        (recur (inc i))))
-    @m))
+  (persistent! (reduce-kv (fn [m i nid] (assoc! m nid i)) (transient {}) insts)))
 
 (defn- effect-strictly-between? [insts f lo hi]
   "True if any inst at index j with lo < j < hi is effectful. The consuming op
@@ -455,8 +461,27 @@
 
 ;; --- materialize -----------------------------------------------------
 
+(defn- emit-load! [l nid op aux]
+  (let [arg (case op
+              :const (ir/chunk-intern-const (chunk-of l) (template-value aux))
+              :load-var (ir/chunk-intern-const (chunk-of l) aux)
+              :load-arg (int aux)
+              :load-closed (int aux)
+              (throw (ex-info (str "ir/lower: value %" nid
+                                   " not on stack for materialize (op=" op ")")
+                              {:fn :lower :type (type nid) :value nid})))]
+    (emit-with-arg! l nid op arg)
+    (bump-stack-sp! l 1)
+    (bump-max-stack! l)))
+
+(defn- duplicate-slot! [l pos]
+  (let [sp (stack-sp l)]
+    (ir/chunk-emit-dup-nth (chunk-of l) sp (- (dec sp) pos))
+    (bump-stack-sp! l 1)
+    (bump-max-stack! l)))
+
 (defn- materialize! [l nid]
-  "Ensure nid's value is on top of the stack. Two paths:
+  "Ensure nid's value is on top of the stack. Three paths:
      1. Already on top AND last use → no emission.
      2. Tracked on stack → emit DUP_NTH from the tracked slot.
      3. Untracked (cheap-skip fallback) → re-emit the cheap load inline."
@@ -466,35 +491,8 @@
       (if (and (= pos (dec (stack-sp l)))
                (= 1 (use-count-of l nid)))
         nil  ; already on top, last use, consumer pops in place
-        (let [nth-arg (- (dec (stack-sp l)) pos)]
-          (ir/chunk-emit-dup-nth (chunk-of l) (stack-sp l) nth-arg)
-          (bump-stack-sp! l 1)
-          (bump-max-stack! l)))
-      ;; Cheap re-emit fallback — body emission was skipped for this
-      ;; node. Mirrors lower.go's switch in materialize.
-      (let [op  (ir/op nid f)
-            aux (ir/aux nid f)]
-        (case op
-          :const
-          (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
-            (emit-with-arg! l nid :const idx)
-            (bump-stack-sp! l 1)
-            (bump-max-stack! l))
-          :load-arg
-          (do (emit-with-arg! l nid :load-arg (int aux))
-              (bump-stack-sp! l 1)
-              (bump-max-stack! l))
-          :load-var
-          (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
-            (emit-with-arg! l nid :load-var idx)
-            (bump-stack-sp! l 1)
-            (bump-max-stack! l))
-          :load-closed
-          (do (emit-with-arg! l nid :load-closed (int aux))
-              (bump-stack-sp! l 1)
-              (bump-max-stack! l))
-          (throw (str "ir/lower: value %" nid
-                      " not on stack for materialize (op=" op ")")))))))
+        (duplicate-slot! l pos))
+      (emit-load! l nid (ir/op nid f) (ir/aux nid f)))))
 
 ;; --- per-op emission -------------------------------------------------
 
@@ -508,22 +506,8 @@
     (case op
       :block-arg nil  ; placed on stack by predecessors; no opcode
 
-      :const
-      (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
-        (emit-with-arg! l nid :const idx)
-        (bump-stack-sp! l 1)
-        (bump-max-stack! l))
-
-      :load-arg
-      (do (emit-with-arg! l nid :load-arg (int aux))
-          (bump-stack-sp! l 1)
-          (bump-max-stack! l))
-
-      :load-var
-      (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
-        (emit-with-arg! l nid :load-var idx)
-        (bump-stack-sp! l 1)
-        (bump-max-stack! l))
+      (:const :load-arg :load-var :load-closed)
+      (emit-load! l nid op aux)
 
       (:add :sub :mul :bit-and :bit-or :bit-xor :bit-and-not
         :bit-shift-left :bit-shift-right :unsigned-bit-shift-right
@@ -622,12 +606,9 @@
           ;; drop-count == 0: forward fall-through with exact stack shape.
           ;; Runtime SP at target = cur-junk + target-params.
           :else
-          (let [arg-ip (emit-placeholder! l nid :branch)]
+          (do
             (record-block-junk! l target cur-junk)
-            (add-patch! l {:src-ip (dec arg-ip)
-                           :target-block target
-                           :offset-slot 1
-                           :negate? false}))))
+            (emit-jump! l nid target))))
 
       :branch-if
       (let [ct aux
@@ -654,21 +635,7 @@
                        :offset-slot 1
                        :negate? false})
         (bump-stack-sp! l -1)  ; cond popped
-        ;; If true-target is the next block in EMISSION order (RPO, not
-        ;; id order), fall through; otherwise jump explicitly.
-        (let [my-block (ir/block-of nid f)
-              next-block-id (get (:next-of @l) my-block -1)]
-          (when (not= tt-target next-block-id)
-            (let [arg-ip2 (emit-placeholder! l nid :branch)]
-              (add-patch! l {:src-ip (dec arg-ip2)
-                             :target-block tt-target
-                             :offset-slot 1
-                             :negate? false})))))
-
-      :load-closed
-      (do (emit-with-arg! l nid :load-closed (int aux))
-          (bump-stack-sp! l 1)
-          (bump-max-stack! l))
+        (emit-jump! l nid tt-target))
 
       :make-closure
       (emit! l nid :make-closure)  ; 1 in, 1 out — no SP change
@@ -677,7 +644,7 @@
       (do (emit! l nid :push-closed)
           (bump-stack-sp! l -1))  ; 2 in, 1 out
 
-      (throw (str "ir/lower: unsupported op for lowering: " op)))))
+      (throw (ex-info (str "ir/lower: unsupported op for lowering: " op) {:fn :lower :type (type op) :value op})))))
 
 ;; --- block-level emission --------------------------------------------
 
@@ -701,10 +668,7 @@
    twice (in-place branch arg + cond operand)."
   (let [pos (value-pos-of l nid)]
     (if pos
-      (let [nth-arg (- (dec (stack-sp l)) pos)]
-        (ir/chunk-emit-dup-nth (chunk-of l) (stack-sp l) nth-arg)
-        (bump-stack-sp! l 1)
-        (bump-max-stack! l))
+      (duplicate-slot! l pos)
       (materialize! l nid))))
 
 (defn- materialize-refs-forced! [l refs]
@@ -996,7 +960,7 @@
    success; throws on cross-block direct-Refs uses (only branch-arg
    uses may cross blocks)."
   (when (nil? f)
-    (throw "ir/lower: nil function"))
+    (throw (ex-info "ir/lower: nil function" {:fn :lower :type (type f) :value f})))
   (let [l (new-lowerer f)]
     (check-cross-block! f (:uses @l))
     (let [order   (rpo-block-order f)

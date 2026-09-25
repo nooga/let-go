@@ -1,0 +1,87 @@
+(ns test.quality-metrics-test
+  (:require
+   [quality.forms :as f]
+   [quality.metrics :as m]
+   [test :refer :all]))
+
+(def src (slurp "fixtures/quality/metrics_fixture.lg"))
+(def defs (f/definitions src))
+(defn- cc-of [n] (m/complexity (:form (first (filter #(= n (:name %)) defs)))))
+
+(deftest complexity-counts-branch-points
+  (is (= 1 (cc-of 'linear)))
+  (is (= 8 (cc-of 'branchy)))
+  (is (= 4 (cc-of 'loopy))))
+
+(deftest halstead-counts-operators-and-operands
+  (let [h (m/halstead [(read-string "(+ a (+ b c))")])]
+    ;; operators: + + (N=2, distinct 1); operands: a b c (N=3, distinct 3)
+    (is (= 5 (:N h)))
+    (is (= 4 (:eta h)))
+    (is (< 9.99 (:volume h) 10.01))))   ; 5 * log2(4) = 10
+
+(deftest complexity-counts-threading-and-condp
+  ;; cond-> steps are (test expr) pairs; each pair counts. Here 2 pairs
+  ;; => 1 (base) + 2 = 3.
+  (is (= 3 (m/complexity (read-string "(cond-> x (pos? x) inc (even? x) dec)"))))
+  ;; some-> has no test per step; every form after the initial value is its
+  ;; own step. Here 2 steps => 1 (base) + 2 = 3.
+  (is (= 3 (m/complexity (read-string "(some-> x inc inc)"))))
+  ;; condp = x has clauses (1 :a) (2 :b) plus a trailing unpaired default
+  ;; :c => 3 total branches, 2 beyond the first => 1 (base) + 2 = 3.
+  (is (= 3 (m/complexity (read-string "(condp = x 1 :a 2 :b :c)")))))
+
+(deftest file-metrics-shape-and-mi-is-raw-unclamped
+  (let [fm (m/file-metrics src)]
+    (is (= 8 (:cc-max fm)))
+    (is (= 13 (:cc-total fm)))
+    (is (= 3 (count (:definitions fm))))
+    ;; Hand computation for this fixture (see task-2-report.md for the full
+    ;; derivation): across the 3 defn forms, N=65 total ops+operands
+    ;; (24 operator occurrences over 19 distinct, 41 operand occurrences over
+    ;; 22 distinct), eta=41, volume = 65*log2(41) = 348.2408.
+    ;; LOC=14, comment=3 (no docstrings), CR=3/14=0.214286, CC-total=13.
+    ;; MI = 171 - 5.2*ln(348.2408) - 0.23*13 - 16.2*ln(14) + 50*sin(sqrt(2.4*0.214286))
+    ;;    = 171 - 30.4350 - 2.99 - 42.7527 + 32.8615 = 127.68 (raw, UNCLAMPED --
+    ;; file-metrics reports the raw SEI value; Task 6's score layer clamps
+    ;; when normalizing).
+    (is (< 127.67 (:mi fm) 127.69))))
+
+(deftest file-metrics-large-file-mi-lands-in-range
+  ;; Second fixture: 30 defns, uniform (defn fN [x] (if (pos? x) (inc x)
+  ;; (dec x))) body, no comments; f1 additionally carries a one-line
+  ;; docstring so :comment-ratio has a nonzero, hand-checkable value. See
+  ;; task-2-report.md for the full derivation.
+  (let [src2 (slurp "fixtures/quality/metrics_fixture_large.lg")
+        fm (m/file-metrics src2)]
+    (is (= 30 (count (:definitions fm))))
+    (is (= 2 (:cc-max fm)))
+    (is (= 60 (:cc-total fm)))
+    (is (= 33 (:loc fm)))
+    ;; comment count = the docstring's 1 line (0 embedded newlines + 1);
+    ;; no `;;` comment lines in this fixture. CR = 1/33.
+    (is (< (- (/ 1.0 33) 0.0001) (:comment-ratio fm) (+ (/ 1.0 33) 0.0001)))
+    ;; MI = 171 - 5.2*ln(1568.045) - 0.23*60 - 16.2*ln(33) + 50*sin(sqrt(2.4*(1/33)))
+    ;;    = 171 - 38.2593 - 13.8 - 56.6434 + 13.3211 = 75.62 (raw)
+    (is (< 75.608 (:mi fm) 75.628))
+    ;; The point of this fixture: unlike metrics_fixture.lg (raw MI > 100),
+    ;; this one lands strictly inside the conventional [0,100] band.
+    (is (< 0 (:mi fm) 100))))
+
+(deftest sloc-per-definition-excludes-blank-and-comment-lines
+  ;; `spread` spans 8 lines but only 4 carry tokens: two blank lines and two
+  ;; comment lines inside the definition do not count.
+  (let [m (m/file-metrics (slurp "fixtures/quality/sloc_fixture.lg"))
+        by-name (into {} (map (fn [d] [(:name d) d]) (:definitions m)))
+        spread (get by-name 'spread)
+        tight (get by-name 'tight)]
+    (is (= 8 (- (:end spread) (:line spread) -1)))   ; line SPAN
+    (is (= 4 (:sloc spread)))                        ; SLOC
+    (is (= 3 (- (:end tight) (:line tight) -1)))
+    (is (= 3 (:sloc tight)))))
+
+(deftest every-definition-carries-sloc
+  (let [m (m/file-metrics (slurp "fixtures/quality/metrics_fixture.lg"))]
+    (is (every? (fn [d] (and (:sloc d) (pos? (:sloc d)))) (:definitions m)))
+    ;; SLOC can never exceed the definition's line span
+    (is (every? (fn [d] (<= (:sloc d) (- (:end d) (:line d) -1))) (:definitions m)))))

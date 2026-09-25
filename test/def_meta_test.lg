@@ -1,0 +1,19 @@
+(ns test.def-meta-test
+  (:require
+   [test :refer :all]))
+
+(def plain 1)
+(defn fun [] 1)
+
+(deftest def-attaches-ns-and-name
+  (is (= 'plain (:name (meta (var plain)))))
+  (is (= 'fun (:name (meta (var fun)))))
+  (is (= (find-ns 'test.def-meta-test) (:ns (meta (var plain)))))
+  (is (= 'test.def-meta-test (ns-name (:ns (meta (var fun))))))
+  (is (string? (:file (meta (var plain)))))
+  (is (= 5 (:line (meta (var plain))))))
+
+(deftest group-by-ns-works
+  (is (= [(var plain) (var fun)]
+         (get (group-by (comp :ns meta) [(var plain) (var fun)])
+              (find-ns 'test.def-meta-test)))))

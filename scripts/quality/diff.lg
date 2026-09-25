@@ -1,0 +1,279 @@
+;; Copyright (c) 2026 Norman Nunley, Jr <nnunley@gmail.com>
+(ns quality.diff
+  "Git diff paths and hunk coordinates. Paths come from NUL-delimited
+   --name-status, never from shell words or line-delimited output."
+  (:require
+   [clojure.string :as str]))
+
+(defn- nul-fields [text]
+  (loop [chars (seq text) field [] fields []]
+    (if (empty? chars)
+      (if (empty? field)
+        fields
+        (throw (ex-info "truncated NUL-delimited Git status" {:field (apply str field)})))
+      (let [c (first chars)]
+        (if (= c \u0000)
+          (recur (rest chars) [] (conj fields (apply str field)))
+          (recur (rest chars) (conj field c) fields))))))
+
+(defn parse-name-status-z
+  "Git `diff --name-status -z` -> ordered path records. Status is one of
+   :modified, :added, :deleted, :type-changed, :renamed. A missing side is nil;
+   a type change retains both path names for path-only reporting."
+  [text]
+  (let [fields (nul-fields text)]
+    (loop [i 0 out []]
+      (if (= i (count fields))
+        out
+        (let [status (nth fields i)
+              rename? (boolean (re-matches #"R[0-9]+" status))
+              kind (cond
+                     (= status "M") :modified
+                     (= status "A") :added
+                     (= status "D") :deleted
+                     (= status "T") :type-changed
+                     rename? :renamed
+                     :else (throw (ex-info "unknown Git diff status" {:status status})))
+              needed (if rename? 3 2)]
+          (when (> (+ i needed) (count fields))
+            (throw (ex-info "truncated Git diff status record" {:status status})))
+          (let [a (nth fields (inc i))
+                b (when rename? (nth fields (+ i 2)))]
+            (when (or (= "" a) (and rename? (= "" b)))
+              (throw (ex-info "empty Git diff path" {:status status})))
+            (recur (+ i needed)
+                   (conj out {:status kind
+                              :old-path (if (= kind :added) nil a)
+                              :new-path (if (= kind :deleted) nil (if rename? b a))}))))))))
+
+(defn- utf8-bytes [s]
+  (vec (map #(bit-and % 255) (.getBytes s "UTF-8"))))
+
+(defn- git-header-token
+  "Read one Git diff header path as bytes, including C-quoted octal escapes.
+   Header text is used only to prove section order; NUL status owns paths."
+  [s start]
+  (let [quoted? (= \" (nth s start nil))
+        begin (if quoted? (inc start) start)]
+    (loop [i begin bytes []]
+      (if (>= i (count s))
+        (if quoted?
+          (throw (ex-info "truncated Git diff header path" {:header s}))
+          [bytes i])
+        (let [c (nth s i)]
+          (cond
+            (and quoted? (= c \")) [bytes (inc i)]
+            (and (not quoted?) (= c \space)) [bytes i]
+            (not= c \\) (recur (inc i) (into bytes (utf8-bytes (str c))))
+            (not quoted?) (throw (ex-info "unexpected escape in Git diff header" {:header s}))
+            :else
+            (let [escaped (nth s (inc i) nil)
+                  special {\\ 92 \" 34 \a 7 \t 9 \n 10 \r 13 \b 8 \f 12 \v 11}]
+              (cond
+                (nil? escaped) (throw (ex-info "truncated Git diff header escape" {:header s}))
+                (contains? special escaped)
+                (recur (+ i 2) (conj bytes (get special escaped)))
+                (and (<= (+ i 4) (count s))
+                     (re-matches #"[0-7]{3}" (subs s (inc i) (+ i 4))))
+                (let [digits (subs s (inc i) (+ i 4))
+                      value (+ (* 64 (read-string (subs digits 0 1)))
+                               (* 8 (read-string (subs digits 1 2)))
+                               (read-string (subs digits 2 3)))]
+                  (recur (+ i 4) (conj bytes value)))
+                :else (throw (ex-info "unsupported Git diff header escape" {:header s :offset i}))))))))))
+
+(defn- header-paths [header path]
+  (let [prefix "diff --git "
+        s (subs header (count prefix))
+        old (str "a/" (or (:old-path path) (:new-path path)))
+        new (str "b/" (or (:new-path path) (:old-path path)))
+        old-end (if (= \" (nth s 0 nil))
+                  (let [[bytes end] (git-header-token s 0)]
+                    (when (not= bytes (utf8-bytes old))
+                      (throw (ex-info "Git patch section order/path differs from name-status"
+                                      {:status path :header header})))
+                    end)
+                  (do
+                    ;; Git may leave a pathname containing spaces UNQUOTED.
+                    ;; Its exact NUL-status path, not the first space, fixes
+                    ;; the boundary between the a/ and b/ header paths.
+                    (when-not (str/starts-with? s (str old " "))
+                      (throw (ex-info "Git patch section order/path differs from name-status"
+                                      {:status path :header header})))
+                    (count old)))]
+    (when (not= \space (nth s old-end nil))
+      (throw (ex-info "malformed Git diff header" {:header header})))
+    (let [new-start (inc old-end)]
+      (if (= \" (nth s new-start nil))
+        (let [[bytes end] (git-header-token s new-start)]
+          (when (or (not= end (count s)) (not= bytes (utf8-bytes new)))
+            (throw (ex-info "Git patch section order/path differs from name-status"
+                            {:status path :header header}))))
+        (when (not= new (subs s new-start))
+          (throw (ex-info "Git patch section order/path differs from name-status"
+                          {:status path :header header})))))))
+
+(defn- hunk-coordinates [line]
+  (when (str/starts-with? line "@@ ")
+    (let [[_ old old-count new new-count]
+          (re-matches #"^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@.*$" line)]
+      (when-not old
+        (throw (ex-info "malformed Git diff hunk" {:line line})))
+      [{:start (Integer/parseInt old) :count (if old-count (Integer/parseInt old-count) 1)}
+       {:start (Integer/parseInt new) :count (if new-count (Integer/parseInt new-count) 1)}])))
+
+(defn parse-patch-hunks
+  "Attach ordered :old-spans/:new-spans to NUL-status records. Each span is
+   {:start 1-based-line-or-anchor :count n}; count 0 is an insertion/deletion
+   anchor, not a touched line. Every patch section must match its status path
+   in order, including paths Git C-quotes for tabs, newlines, or UTF-8 bytes."
+  [patch paths]
+  (let [sections (loop [lines (str/split patch #"\n") current nil out []]
+                   (if (empty? lines)
+                     (if current (conj out current) out)
+                     (let [line (first lines)]
+                       (cond
+                         (str/starts-with? line "diff --git ")
+                         (recur (rest lines) {:header line :hunks []}
+                                (if current (conj out current) out))
+                         (and current (str/starts-with? line "@@ "))
+                         (recur (rest lines)
+                                (update current :hunks conj (hunk-coordinates line)) out)
+                         (and current
+                              (re-matches #"^[+-]Subproject commit [0-9a-fA-F]{40,64}(?:-dirty)?$" line))
+                         (recur (rest lines)
+                                (assoc current (if (str/starts-with? line "-")
+                                                 :gitlink-old? :gitlink-new?) true)
+                                out)
+                         (and current (or (str/starts-with? line "Binary files ")
+                                          (= line "GIT binary patch")))
+                         (recur (rest lines) (assoc current :binary? true) out)
+                         (and current
+                              (or (re-matches #"^(?:new file mode|deleted file mode|old mode|new mode) 100(?:644|755)$" line)
+                                  (re-matches #"^index [0-9a-fA-F]+\.\.[0-9a-fA-F]+ 100(?:644|755)$" line)))
+                         (recur (rest lines)
+                                (cond-> (assoc current :blob? true)
+                                  (str/starts-with? line "deleted file mode ") (assoc :deleted-file? true)
+                                  (str/starts-with? line "new file mode ") (assoc :new-file? true))
+                                out)
+                         (and current
+                              (or (re-matches #"^(?:new file mode|deleted file mode|old mode|new mode) 160000$" line)
+                                  (re-matches #"^index [0-9a-fA-F]+\.\.[0-9a-fA-F]+ 160000$" line)))
+                         (recur (rest lines)
+                                (cond-> (assoc current :gitlink? true)
+                                  (str/starts-with? line "deleted file mode ") (assoc :deleted-file? true)
+                                  (str/starts-with? line "new file mode ") (assoc :new-file? true))
+                                out)
+                         (and current
+                              (or (re-matches #"^(?:new file mode|deleted file mode|old mode|new mode) 120000$" line)
+                                  (re-matches #"^index [0-9a-fA-F]+\.\.[0-9a-fA-F]+ 120000$" line)))
+                         (recur (rest lines)
+                                (cond-> (assoc current :symlink? true)
+                                  (str/starts-with? line "deleted file mode ") (assoc :deleted-file? true)
+                                  (str/starts-with? line "new file mode ") (assoc :new-file? true))
+                                out)
+                         (and current (str/starts-with? line "deleted file mode "))
+                         (recur (rest lines) (assoc current :deleted-file? true) out)
+                         (and current (str/starts-with? line "new file mode "))
+                         (recur (rest lines) (assoc current :new-file? true) out)
+                         :else (recur (rest lines) current out)))))]
+    (loop [remaining sections statuses paths out []]
+      (if (empty? statuses)
+        (if (empty? remaining)
+          out
+          (throw (ex-info "Git patch section count differs from name-status"
+                          {:sections (count sections) :statuses (count paths)})))
+        (let [path (first statuses)
+              section (first remaining)
+              next-section (second remaining)]
+          (when-not section
+            (throw (ex-info "Git patch section count differs from name-status"
+                            {:sections (count sections) :statuses (count paths)})))
+          (header-paths (:header section) path)
+          ;; Git reports a file/symlink transition as one T status, but its
+          ;; patch has separate deletion and addition sections for that path.
+          (let [type-pair? (and (= :type-changed (:status path))
+                                (:deleted-file? section)
+                                (:new-file? next-section)
+                                (= (:header section) (:header next-section)))
+                _ (when type-pair? (header-paths (:header next-section) path))
+                row (assoc path
+                           :old-spans (if (= :type-changed (:status path)) []
+                                          (vec (map first (:hunks section))))
+                           :new-spans (if (= :type-changed (:status path)) []
+                                          (vec (map second (:hunks section)))))
+                row (cond-> row
+                      (:binary? section) (assoc :binary? true)
+                      (or (:gitlink? section)
+                          (and (not (:blob? section))
+                               (:gitlink-old? section) (:gitlink-new? section)))
+                      (assoc :gitlink? true)
+                      (:symlink? section) (assoc :symlink? true))]
+            (recur (drop (if type-pair? 2 1) remaining)
+                   (rest statuses)
+                   (conj out row))))))))
+
+(defn- git-output [root args]
+  (let [command (concat ["git"] (if root ["-C" root] []) args)
+        result (apply os/sh command)]
+    (if (zero? (:exit result))
+      (:out result)
+      (throw (ex-info "Git diff command failed"
+                      {:args (vec args) :exit (:exit result) :stderr (:err result)})))))
+
+(defn- resolve-commit [root rev]
+  (when (or (not (string? rev)) (= "" rev) (str/starts-with? rev "-"))
+    (throw (ex-info "invalid Git revision" {:reason :invalid-Git-revision :rev rev})))
+  (let [sha (str/trim (git-output root ["rev-parse" "--verify" "--end-of-options"
+                                        (str rev "^{commit}")]))]
+    (when-not (re-matches #"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})" sha)
+      (throw (ex-info "Git revision did not resolve to a full commit ID"
+                      {:rev rev :output sha})))
+    sha))
+
+(defn- revision-text [root rev path]
+  (git-output root ["show" (str rev ":" path)]))
+
+(defn- working-text [root path]
+  (let [git-root (or root (str/trim (git-output nil ["rev-parse" "--show-toplevel"])))]
+    (slurp (str git-root "/" path))))
+
+(defn- load-change-text [root base-sha head-sha row]
+  (let [status (:status row)
+        text? (and (not= :type-changed status)
+                   (not (:binary? row))
+                   (not (:gitlink? row))
+                   (not (:symlink? row))
+                   (or (= :added status)
+                       (= :deleted status)
+                       (seq (:old-spans row))
+                       (seq (:new-spans row))))]
+    (if-not text?
+      row
+      (cond-> row
+        (:old-path row)
+        (assoc :old-text (revision-text root base-sha (:old-path row)))
+        (:new-path row)
+        (assoc :new-text (if head-sha
+                           (revision-text root head-sha (:new-path row))
+                           (working-text root (:new-path row))))))))
+
+(defn git-changes
+  "Get ordered path/hunk records for base vs explicit commit head, or base vs
+   the working tree when head is nil. An optional root supports plain-Git
+   fixtures; no jj command or fixed workspace layout is involved. Both diff
+   invocations use identical pinned endpoints, a/b prefixes, C-quoted paths,
+   and no textconv/ext diff, independent of repository Git configuration."
+  ([base head] (git-changes base head nil))
+  ([base head root]
+   (let [base-sha (resolve-commit root base)
+         head-sha (when head (resolve-commit root head))
+         common ["-c" "core.quotePath=true" "diff"
+                 "--no-ext-diff" "--no-textconv" "--no-color"
+                 "--find-renames" "--unified=0"
+                 "--src-prefix=a/" "--dst-prefix=b/"]
+         ends (if head-sha [base-sha head-sha "--"] [base-sha "--"])
+         status (git-output root (concat common ["--name-status" "-z"] ends))
+         patch (git-output root (concat common ends))]
+     (vec (map #(load-change-text root base-sha head-sha %)
+               (parse-patch-hunks patch (parse-name-status-z status)))))))

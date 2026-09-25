@@ -1,0 +1,86 @@
+(ns test.assertions-test
+  (:require
+   [test :refer :all]))
+
+(defn- events-of [f]
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj m))]
+      (f))
+    @events))
+
+(defn- one-event [f] (let [evs (events-of f)] (assert (= 1 (count evs))) (first evs)))
+
+(deftest predicate-pass-and-fail
+  (let [e (one-event #(is (= 4 (+ 2 2))))]
+    (is (= :pass (:type e)))
+    (is (= '(= 4 (+ 2 2)) (:expected e)))
+    (is (= '(= 4 4) (:actual e))))
+  (let [e (one-event #(is (= 10 (+ 5 4)) "m"))]
+    (is (= :fail (:type e)))
+    (is (= "m" (:message e)))
+    (is (= '(not (= 10 9)) (:actual e)))
+    (is (integer? (:line e)))
+    (is (string? (:file e)))))
+
+(deftest is-returns-the-value
+  (binding [report (fn [_])]
+    (is (= true (is (= 1 1))))
+    (is (= false (is (= 1 2))))
+    (is (= 3 (is 3)))))
+
+(deftest scalar-and-non-function-forms-use-assert-any
+  (binding [report (fn [_])]
+    (is (= true (is true)))
+    (is (= :ok (is :ok)))
+    (is (= [1 2] (is [1 2])))
+    (let [x 1] (is (= 1 (is x)))))
+  (let [e (one-event #(is false))]
+    (is (= :fail (:type e)))
+    (is (= false (:actual e))))
+  (let [e (one-event #(is nil))]
+    (is (= :fail (:type e)))
+    (is (= nil (:expected e)))))
+
+(deftest macro-head-uses-assert-any
+  (let [e (one-event #(is (when true 5)))]
+    (is (= :pass (:type e)))
+    (is (= 5 (:actual e))))
+  (is (false? (boolean (function? 'when))))
+  (is (function? 'inc)))
+
+(deftest is-pins-position-to-its-own-line-not-the-deftest-line
+  ;; Two `is` forms below sit on different source lines inside the SAME
+  ;; deftest. If the position fell back to *testing-vars* (the deftest's
+  ;; own line) or to whatever line happened to be active first, both
+  ;; events would report the identical line instead of their own.
+  (let [line-a (:line (one-event #(is false)))
+
+        line-b (:line (one-event #(is false)))]
+    (is (= 2 (- line-b line-a)))))
+
+(deftest thrown-forms
+  (let [e (one-event #(is (thrown? ExceptionInfo (throw (ex-info "x" {})))))]
+    (is (= :pass (:type e)))
+    (is (= "x" (ex-message (:actual e)))))
+  (let [e (one-event #(is (thrown? Exception 1)))]
+    (is (= :fail (:type e)))
+    (is (nil? (:actual e))))
+  (let [e (one-event #(is (thrown-with-msg? ExceptionInfo #"oo" (throw (ex-info "boom" {})))))]
+    (is (= :pass (:type e))))
+  (let [e (one-event #(is (thrown-with-msg? ExceptionInfo #"zz" (throw (ex-info "boom" {})))))]
+    (is (= :fail (:type e))))
+  (let [e (one-event #(is (thrown-with-msg? Throwable #"s" (throw "s"))))]
+    (is (= :pass (:type e)))))
+
+(deftest throw-inside-is-becomes-error
+  (let [e (one-event #(is (throw (ex-info "x" {}))))]
+    (is (= :error (:type e)))
+    (is (= '(throw (ex-info "x" {})) (:expected e)))
+    (is (= "x" (ex-message (:actual e)))))
+  (let [e (one-event #(is (thrown? ExceptionInfo (throw "not-an-exception"))))]
+    (is (= :error (:type e)))))
+
+(deftest instance-form
+  (let [e (one-event #(is (instance? String "s")))]
+    (is (= :pass (:type e)))
+    (is (= String (:actual e)))))

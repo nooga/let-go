@@ -1,0 +1,12 @@
+{
+  "note": "#796 regression: the documented (when-not *compiling-aot* (-main)) guard must not run the entry a second time during main-chunk replay. A double run prints 42 twice and fails the byte-exact .expect.",
+  "namespace": "guardedentry",
+  "generatedFile": "guardedentry/guardedentry.go",
+  "entryFn": "Main",
+  "lispFn": "bump",
+  "goFn": "Bump",
+  "lowering": "direct",
+  "functionFragment": "func Bump(ec *vm.ExecContext, arg0 int64) int64 {\n\tvar v2 int64\n\tv2 = arg0 + 41\n\treturn v2\n}",
+  "callFragment": "Bump(ec, 1)",
+  "semanticWrap": "(__EXPR__) + 1"
+}

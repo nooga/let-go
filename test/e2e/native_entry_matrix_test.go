@@ -26,6 +26,7 @@ type nativeEntryCase struct {
 	// compileArgs: extra files after out-dir/prefix, as paths relative to fixture root.
 	// Defaults to sorted keys of files when nil.
 	compileArgs []string
+	entryName   string // defaults to -main
 
 	genFail        bool
 	genErrSubstr   string
@@ -47,6 +48,23 @@ func TestNativeEntryMatrix(t *testing.T) {
 
 	cases := []nativeEntryCase{
 		{
+			name: "shared closure native guard and redefinition",
+			files: map[string]string{
+				"app.lg": `(ns app)
+(defn store-thunk [a x]
+  (let [ca8_1 (identity x)] (reset! a (fn [] (fn [] ca8_1)))))
+(defn replacement-reset [a thunk] (+ 100 ((thunk))))
+(defn -main []
+  (let [a (atom nil)]
+    (store-thunk a 42)
+    (println ((@a)))
+    (with-redefs [clojure.core/reset! replacement-reset]
+      (println (store-thunk a 7)))
+    (println ((@a)))))`,
+			},
+			wantStdout: "42\n107\n42",
+		},
+		{
 			name: "public -main []",
 			files: map[string]string{
 				"app.lg": "(ns app)\n(defn -main [] (println \"PUB\"))\n",
@@ -62,7 +80,8 @@ func TestNativeEntryMatrix(t *testing.T) {
 			mainContains: []string{"prog.NativeMain("},
 		},
 		{
-			name: "public main []",
+			name:      "public main []",
+			entryName: "main",
 			files: map[string]string{
 				"app.lg": "(ns app)\n(defn main [] (println \"MAIN\"))\n",
 			},
@@ -294,7 +313,12 @@ func TestNativeEntryMatrix(t *testing.T) {
 
 			// Compile program.lgb from the same sources.
 			lgb := filepath.Join(outDir, "program.lgb")
-			lgcArgs := []string{"-c", lgb}
+			entryName := tc.entryName
+			if entryName == "" {
+				entryName = "-main"
+			}
+			entryNS := strings.TrimSuffix(filepath.Base(compFiles[0]), ".lg")
+			lgcArgs := []string{"-c", lgb, "-entry-frame-entry", entryNS + "/" + entryName}
 			for _, rel := range compFiles {
 				lgcArgs = append(lgcArgs, filepath.Join(fix, rel))
 			}
@@ -367,7 +391,7 @@ func TestNativeEntryMatrix(t *testing.T) {
 			t.Fatalf("compile: %v\n%s", err, out)
 		}
 		lgb := filepath.Join(outDir, "program.lgb")
-		if out, err := runCmd(ctx, t, bin, root, []string{"-c", lgb, src}); err != nil {
+		if out, err := runCmd(ctx, t, bin, root, []string{"-c", lgb, "-entry-frame-entry", "fib/-main", src}); err != nil {
 			t.Fatalf("lg -c: %v\n%s", err, out)
 		}
 		mod := "module tmpmod\n\ngo 1.23\n\nrequire github.com/nooga/let-go v0.0.0\nreplace github.com/nooga/let-go => " + root + "\n"

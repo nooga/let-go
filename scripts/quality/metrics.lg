@@ -1,0 +1,114 @@
+(ns quality.metrics
+  "Cyclomatic complexity per definition and the SEI maintainability index per
+   file, over reader forms. Pure."
+  (:require
+   [quality.forms :as f]
+   [quality.lex :as lex]))
+
+;; NB: a top-level `'#{...}` quotes the whole `(hash-set ...)` expansion
+;; produced by the `#{}` reader macro rather than yielding a set value (it
+;; reads back as a PersistentList), so callable symbol sets here are built
+;; with each element individually quoted instead.
+(def ^:private simple-branches
+  #{'if 'if-let 'if-some 'if-not 'when 'when-let 'when-some 'when-not 'loop})
+
+(def ^:private cond-heads #{'cond 'case 'condp})
+(def ^:private bool-heads #{'and 'or})
+;; cond->/cond->> steps come in (test expr) pairs after the initial value;
+;; every pair is a step. some->/some->> have no test, so every form after
+;; the initial value is its own step.
+(def ^:private pair-threading-heads #{'cond-> 'cond->>})
+(def ^:private single-threading-heads #{'some-> 'some->>})
+
+(defn- pair-branches
+  "Number of decision branches in a sequence of case/condp test/result args:
+   full test-result pairs, plus one more if a trailing unpaired default is
+   present."
+  [items]
+  (let [n (count items)
+        pairs (quot n 2)]
+    (+ pairs (if (odd? n) 1 0))))
+
+(defn- clause-count
+  "Number of clauses beyond the first for cond/case/condp bodies."
+  [head form]
+  (case head
+    cond (max 0 (dec (quot (count (rest form)) 2)))
+    case (max 0 (dec (pair-branches (nnext form))))
+    condp (max 0 (dec (pair-branches (nnext (rest form)))))
+    0))
+
+(defn complexity [form]
+  (letfn [(walk [x]
+            (if (and (seq? x) (symbol? (first x)))
+              (let [h (first x)
+                    here (cond
+                           (simple-branches h) 1
+                           (cond-heads h) (clause-count h x)
+                           (bool-heads h) (max 0 (- (count (rest x)) 1))
+                           (pair-threading-heads h) (quot (count (nnext x)) 2)
+                           (single-threading-heads h) (count (nnext x))
+                           (= 'catch h) 1
+                           :else 0)]
+                (+ here (reduce + 0 (map walk (rest x)))))
+              (if (coll? x) (reduce + 0 (map walk (seq x))) 0)))]
+    (+ 1 (walk form))))
+
+(defn halstead [forms]
+  (letfn [(tally [x ops opnds]
+            (cond
+              (seq? x) (let [[ops opnds] (if (symbol? (first x))
+                                           [(conj ops (first x)) opnds]
+                                           (tally (first x) ops opnds))]
+                         (reduce (fn [[o d] y] (tally y o d)) [ops opnds] (rest x)))
+              (coll? x) (reduce (fn [[o d] y] (tally y o d)) [ops opnds] (seq x))
+              :else [ops (conj opnds x)]))]
+    (let [[ops opnds] (reduce (fn [[o d] form] (tally form o d)) [[] []] forms)
+          N (+ (count ops) (count opnds))
+          eta (+ (count (set ops)) (count (set opnds)))
+          log2 (fn [v] (/ (math/log v) (math/log 2)))]
+      {:N N :eta eta :volume (if (pos? eta) (* N (log2 eta)) 0)})))
+
+(defn definition-sloc
+  "Source lines of a definition: the lines in `[line, end]` that carry at
+   least one token. Blank lines and comment-only lines inside the definition
+   do not count, so this is SLOC and not the line span `(inc (- end line))`.
+   `token-lines` is the set of token-bearing line numbers for the file."
+  [token-lines {:keys [line end]}]
+  (count (filter token-lines (range line (inc end)))))
+
+(defn file-metrics [text]
+  (let [token-lines (set (map :line (lex/tokens text :lg)))
+        defs (mapv #(assoc % :cc (complexity (:form %))
+                           :sloc (definition-sloc token-lines %))
+                   (f/definitions text))
+        base-cnt (f/counts text)
+        doc-lines (reduce (fn [n d]
+                            (let [form (:form d)]
+                              (if (and (> (count form) 2) (string? (nth form 2)))
+                                (+ n 1 (count (filter #(= % \newline) (nth form 2))))
+                                n)))
+                    0 defs)
+        cnt (update base-cnt :comment + doc-lines)
+        forms (keep :form defs)
+        h (halstead forms)
+        loc (max 1 (:loc cnt))
+        cr (/ (:comment cnt) (double loc))
+        cc-total (reduce + 0 (map :cc defs))
+        ln (fn [v] (if (pos? v) (math/log v) 0))
+        ;; The SEI maintainability-index coefficients (171, -5.2, -0.23,
+        ;; -16.2, 50, 2.4) are constants OF THE FORMULA, not tunable
+        ;; thresholds -- changing one would no longer be an MI. Project
+        ;; thresholds all live in `quality.score/thresholds`.
+        mi (+ 171 (* -5.2 (ln (:volume h))) (* -0.23 cc-total) (* -16.2 (ln loc))
+              (* 50 (math/sin (math/sqrt (* 2.4 cr)))))]
+    {:definitions (mapv #(dissoc % :form) defs)
+     :cc-max (reduce max 0 (map :cc defs))
+     :cc-total cc-total
+     :mi mi
+     :loc (:loc cnt)
+     ;; comment lines, docstring lines included: the denominator of
+     ;; `quality.terms/comment-debt`
+     :comment (:comment cnt)
+     :comment-ratio cr
+     :halstead h}))

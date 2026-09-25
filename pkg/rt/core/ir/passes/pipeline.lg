@@ -410,7 +410,7 @@
 ;; of functions a namespace contributes to lowering is NOT "the literal `defn`
 ;; forms" — it is every `(def NAME (fn ...))` that macroexpansion reveals,
 ;; including macro-generated ones (e.g. `deftest` -> `(do (def t (fn [] ...))
-;; (register-test! ...))`). This is the single source of truth for "what
+;; (alter-meta! (var t) assoc :test (fn [] ...)))`). This is the single source of truth for "what
 ;; lowering operates on", shared by the stress harness today and (eventually)
 ;; production form-selection — so coverage measurement never drifts from what
 ;; the pipeline actually lowers. Requires the file's macros to be loaded first.
@@ -796,7 +796,7 @@
             defn-form (apply list 'defn (symbol def-name) args-vec (rest tail))
             chunk     (compile-form defn-form the-ns)]
         (chunk->fn arity variadic? chunk))
-      (throw "compile-def-fn-value: multi-arity fn form unsupported"))))
+      (throw (ex-info "compile-def-fn-value: multi-arity fn form unsupported" {:fn :compile-def-fn-value :type (type args-vec) :value args-vec})))))
 
   ;; --- Go bootstrap generation -------------------------------------------
 
@@ -1318,6 +1318,10 @@
         m))
     {} forms))
 
+(defn- declaration-form? [form]
+  (and (seq? form)
+       (contains? #{'defprotocol 'deftype 'defmulti 'defmethod} (first form))))
+
 (defn lower-ns-to-go-result [pkg-name ns-name forms]
   "Process a namespace's forms through the Go-lowering pipeline and return
    structured metadata alongside the rendered Go source:
@@ -1346,11 +1350,8 @@
   ;; tree, and :bottom-heavy partials that drop forms → undefined: builds).
   ;; The monotone lattice has finite height, so unbounded execution always
   ;; terminates; it's just slower than the interactive/bytecode default.
-  (let [decl-form?  (fn [form]
-                      (and (seq? form)
-                           (contains? #{'defprotocol 'deftype 'defmulti 'defmethod} (first form))))
-        decl-forms  (filterv decl-form? forms)
-        defn-forms0 (filterv (fn [form] (not (decl-form? form))) forms)
+  (let [decl-forms  (filterv declaration-form? forms)
+        defn-forms0 (filterv (complement declaration-form?) forms)
         ;; Capture each declaration form ({:decl-kind … :name … …}).
         captures    (mapv (fn [form] (binding [*target* :go] (compile-form* form))) decl-forms)
         protocols   (filterv (fn [c] (= :defprotocol (:decl-kind c))) captures)
@@ -1667,10 +1668,8 @@
   ;; devirtualizes protocol dispatch (1-value) is recorded as error-producing
   ;; (2-value) — a cross-package disagreement that miscompiles the caller
   ;; (`v, callErr = OneValueFn(...)` against a `(vm.Value)` signature).
-  (let [decl-form?  (fn [form]
-                      (and (seq? form)
-                           (contains? #{'defprotocol 'deftype 'defmulti 'defmethod} (first form))))
-        decl-forms  (filterv decl-form? forms)
+  (let [decl-forms  (filterv declaration-form? forms)
+        defn-forms  (filterv (complement declaration-form?) forms)
         captures    (mapv (fn [form] (binding [*target* :go] (compile-form* form))) decl-forms)
         protocols   (filterv (fn [c] (= :defprotocol (:decl-kind c))) captures)
         deftypes    (filterv (fn [c] (= :deftype (:decl-kind c))) captures)
@@ -1687,7 +1686,7 @@
                                                 (when (seq s) s))]
       (let [cross   (atom {})
             results (binding [lower-go/*cross-ns-vars-used* cross]
-                      (lower-defn-forms (order-defn-forms forms)))
+                      (lower-defn-forms (order-defn-forms defn-forms)))
             exports (reduce
                       (fn [m r]
                         (let [base (when (:decl r)

@@ -92,8 +92,8 @@ emulation via xterm.js: ANSI colors, cursor positioning, raw keyboard input.
 
 ## Compile-time vars
 
-`*compiling-aot*` is `true` during `-c`/`-b`/`-w` compilation and `false` at
-runtime, useful for keeping side effects out of compile time:
+`*compiling-aot*` is `true` during `-c`/`-b`/`-w` compilation and `false` during
+ordinary runtime execution, useful for keeping side effects out of compile time:
 
 ```clojure
 (defn -main []
@@ -102,6 +102,13 @@ runtime, useful for keeping side effects out of compile time:
 (when-not *compiling-aot*
   (-main))
 ```
+
+For an AOT native-entry binary, compile the embedded bytecode with
+`lg -c program.lgb -entry-frame-entry app/-main app.lg` (use `app/main` when
+that is the selected entry). This omits the selected top-level entry call
+from the bytecode because the native frame calls it. Other top-level forms,
+including guarded initialization in required namespaces, run with
+`*compiling-aot*` false at runtime. Ordinary `lg -c` keeps the entry call.
 
 `*in-wasm*` is `true` when running inside a WASM build.
 

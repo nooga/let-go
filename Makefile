@@ -51,12 +51,11 @@ SMOKE-SOURCES := scripts/smoke.lg scripts/smoke-boot.sh
 # idle M3) so it does not flake, while still catching the #663 class.
 SMOKE-BOOT-BUDGET-MS ?= 8
 SMOKE-BOOT-SAMPLES ?= 5
-GOLANGCI-LINT := github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-GOLANGCI-LINT-VERSION ?= v2.12.2
-GOLANGCI-LINT-VERSION-NO-V := $(patsubst v%,%,$(GOLANGCI-LINT-VERSION))
-GOLANGCI-LINT-BIN := $(CURDIR)/.cache/local/bin/golangci-lint
+# golangci-lint is pinned by the `tool` directive in go.mod, exactly as the Go
+# toolchain is pinned by its `toolchain` directive: one version, one file. Both
+# consumers read it from there -- `go tool` below, and the CI action, which
+# finds the version in go.mod on its own (.github/workflows/go.yml).
 GOLANGCI-LINT-CACHE := $(CURDIR)/.cache/local/golangci-lint
-GOLANGCI-LINT-GOENV := GOPATH=$(CURDIR)/.cache/local/go GOBIN=$(CURDIR)/.cache/local/bin GOMODCACHE=$(CURDIR)/.cache/local/go/pkg/mod GOCACHE=$(CURDIR)/.cache/local/cache/go-build
 REPORT-SCRIPT := scripts/clojure_compat_report.sh
 
 # Resource caps for test invocations. GOMEMLIMIT bounds the Go heap
@@ -402,14 +401,9 @@ ifneq (,$(wildcard .cache))
 	$(RM) -r .cache
 endif
 
-lint: install-golangci-lint
-	GOLANGCI_LINT_CACHE=$(GOLANGCI-LINT-CACHE) $(GOLANGCI-LINT-BIN) run
-
-install-golangci-lint: $(GO)
-	@mkdir -p $(dir $(GOLANGCI-LINT-BIN)) $(GOLANGCI-LINT-CACHE)
-	@if ! test -x $(GOLANGCI-LINT-BIN) || ! $(GOLANGCI-LINT-BIN) --version | grep -q 'version $(GOLANGCI-LINT-VERSION-NO-V)'; then \
-	  $(GOLANGCI-LINT-GOENV) $(GO) install $(GOLANGCI-LINT)@$(GOLANGCI-LINT-VERSION); \
-	fi
+lint:
+	@mkdir -p $(GOLANGCI-LINT-CACHE)
+	GOLANGCI_LINT_CACHE=$(GOLANGCI-LINT-CACHE) go tool golangci-lint run
 
 # Register the local git merge drivers for the generated artifacts (see
 # .gitattributes). Merge drivers live in .git/config, which is not shared, so
@@ -567,3 +561,31 @@ ratchets-update: build lowered $(GO)
 .PHONY: browser-inspector
 browser-inspector:
 	$(MAKE) -C examples/browser-inspector build
+
+# Code quality report (docs/superpowers/specs/2026-09-11-code-quality-score-design.md).
+# Every input is pinned in the report header, so two runs at the same commit
+# with the same QUALITY_* values print byte-identical output.
+#   QUALITY_SINCE=YYYY-MM-DD   defect-density window (default: 180 days back)
+#   QUALITY_GO_COVER=file      Go coverprofile for dynamic coverage
+#   QUALITY_CI_SECONDS=n       CI wall time, for the coverage-efficiency term
+#   QUALITY_EDN=path           also write the machine-readable report there
+#   QUALITY_TOP=n              size of the "top complexity" section
+# The Go half of the quality corpus is measured by its own Go tool. Assigned
+# before the target that names it: make expands a rule's prerequisites when it
+# reads the rule, so a later assignment would leave the prerequisite empty.
+GO-CALLABLES = $(BUILD-DIR)/go-callables
+
+.PHONY: quality quality-aot
+quality: build
+# Generated output has its own corpus; rebuild it before measuring the emitter.
+quality-aot: generate
+quality-aot: QUALITY-FLAGS = --generated
+quality quality-aot: $(GO-CALLABLES)
+	QUALITY_GO_CALLABLES=$(GO-CALLABLES) QUALITY_LG=$(LG) \
+	LG_SOURCE_PATHS=scripts $(LG) scripts/quality.lg $(QUALITY-FLAGS) \
+	  --since $${QUALITY_SINCE:-$$(date -v-180d +%Y-%m-%d 2>/dev/null || date -d '180 days ago' +%Y-%m-%d)} \
+	  $${QUALITY_GO_COVER:+--go-cover $$QUALITY_GO_COVER} $${QUALITY_CI_SECONDS:+--ci-seconds $$QUALITY_CI_SECONDS} \
+	  $${QUALITY_EDN:+--edn $$QUALITY_EDN} $${QUALITY_TOP:+--top $$QUALITY_TOP}
+
+$(GO-CALLABLES): $(shell find cmd/go-callables -name '*.go')
+	go build -o $@ ./cmd/go-callables

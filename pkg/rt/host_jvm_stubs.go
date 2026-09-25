@@ -73,9 +73,13 @@ func installJVMStubs(ns *vm.Namespace) {
 	futureTask := loudStub("java.util.concurrent.FutureTask")
 	ns.Def("FutureTask.", futureTask)
 	ns.Def("->FutureTask", futureTask)
+	// Thread. cannot be constructed, but Thread/currentThread is real: it is the
+	// calling scope, with .isInterrupted / .interrupt as scope cancellation
+	// (host_thread.go).
 	thread := loudStub("java.lang.Thread")
 	ns.Def("Thread.", thread)
 	ns.Def("->Thread", thread)
+	installHostThread()
 	for _, nm := range []string{"TimeUnit", "java.util.concurrent.TimeUnit"} {
 		defStaticNS(nm).Def("MILLISECONDS", vm.Symbol("TimeUnit/MILLISECONDS"))
 	}

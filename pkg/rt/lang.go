@@ -337,14 +337,15 @@ func asBytes(v vm.Value) ([]byte, bool) {
 // e.g. "clojure.core" → "core", "clojure.test" → "test", "clojure.string" → "string"
 // Both names resolve to the same *Namespace object.
 var nsAliases = map[string]string{
-	"clojure.core":   "core",
-	"clojure.test":   "test",
-	"clojure.string": "string",
-	"clojure.set":    "set",
-	"clojure.walk":   "walk",
-	"clojure.edn":    "edn",
-	"clojure.zip":    "zip",
-	"clojure.data":   "data",
+	"clojure.core":     "core",
+	"clojure.test":     "test",
+	"clojure.string":   "string",
+	"clojure.set":      "set",
+	"clojure.walk":     "walk",
+	"clojure.edn":      "edn",
+	"clojure.zip":      "zip",
+	"clojure.data":     "data",
+	"clojure.test.tap": "test.tap",
 }
 
 // resolveNSAlias returns the canonical name for a namespace.
@@ -2817,11 +2818,13 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("parse-int expected String")
 		}
-		i, err := strconv.Atoi(string(s))
+		// ParseInt(..., 64), not Atoi: Go's int is 32 bits on TinyGo's wasm
+		// target, where Atoi reported valid 64-bit literals as unparseable.
+		i, err := strconv.ParseInt(string(s), 10, 64)
 		if err != nil {
 			return vm.NIL, nil // Clojure returns nil for unparseable
 		}
-		return vm.MakeInt(i), nil
+		return vm.MakeInt64(i), nil
 	})
 
 	// compareValues delegates to the vm package's DefaultCompare
@@ -3382,18 +3385,47 @@ func installLangNS() {
 		if len(snap) == 0 {
 			return fn, nil
 		}
-		// Re-establish the captured bindings in a fresh context on every
-		// call, so invocations (possibly on different goroutines) stay
-		// isolated from one another and from the global stack. Only the
-		// binding stack is conveyed: the call runs under the *invoking*
-		// execution's structured-concurrency scope, so work spawned inside a
-		// bound fn stays owned (and cancellable) by whoever called it rather
-		// than silently escaping to the root scope.
-		return vm.NewCtxNativeFn("bound-fn", func(callEC *vm.ExecContext, args []vm.Value) (vm.Value, error) {
-			c := vm.NewExecContextFrom(snap)
-			c.SetScope(callEC.Scope())
-			return c.Invoke(fn, args)
-		}), nil
+		wrapped := vm.NewCtxNativeFn("", func(callEc *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+			// Overlay the captured vars on top of whatever's live in the
+			// calling context, rather than replacing the whole dynamic scope
+			// with a context seeded from `snap` alone: a var captured at
+			// creation freezes to its creation-time value for this call, but
+			// a var that was NOT captured (because nothing bound it at
+			// creation time) keeps tracking the caller's current binding.
+			//
+			// This matters because "nothing was bound at creation" is a rare
+			// case in practice — *file* (bound for the whole duration of
+			// loading any file) is essentially always present in `snap`, so
+			// building the call's context from `snap` alone used to freeze
+			// every OTHER dynamic var (e.g. a test's `(binding [*x* 55]
+			// ...)`) to its root value on every bound-fn call, even though
+			// *x* itself was never part of what bound-fn captured.
+			//
+			// callEc.Child() — NOT callEc itself — is what gets the overlay:
+			// callEc may be shared across concurrent callers (pmapv binds one
+			// ec and hands it to every worker goroutine, unlike future*/go*
+			// which each get a private child), so pushing/popping directly on
+			// callEc's binding stack would let one worker's pop remove
+			// another worker's still-live frame (pops are LIFO per var, not
+			// per goroutine). Child() takes an immediate snapshot of
+			// callEc's bindings into a brand-new, private stack, so the push
+			// below can only ever be observed by this one invocation.
+			//
+			// Child() also carries callEc's structured-concurrency scope
+			// forward (it copies src.scope — see ExecContext.Child in
+			// pkg/vm/exec_context.go), so the call runs under the
+			// *invoking* execution's scope rather than escaping to the
+			// root scope: the same property upstream's bound-fn* fix
+			// (scope ownership) needed an explicit SetScope call for.
+			child := callEc.Child()
+			for v, stack := range snap {
+				for _, val := range stack {
+					child.PushBinding(v, val)
+				}
+			}
+			return child.Invoke(fn, args)
+		})
+		return wrapped, nil
 	})
 
 	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3403,11 +3435,35 @@ func installLangNS() {
 		if vs[0] == vm.NIL {
 			return vm.NIL, nil
 		}
-		m, ok := vs[0].(interface{ Meta() vm.Value })
-		if !ok {
-			return vm.NIL, nil
+		var m vm.Value = vm.NIL
+		if mv, ok := vs[0].(interface{ Meta() vm.Value }); ok {
+			m = mv.Meta()
 		}
-		return m.Meta(), nil
+		// Reader-recorded position for list/cons forms (spec 4.2). Explicit
+		// metadata wins on key collision; position only fills gaps.
+		switch vs[0].(type) {
+		case *vm.List, *vm.Cons:
+			if info := vm.FormSource.Get(vs[0]); info != nil {
+				pos := vm.EmptyPersistentMap.
+					Assoc(vm.Keyword("line"), vm.MakeInt(info.Line+1)).(*vm.PersistentMap).
+					Assoc(vm.Keyword("column"), vm.MakeInt(info.Column+1)).(*vm.PersistentMap)
+				if m == vm.NIL {
+					return pos, nil
+				}
+				if pm, ok := m.(*vm.PersistentMap); ok {
+					merged := pos
+					seq := pm.Seq()
+					for seq != nil && seq != vm.EmptyList {
+						if k, v, ok := vm.MapEntryKV(seq.First()); ok {
+							merged = merged.Assoc(k, v).(*vm.PersistentMap)
+						}
+						seq = seq.Next()
+					}
+					return merged, nil
+				}
+			}
+		}
+		return m, nil
 	})
 
 	// throw
@@ -3662,6 +3718,22 @@ func installLangNS() {
 			return ref.AlterMeta(fn, vs[2:])
 		case *vm.Var:
 			return ref.AlterMeta(fn, vs[2:])
+		case *vm.Namespace:
+			rest := vs[2:]
+			var out vm.Value
+			err := ref.AlterMeta(func(cur vm.Value) (vm.Value, error) {
+				allArgs := append([]vm.Value{cur}, rest...)
+				v, err := fn.Invoke(allArgs)
+				if err != nil {
+					return nil, err
+				}
+				out = v
+				return v, nil
+			})
+			if err != nil {
+				return vm.NIL, err
+			}
+			return out, nil
 		default:
 			return vm.NIL, fmt.Errorf("alter-meta! expected Atom or Var")
 		}
@@ -4385,6 +4457,19 @@ func installLangNS() {
 		macroFn, ok := resolved.Deref().(vm.Fn)
 		if !ok {
 			return form, nil
+		}
+		// Bind *macro-form* through the INVOKING ExecContext, not the var's
+		// own PushBinding: the latter writes the root context's binding
+		// stack, which a non-root context (a future's, say) never reads, so
+		// &form came back nil inside `@(future (macroexpand ...))`
+		// (mparrett, #863). ec.PushBinding/PopBinding target the context the
+		// macro is actually invoked on, so &form is visible in child
+		// contexts too.
+		if CoreNS != nil {
+			if mf := CoreNS.LookupLocal(vm.Symbol("*macro-form*")); mf != nil {
+				ec.PushBinding(mf, form)
+				defer ec.PopBinding(mf)
+			}
 		}
 		expanded, err := ec.Invoke(macroFn, args)
 		if info := vm.FormSource.Get(form); err == nil && info != nil {
@@ -5444,6 +5529,12 @@ func CoreSetMacro(vs ...vm.Value) (vm.Value, error) {
 	}
 	m := vs[0].(*vm.Var)
 	m.SetMacro()
+	// Var.IsMacro() (pkg/vm/var.go) stays the authoritative runtime flag the
+	// compiler gates macroexpansion on, but Clojure code expects `:macro` in
+	// the var's *metadata* too (clojure.test's function? checks `(:macro
+	// (meta v))` to reject a macro head, matching real Clojure vars). Keep
+	// both in sync here rather than leave meta silently missing the key.
+	m.SetMeta(assocIdentityMeta(m.Meta(), vm.Keyword("macro"), vm.Boolean(true)))
 	return m, nil
 }
 
@@ -6729,6 +6820,34 @@ func CoreRefer(vs ...vm.Value) (vm.Value, error) {
 	return vm.NIL, nil
 }
 
+// formatNewlines rewrites Java's %n (platform line separator) to \n, which
+// Go's Sprintf has no verb for: left alone it renders as "%!n(MISSING)". A
+// single pass copies %% as-is so %%n stays a literal %n. Runs before the
+// argument scan and Sprintf both, so %n never consumes an argument.
+func formatNewlines(s string) string {
+	if !strings.Contains(s, "%n") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+1 < len(s) {
+			switch s[i+1] {
+			case '%':
+				b.WriteString("%%")
+				i++
+				continue
+			case 'n':
+				b.WriteByte('\n')
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 //lg:native
 //lg:name format
 func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
@@ -6739,7 +6858,7 @@ func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("format expected String")
 	}
-	fmts := string(fmtStr)
+	fmts := formatNewlines(string(fmtStr))
 	args := make([]any, len(vs)-1)
 
 	vi := 0
@@ -6780,7 +6899,9 @@ func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
 		}
 		vi++
 	}
-	return vm.String(fmt.Sprintf(string(fmtStr), args...)), nil
+	// Java's Formatter ignores surplus arguments; Go would append an
+	// "%!(EXTRA ...)" diagnostic for every slot the scan left unconsumed.
+	return vm.String(fmt.Sprintf(fmts, args[:vi]...)), nil
 }
 
 //lg:native
@@ -7814,10 +7935,15 @@ func CoreExMessage(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments")
 	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
 	if ei, ok := vs[0].(*vm.ExInfo); ok {
 		return vm.String(ei.Message()), nil
 	}
-	return vm.NIL, nil
+	// let-go permits throwing any value; thrown-with-msg? matches on its
+	// printed form. Documented deviation, spec Appendix A.
+	return vm.String(strValue(vs[0])), nil
 }
 
 //lg:native
@@ -8748,7 +8874,7 @@ func CoreHashf(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	return vm.MakeInt(int(vm.HashValue(vs[0]))), nil
+	return vm.MakeInt64(int64(vm.HashValue(vs[0]))), nil
 }
 
 //lg:native
