@@ -15,8 +15,10 @@
    per language), charges them with `quality.score` (DEBT: 0 is perfect,
    lower is better, unbounded above), and prints a deterministic report.
 
-   Only VCS-TRACKED files are measured, so a scratch file in the working
-   copy cannot move the score. Two runs produce byte-identical output for
+   By default only VCS-TRACKED source files are measured, so a scratch file
+   cannot move the score. `--generated` instead measures ignored compiler
+   output, defaulting to pkg/rt/core_go_lowered, without source-history terms.
+   Two runs produce byte-identical output for
    the same commit AND the same working copy, given the same git range,
    coverprofile and CI value: the corpus is the tracked file set, files are
    listed by debt descending (ties by path), issues by debt impact, and
@@ -70,11 +72,13 @@
   {:lg ["pkg/rt/core" "scripts" "test"]
    :go ["pkg" "cmd"]})
 
+(def ^:private generated-default-paths ["pkg/rt/core_go_lowered"])
+
 ;; Paths that would only add noise: the vendored Clojure suite, generated
 ;; Go and the lowered-core tree. Nested checkouts are excluded by marker in
 ;; `walk`, independent of where a contributor keeps them.
 (def ^:private skip-substrings
-  ["test/clojure-test-suite/" "core_go_lowered/"])
+  ["test/clojure-test-suite/"])
 
 (def ^:private generated-marker
   ;; The Go convention (golang.org/s/generatedcode), which this repo also uses
@@ -86,10 +90,8 @@
 (defn generated?
   "Whether `text` declares itself machine-generated in its first few lines.
 
-   Generated code is excluded from the corpus because measuring it says
-   nothing about the code anyone writes: its complexity is its generator's,
-   and it inflates defect density every time the generator is re-run. It is
-   also pure cost to tokenize."
+   The source report excludes generated code; --generated measures the
+   generator's output separately, without attributing source defect history."
   [text]
   (boolean (some (fn [l]
                    (let [t (str/trim l)]
@@ -102,9 +104,13 @@
                           (re-find generated-marker t))))
                  (take 5 (forms/lines text)))))
 
-(defn- skip? [path]
-  (or (str/ends-with? path "_generated.go")
-      (some #(str/includes? path %) skip-substrings)))
+(defn- skip?
+  ([path] (skip? path false))
+  ([path include-generated?]
+   (or (some #(str/includes? path %) skip-substrings)
+       (and (not include-generated?)
+            (or (str/ends-with? path "_generated.go")
+                (str/includes? path "core_go_lowered/"))))))
 
 (defn- lang-of [path] (if (str/ends-with? path ".go") :go :lg))
 
@@ -160,20 +166,21 @@
    `langs`, recursively and in sorted order, as CWD-relative paths (what
    `slurp` needs). `root` and `prefix` are used only to judge the skip list
    on the repo-relative form of each path."
-  [root langs checkout prefix]
-  (let [st (os/stat root)]
-    (cond
-      (nil? st) []
-      (:dir? st) (if (and (not= (os/absolute-path root) checkout)
-                       (checkout-root? root))
+  ([root langs checkout prefix] (walk root langs checkout prefix false))
+  ([root langs checkout prefix include-generated?]
+   (let [st (os/stat root)]
+     (cond
+       (nil? st) []
+       (:dir? st) (if (and (not= (os/absolute-path root) checkout)
+                          (checkout-root? root))
                    []
-                   (vec (mapcat #(walk (str root "/" %) langs checkout prefix)
+                   (vec (mapcat #(walk (str root "/" %) langs checkout prefix include-generated?)
                                 (sort (os/ls root)))))
-      (and (or (str/ends-with? root ".lg") (str/ends-with? root ".go"))
-           (contains? langs (lang-of root))
-           (not (skip? (repo-path checkout prefix root))))
-      [root]
-      :else [])))
+       (and (or (str/ends-with? root ".lg") (str/ends-with? root ".go"))
+            (contains? langs (lang-of root))
+            (not (skip? (repo-path checkout prefix root) include-generated?)))
+       [root]
+       :else []))))
 
 (defn tracked-files
   "{:paths #{cwd-relative path...} :source \"jj\"|\"git\"|\"unfiltered\"}
@@ -204,12 +211,13 @@
    none were given. Throws when nothing is found -- an empty corpus would
    otherwise score a meaningless 100."
   [opts checkout prefix tracked]
-  (let [given (:paths opts)
+  (let [given (if (and (:generated opts) (empty? (:paths opts)))
+                generated-default-paths (:paths opts))
         roots (if (seq given)
                 [[#{:lg :go} given]]
                 [[#{:lg} (:lg default-paths)] [#{:go} (:go default-paths)]])
         found (vec (sort (distinct (mapcat (fn [[langs rs]]
-                                             (mapcat #(walk % langs checkout prefix) rs))
+                                             (mapcat #(walk % langs checkout prefix (:generated opts)) rs))
                                            roots))))
         kept (if tracked (vec (filter tracked found)) found)]
     (when (empty? kept)
@@ -252,7 +260,9 @@
    corpus whose content does not come from the working copy (see
    `base-corpus`) still be handed to them."
   [opts checkout prefix]
-  (let [tracked (tracked-files checkout)
+  (let [tracked (if (:generated opts)
+                  {:paths nil :source "generated"}
+                  (tracked-files checkout))
         paths (discover opts checkout prefix (:paths tracked))
         repo-of (fn [p] (repo-path checkout prefix p))]
     {:files (mapv (fn [p] {:path (repo-of p) :lang (lang-of p) :text (slurp p)}) paths)
@@ -510,7 +520,10 @@
     (if (empty? a)
       ;; Positional paths stay as given (possibly none) -- `discover` is what
       ;; falls back to `default-paths`, which is per language.
-      (assoc opts :paths paths)
+      (do
+        (when (and (:generated opts) (or (:base opts) (:head opts)))
+          (throw (ex-info "generated artifacts have no Git baseline; compare saved reports" {})))
+        (assoc opts :paths paths))
       (let [x (first a)
             valued? (contains? #{"--since" "--go-cover" "--ci-run" "--ci-seconds"
                                  "--edn" "--top" "--source-root" "--base" "--head"} x)
@@ -526,6 +539,7 @@
           "--top" (recur (subvec a 2) (assoc opts :top (read-string n)) paths)
           "--source-root" (recur (subvec a 2) (update opts :source-roots conj n) paths)
           "--timings" (recur (subvec a 1) (assoc opts :timings true) paths)
+          "--generated" (recur (subvec a 1) (assoc opts :generated true) paths)
           "--ci-lookup" (recur (subvec a 1) (assoc opts :ci-lookup true) paths)
           "--base" (recur (subvec a 2) (assoc opts :base n) paths)
           "--head" (recur (subvec a 2) (assoc opts :head n) paths)
@@ -553,7 +567,8 @@
         grange (inputs/git-range since (if-let [commit (:commit opts)]
                                          {:sha commit :source "revision"}
                                          (inputs/head-commit (checkout-root))))
-        defect-counts (phase "git-fix-log" (fn [] (inputs/fix-counts grange)))
+        defect-counts (if (:generated opts) {}
+                         (phase "git-fix-log" (fn [] (inputs/fix-counts grange))))
         ;; `discover` yields cwd-relative paths (what `slurp` needs); `:path`
         ;; is the repo-root-relative form, which is what classification, the
         ;; report and the `fix-counts` lookup all speak.
@@ -576,7 +591,8 @@
         disk-path (fn [p] (or (get disk-by-path p) (cwd-path prefix p)))
         read-all (:files corpus)
         generated (vec (sort (map :path (filter #(generated? (:text %)) read-all))))
-        loaded (vec (remove #(generated? (:text %)) read-all))
+        loaded (if (:generated opts) read-all
+                   (vec (remove #(generated? (:text %)) read-all)))
         tokenized (phase "tokenize"
                          (fn [] (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f))))
                                       loaded)))
@@ -651,7 +667,8 @@
                              ;; Below :defects-min-loc a single fix implies an
                              ;; absurd per-KLOC rate, so the term is omitted
                              ;; (nil) and the file debt renormalizes.
-                             dpk (when (>= loc (:defects-min-loc score/thresholds))
+                             dpk (when (and (not (:generated opts))
+                                            (>= loc (:defects-min-loc score/thresholds)))
                                    (/ (* 1000.0 fixes) loc))
                              pct (get dup-pct (:path f) 0.0)
                              fverb (terms/verbosity (get dup-lines (:path f) 0)
@@ -778,9 +795,10 @@
         ;; catastrophic zero.
         density (when (pos? src-loc) (/ (* 1000.0 assertions) src-loc))
         ratio (when (pos? src-loc) (/ test-loc (double src-loc)))
-        testing {:assertions assertions :density density :ratio ratio
+        testing {:assertions assertions :density (when-not (:generated opts) density)
+                 :ratio (when-not (:generated opts) ratio)
                  :source-loc src-loc :test-loc test-loc
-                 :debt (when (pos? src-loc)
+                 :debt (when (and (not (:generated opts)) (pos? src-loc))
                          (score/testing-term {:density density :ratio ratio}))}
         ;; Second pass: a file's dead share needs the whole-corpus graph, so
         ;; it is attached once that is known and the file score is completed.
@@ -788,7 +806,7 @@
         all-sloc-by-path (reduce (fn [m d] (update m (:path d) (fnil + 0) (:sloc d))) {} all-defs)
         files (mapv (fn [f]
                       (let [tot (get all-sloc-by-path (:path f))
-                            d (when (and tot (pos? tot))
+                            d (when (and (not (:generated opts)) tot (pos? tot))
                                 (/ (double (get dead-sloc-by-path (:path f) 0)) tot))]
                         (assoc f :dead d
                                :debt (score/file-score
@@ -818,7 +836,7 @@
                                  (some (fn [[from to]]
                                          (and from to (<= from end) (<= start to)))
                                        (get regions-by-path (:path c) [])))))
-        top (score/top-complexity callables (:top opts) duplicated-region?)
+        top (score/top-complexity callables (or (:top opts) (:top-default score/thresholds)) duplicated-region?)
         ;; Keyed on the PRINTED name: .lg definitions carry symbols and the Go
         ;; tool reports strings, and a silent key mismatch here zeroes every
         ;; Go mass -- which is exactly what it did.
@@ -851,6 +869,9 @@
                       ;; breaks the promise that a delta means the code
                       ;; changed. `:cost` replaces it, structurally.
                       :cost (cost/cost-share costs)}
+        corpus-terms (if (:generated opts)
+                       (assoc corpus-terms :defects nil :testing nil :dead nil :comment-debt nil)
+                       corpus-terms)
         corpus (score/corpus-score corpus-terms)]
     (merge corpus
            {:inputs {:commit (:to grange)
@@ -860,11 +881,13 @@
                      :ci ci
                      :paths (if (seq (:paths opts))
                               (:paths opts)
-                              (concat (:lg default-paths) (:go default-paths)))
+                              (if (:generated opts) generated-default-paths
+                                  (concat (:lg default-paths) (:go default-paths))))
                      :source-roots source-roots
                      :corpus {:files (count loaded) :tracked-by (:source tracked)
-                              :generated (count generated)
-                              :generated-paths generated}}
+                              :generated (if (:generated opts) 0 (count generated))
+                              :generated-paths (if (:generated opts) [] generated)
+                              :generated-included (when (:generated opts) (count loaded))}}
             :coverage {:lg (select-keys lg-cov [:reached :total :percent :untested])
                        :go (when go-cov (select-keys go-cov [:covered :total :percent]))
                        :combined combined
@@ -900,8 +923,7 @@
                         :flagged-code-lines (when (:findings lint) flagged-code-total)}
             ;; Worst first: debt DESCENDING, ties broken by path -- the same
             ;; visual order as the old ascending-score table.
-            :files (vec (sort-by (juxt (comp - :debt) :path)
-                                 (mapv #(dissoc % :definitions) files)))
+            :files (vec (sort-by (juxt (comp - :debt) :path) files))
             :issues (score/issues files lg-cov dup-pairs)
             :cost {:value (cost/cost-share costs)
                    :definitions (count costs)
@@ -923,6 +945,9 @@
        "                               [--ci-run ID | --ci-seconds N]\n"
        "                               [--edn PATH] [--top N]\n"
        "                               [--source-root PATH] [--timings]\n"
+       "                               [--generated [paths...]]\n"
+       "  --generated measures untracked compiler output (default: pkg/rt/core_go_lowered);\n"
+       "  source defect history and test-density terms are omitted.\n"
        "                               [--base REV [--head REV]] [paths...]\n"
        "  --head REV must resolve to the working copy's own HEAD: the head side\n"
        "  is always the checkout on disk, only the base is rebuilt from Git."))
