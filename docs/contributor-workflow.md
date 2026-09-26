@@ -22,12 +22,13 @@ make test               # gogen diff smoke + go test -short ./test/... (the .lg 
 go test -short ./... -skip TestClojureTestSuite   # the Go suite, as CI runs it
 go test ./test/ -run TestClojureTestSuite          # jank conformance (needs the submodule)
 go test -run 'TestRunner/coll_test.lg' ./test      # one .lg test file
-make lint               # golangci-lint (v2 config), same invocation as CI
+make lint               # both linters: golangci-lint over Go, comment report over .lg
+make lint-go            # golangci-lint only (v2 config), the invocation CI uses
+make lint-comments      # comment report only; report-only (docs/comment-lint.md)
 make generate           # regenerate every generated artifact after editing pkg/rt/core/**/*.lg
 make check-generated    # content-based freshness check; CI's generated-artifacts job
 make smoke              # correctness + boot-budget smoke
 make ratchets           # bench-ratchet + fanout-ratchet perf gates
-lg scripts/lint.lg      # comment report; report-only, not in CI (docs/comment-lint.md)
 git submodule update --init   # once, for TestClojureTestSuite (test/clojure-test-suite)
 ```
 
@@ -90,7 +91,7 @@ cannot be trusted to regenerate: [`regenerating-generated-artifacts.md`](regener
 
 | Job | Guards | Local equivalent |
 |---|---|---|
-| `lint` | golangci-lint | `make lint` |
+| `lint` | golangci-lint | `make lint-go` (`make lint` also runs the comment report, which CI does not) |
 | `test-location` | no test files at the repo root | `python3 scripts/check_test_location.py` |
 | `build` | manifest fresh, regenerate, build, Go + `.lg` tests with the bundled stdlib and again with `-tags bootstrap`, jank suite both ways, lowering e2e, native-entry matrix | `make check-generated-manifest`, `go test ./...`, `go test -tags bootstrap ./...` |
 | `race` | `-race` on `pkg/vm` and `pkg/rt` | `go test -race -short ./pkg/vm/... ./pkg/rt/...` |

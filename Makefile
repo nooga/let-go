@@ -411,9 +411,30 @@ ifneq (,$(wildcard .cache))
 	$(RM) -r .cache
 endif
 
-lint:
+# `lint` runs both linters: golangci-lint over the Go sources, and the comment
+# linter over the .lg sources. CI lints Go through the golangci-lint action
+# rather than this target, so adding the second linter here costs CI nothing.
+lint: lint-go lint-comments
+
+.PHONY: lint-go lint-comments
+
+lint-go:
 	@mkdir -p $(GOLANGCI-LINT-CACHE)
 	GOLANGCI_LINT_CACHE=$(GOLANGCI-LINT-CACHE) go tool golangci-lint run
+
+# Report-only, deliberately. `--gate KIND` is the only way to make the linter
+# fail, and it accepts four kinds: commented-out-code, restatement,
+# duplicated-comment, comment-density-outlier. Everything else it reports --
+# dividers, devlog phrases, churn, the code-pattern catalog -- is advisory and
+# cannot be gated at all. Each of the four still fires today, so each would
+# have to be cleared first; commented-out-code is the smallest at 3 findings,
+# but R1 misses any commented-out form that has a prose line above it (#873),
+# so that count is a floor and gating it would not enforce the rule until the
+# false negative is fixed. Running the linter here keeps it honest in a second
+# way: it is itself a let-go program, so a runtime regression that breaks it
+# shows up as a failure to run rather than as silence. See docs/comment-lint.md.
+lint-comments: $(LG)
+	$(LG) scripts/lint.lg
 
 # Register the local git merge drivers for the generated artifacts (see
 # .gitattributes). Merge drivers live in .git/config, which is not shared, so
