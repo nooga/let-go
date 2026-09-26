@@ -222,8 +222,9 @@
    shadowing: a field symbol rebound by the method params or an inner let/loop/
    fn binding is left untouched. `bound` is the set of locally-bound symbols in
    scope. Mirrors core.lg's -dt-rewrite (the bytecode path), minus mutable-field
-   / set! handling — the native deftype path is immutable. Known limitation
-   (shared with core.lg): for/doseq/letfn are not treated as binding forms."
+   / set! handling — the native deftype path is immutable. Other macros are
+   expanded before rewriting, so for/doseq/letfn shadow through the binding
+   forms they expand to."
   [fieldset this-sym bound form]
   ;; Dispatches on the collection lattice, mirroring core.lg's -dt-rewrite.
   ;; Associative arms precede vector? because a map entry IS a vector. Other
@@ -273,7 +274,14 @@
         (or (= h 'fn) (= h 'fn*))
         (dt-rewrite-fn fieldset this-sym bound form)
         :else
-        (apply list (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) form))))))
+        ;; Expand a macro before rewriting inside it, so it receives source
+        ;; literals and symbols rather than rewritten ones. Mirrors core.lg.
+        (let [expanded (if (and (symbol? h) (not (contains? bound h)) (not (contains? fieldset h)))
+                         (macroexpand form)
+                         form)]
+          (if (= expanded form)
+            (apply list (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) form))
+            (dt-rewrite-field fieldset this-sym bound expanded)))))))
 
 (defn- dt-rewrite-let [fieldset this-sym bound form]
   (let [h    (first form)

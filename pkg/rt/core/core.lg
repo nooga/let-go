@@ -2232,11 +2232,9 @@
 ;; Shadowing: a `bound` set tracks names introduced by enclosing binding forms
 ;; (method params, let/loop/fn/...) so a local that shares a field's name wins.
 ;; The first method parameter is the receiver (`this`), like mainline Clojure.
-;; KNOWN LIMITATIONS: `for`, `doseq` (their :let/:when/:while modifiers break the
-;; plain [target init] pair assumption) and `letfn` (locally-bound fn names) are
-;; not treated as binding forms — a local in one of those that shares a field's
-;; name would be wrongly rewritten. These are rare in deftype method bodies;
-;; add them to -dt-let-like with modifier-aware handling if needed.
+;; Any other macro is expanded before rewriting, so the binding forms it
+;; expands to (for, doseq and letfn become let*/loop*/fn*) shadow through the
+;; arms below.
 (declare -dt-rewrite-let)
 (declare -dt-rewrite-fn)
 (declare -dt-rewrite-case)
@@ -2319,7 +2317,17 @@
         (or (= h 'fn) (= h 'fn*))
         (-dt-rewrite-fn emit recv fields muts bound form)
         :else
-        (apply list (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) form))))))
+        ;; A macro receives its arguments as source, as it does in Clojure,
+        ;; where a field is a plain local: expand it before rewriting anything
+        ;; inside. Rewriting first handed the macro constructor calls in place
+        ;; of the map and set literals it was given, and field reads in place
+        ;; of symbols it may treat as data.
+        (let [expanded (if (and (symbol? h) (not (contains? bound h)) (not (contains? fields h)))
+                         (macroexpand form)
+                         form)]
+          (if (= expanded form)
+            (apply list (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) form))
+            (-dt-rewrite emit recv fields muts bound expanded)))))))
 
 (defn- -dt-rewrite-let [emit recv fields muts bound form]
   (let [h    (first form)
@@ -2354,9 +2362,6 @@
 ;; so a field-named symbol in a test position must stay a literal, not become a
 ;; field read. Rewrite the dispatch expr and every result expr (plus the
 ;; optional trailing default), but pass each test constant through untouched.
-;; Other symbol-quoting macros (a user macro that treats a symbol as data) are
-;; still not recognized here — a field-named symbol handed to one as a literal
-;; would be wrongly rewritten, same class of limitation as for/doseq/letfn.
 (defn- -dt-rewrite-case [emit recv fields muts bound form]
   (let [e       (-dt-rewrite emit recv fields muts bound (second form))
         clauses (nnext form)]

@@ -96,3 +96,27 @@
     (let [c (atom 0)]
       (alias-map (->AliasT 1) c)
       (is (= 2 @c)))))
+
+;; Macros are expanded before fields are rewritten, so a macro receives its
+;; arguments as source and the binding forms it expands to shadow fields.
+(defmacro sym-name [s] (name s))
+
+(defprotocol MacroP
+  (via-for [this])
+  (via-doseq [this])
+  (via-letfn [this])
+  (quoted-sym [this]))
+
+(deftype MacroT [x]
+  MacroP
+  (via-for [this] (vec (for [x [1 2 3]] x)))
+  (via-doseq [this] (let [a (atom [])] (doseq [x [4 5]] (swap! a conj x)) @a))
+  (via-letfn [this] (letfn [(x [] :local-fn)] (x)))
+  (quoted-sym [this] (sym-name x)))
+
+(deftest macros-see-source-and-their-bindings-shadow-fields
+  (let [t (->MacroT :field)]
+    (is (= [1 2 3] (via-for t)))
+    (is (= [4 5] (via-doseq t)))
+    (is (= :local-fn (via-letfn t)))
+    (is (= "x" (quoted-sym t)))))

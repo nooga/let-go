@@ -63,6 +63,7 @@ const (
 	returnHintMetaScript    = "test/gold/return_hint_metadata.cljc"
 	setMacroexpansionScript = "test/gold/set_macroexpansion_eval.cljc"
 	mapMacroexpansionScript = "test/gold/map_macroexpansion_eval.cljc"
+	macroLiteralFieldScript = "test/gold/macro_literal_kind_field.cljc"
 )
 
 // rederiveGoldEnv, when set to "1", makes the gold tests re-derive their .out
@@ -80,6 +81,9 @@ func TestGoldSetMacroexpansionEvaluationMatchesClojure(t *testing.T) {
 }
 func TestGoldMapMacroexpansionEvaluationMatchesClojure(t *testing.T) {
 	checkGold(t, mapMacroexpansionScript)
+}
+func TestGoldMacroSeesFieldLiteralMatchesClojure(t *testing.T) {
+	checkGold(t, macroLiteralFieldScript)
 }
 
 // goldPath maps a .cljc script to its committed expected-output file:
