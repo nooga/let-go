@@ -1,0 +1,127 @@
+;; Generate a Go test package from one namespace of clojure.test deftests.
+;; Usage: bin/lg scripts/lg-test-go <tests.lg> <out-dir>
+(require 'ir.passes.pipeline 'clojure.string)
+
+(defn die [message]
+  (println "lg-test-go:" message)
+  (os/exit 1))
+
+;; deftest stores its body in :test metadata, separately from its callable var.
+(defn test-definition [form]
+  (let [v (when (seq? form) (nth form 1 nil))]
+    (when (and (seq? form) (= 'alter-meta! (first form))
+               (seq? v) (= 'var (first v))
+               (= :test (nth form 3 nil)))
+      (second v))))
+
+;; Names of every test definition anywhere in an expanded form, not only where
+;; discovery extracts them, so a definition under `when` and friends is seen.
+(defn all-test-names [form]
+  (cond
+    (and (seq? form) (= 'quote (first form))) []
+    (coll? form) (let [self (if-let [n (test-definition form)] [n] [])]
+                   (reduce into self (map all-test-names (if (map? form) (mapcat identity form) form))))
+    :else []))
+
+(defn test-bodies [form]
+  (let [self (if-let [name (test-definition form)] [[name (nth form 4 nil)]] [])]
+    (if (and (seq? form) (= 'do (first form)))
+      (reduce into self (map test-bodies form))
+      self)))
+
+(def args (vec (drop 2 (seq os/args))))
+(when (not= 2 (count args)) (die "usage: lg scripts/lg-test-go <tests.lg> <out-dir>"))
+(def fixture (first args))
+(def out-dir (second args))
+;; The reader resolves ::key and ::alias/key against the current namespace
+;; and its aliases while reading, and a top-level require can add an alias
+;; partway through the file. So the file is loaded first, form by form as
+;; `lg -c` compiles it for the bundle, and only then read for extraction,
+;; inside the fixture's namespace. The leading ns form alone is read in user.
+;; An alias rebound partway through the file reads with its final binding.
+;; The switch and the read stay in one expression: evaluating the ns form also
+;; changes the namespace this script's own later forms compile in.
+(def forms
+  (let [source (slurp fixture)
+        ns-form (read-string source)]
+    (when (not (and (seq? ns-form) (= 'ns (first ns-form))))
+      (die "the first form must be the ns form"))
+    (eval ns-form)
+    (load-string source)
+    (let [all (read-all-string source)]
+      (eval '(ns user))
+      all)))
+(def target-ns (second (first forms)))
+(when (not= 1 (count (filter (fn [f] (and (seq? f) (= 'ns (first f)))) forms)))
+  (die "expected exactly one ns form"))
+(defn analyze [forms]
+  (eval (list 'ns target-ns))
+  (let [tests (binding [*file* fixture]
+                (vec (mapcat (fn [form]
+                               (map (fn [[name body]] [name body (:line (meta form))])
+                                    (test-bodies (ir.passes.pipeline/expand-all form))))
+                             forms)))
+        defined (binding [*file* fixture]
+                  (vec (mapcat (fn [form] (all-test-names (ir.passes.pipeline/expand-all form))) forms)))]
+    (eval '(ns user))
+    [tests defined]))
+(def analysis (analyze forms))
+(def tests (first analysis))
+(when (empty? tests) (die "no deftest bodies found"))
+;; A name defined twice runs only its final definition, which need not be the
+;; one extracted; redefinitions are unsupported, so reject them by name.
+(let [twice (sort (map str (keep (fn [[n c]] (when (> c 1) n)) (frequencies (second analysis)))))]
+  (when (seq twice)
+    (die (str "tests defined more than once: " (clojure.string/join ", " twice)))))
+;; Discovery only descends through top-level `do`. A deftest under any other
+;; form still registers a test var when analyzed, so check the extracted set
+;; against the registered one: an omitted test would let the suite pass.
+(let [registered (set (keep (fn [[name v]] (when (:test (meta v)) name)) (ns-interns target-ns)))
+      missing (sort (map str (remove (set (map first tests)) registered)))]
+  (when (seq missing)
+    (die (str "only a top-level deftest, or one inside a top-level do, can be lowered; not extracted: "
+              (clojure.string/join ", " missing)))))
+(doseq [name (keys (ns-interns target-ns))]
+  (when (clojure.string/starts-with? (str name) "lg-test-body-")
+    (die (str "generated test name collides with namespace var: " name))))
+(def adapted
+  (mapv (fn [i]
+          (let [body (second (nth tests i))]
+            (when (or (not= 'fn* (first body)) (not= [] (second body)))
+              (die "test metadata must contain a zero-argument function"))
+            (apply list 'defn (symbol (str "lg-test-body-" i)) [] (drop 2 body))))
+        (range (count tests))))
+(defn lower-tests []
+  (eval (list 'ns target-ns))
+  (doseq [form adapted] (eval form))
+  (let [result (ir.passes.pipeline/lower-ns-to-go-result "lgtests" target-ns adapted)]
+    (eval '(ns user))
+    result))
+(def lowered (lower-tests))
+(defn test-entry [i]
+  (let [source-name (str "lg-test-body-" i)
+        matches (filter (fn [f] (= source-name (str (:fn-name f)))) (:fns lowered))]
+    (when (not= 1 (count matches)) (die (str "test did not lower: " (first (nth tests i)))))
+    (let [f (first matches)
+          call (str (:go-name f) "(ec)")]
+      (str "{Name: " (pr-str (str (first (nth tests i))))
+           ", File: " (pr-str fixture) ", Line: " (or (nth (nth tests i) 2) 0)
+           ", Body: func(ec *vm.ExecContext) (vm.Value, error) { "
+           (if (:needs-error? f)
+             (str "_, err := " call "; return vm.NIL, err")
+             (str "_ = " call "; return vm.NIL, nil")) " }},\n"))))
+(def entries (apply str (map test-entry (range (count tests)))))
+(def wrapper
+  (str "// Code generated by lg-test-go; DO NOT EDIT.\npackage lgtests\n"
+       "import (\n_ \"embed\"\n\"testing\"\n"
+       "\"github.com/nooga/let-go/pkg/clojuretest\"\n\"github.com/nooga/let-go/pkg/vm\"\n)\n"
+       "//go:embed tests.lgb\nvar testBundle []byte\n"
+       "func TestClojure(t *testing.T) { clojuretest.Run(t, testBundle, " (pr-str (str target-ns))
+       ", []clojuretest.Test{\n" entries "}) }\n"))
+(let [result (os/sh "mkdir" "-p" out-dir)]
+  (when (not= 0 (:exit result)) (die (:err result))))
+(let [result (os/sh (first (seq os/args)) "-c" (str out-dir "/tests.lgb") fixture)]
+  (when (not= 0 (:exit result)) (die (str (:out result) (:err result)))))
+(spit (str out-dir "/bodies.go") (:source lowered))
+(spit (str out-dir "/clojure_test.go") wrapper)
+(println "lg-test-go: emitted" (count tests) "tests into" out-dir)
