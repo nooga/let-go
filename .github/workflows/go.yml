@@ -319,8 +319,9 @@ jobs:
           echo "${{ steps.clj.outputs.version }}" > .gold-clojure-version
           echo "Goldens verified against Clojure ${{ steps.clj.outputs.version }}."
 
-  # Engine parity gate + differential engine-output check: `make gogen-diff`
-  # first runs the complete-corpus engine parity gate (strict capability and
+  # Engine parity gate + differential engine-output check: after `make lowered`
+  # builds the gitignored core_go_lowered/ tree, the job first runs the
+  # complete-corpus engine parity gate (strict capability and
   # output census over every test/gold-aot/*.lg fixture, enforcing the committed
   # case ledger test/parity-ledger.txt plus the shrink-only partial and
   # divergence baselines), then runs TestGogenAOTDiff, which builds let-go twice
@@ -337,8 +338,10 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: make gogen-diff
-        run: make gogen-diff
+      - name: Generate the lowered tree
+        run: make lowered
+      - name: Engine parity and differential engine gate
+        run: make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff'
 
   # Single gate for every generated artifact (Policy: docs/contribution-policy.md §3):
   # the bundle is verified in lockstep with pkg/rt/core/**/*.lg (content-based, so

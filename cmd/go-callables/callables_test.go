@@ -365,7 +365,7 @@ func f(xs []int) int {
 	return total
 }
 `
-	es, err := goExtents(src)
+	es, err := goExtents("test.go", src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,3 +754,18 @@ var (
 		}
 	}
 }
+
+func TestAnalyzeSourceReportsActualFilenameInErrors(t *testing.T) {
+	const realPath = "pkg/vm/map.go"
+	_, _, _, err := analyzeSource(realPath, "package broken\n\nfunc oops( {\n")
+	if err == nil {
+		t.Fatal("expected syntax error")
+	}
+	if !strings.Contains(err.Error(), realPath) {
+		t.Errorf("error %q does not contain expected file path %q", err.Error(), realPath)
+	}
+	if strings.Contains(err.Error(), "src.go") {
+		t.Errorf("error %q still contains fictional src.go", err.Error())
+	}
+}
+
