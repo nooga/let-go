@@ -149,9 +149,14 @@ run the ratchet: a false run costs one benchmark, a false skip defeats the gate.
 To check what a change set would do, without pushing:
 
 ```bash
-jj diff --name-only --from 'fork_point(@ | main@upstream)' --to @ \
-  | go run ./cmd/ratchet-scope -v
+jj diff --summary --from 'fork_point(@ | main@upstream)' --to @ \
+  | go run ./cmd/ratchet-scope -v -summary
 ```
+
+`--summary` rather than `--name-only`: a rename prints as one new path under
+`--name-only`, so moving a measured file out of the closure would read as an
+unrelated addition. `-summary` reports both sides, and the old side reaches
+the deletion rule.
 
 Note that the `ir-stress-gate` hook still runs unconditionally; scoping it the
 same way is a separate change.

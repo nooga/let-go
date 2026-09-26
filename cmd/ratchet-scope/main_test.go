@@ -176,12 +176,66 @@ func TestReadPathsIgnoresBlankLines(t *testing.T) {
 	if err := os.WriteFile(f, []byte("a.go\n\n  \nb.go\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readPaths(f)
+	got, err := readPaths(f, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0] != "a.go" || got[1] != "b.go" {
 		t.Errorf("readPaths = %q, want [a.go b.go]", got)
+	}
+}
+
+// TestSummaryPathsReportsBothSidesOfARename covers the `jj diff --summary`
+// spellings. `--name-only` prints only the new side of a rename, so the old
+// side never reached the deletion rule and a rename out of the closure read as
+// SKIP.
+func TestSummaryPathsReportsBothSidesOfARename(t *testing.T) {
+	for line, want := range map[string][]string{
+		"M pkg/vm/vm.go":   {"pkg/vm/vm.go"},
+		"A docs/new.md":    {"docs/new.md"},
+		"D pkg/vm/gone.go": {"pkg/vm/gone.go"},
+		"R {pkg/vm/bench_ratchet_anchor_test.go => docs/perf/anchor-moved.txt}": {
+			"pkg/vm/bench_ratchet_anchor_test.go", "docs/perf/anchor-moved.txt"},
+		"R docs/perf/{ratchet.md => ratchet2.md}": {"docs/perf/ratchet.md", "docs/perf/ratchet2.md"},
+		"R pkg/{vm => ir}/x.go":                   {"pkg/vm/x.go", "pkg/ir/x.go"},
+		"R pkg/vm/{ => sub}/x.go":                 {"pkg/vm/x.go", "pkg/vm/sub/x.go"},
+		"C pkg/vm/{a.go => b.go}":                 {"pkg/vm/a.go", "pkg/vm/b.go"},
+	} {
+		got, err := summaryPaths(line)
+		if err != nil {
+			t.Errorf("summaryPaths(%q): %v", line, err)
+			continue
+		}
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("summaryPaths(%q) = %q, want %q", line, got, want)
+		}
+	}
+	// A line that cannot be parsed must fail rather than pass through as a
+	// path: an unrecognised path matches nothing and reads as SKIP.
+	for _, line := range []string{"pkg/vm/vm.go", "X pkg/vm/vm.go", "R pkg/vm/a.go", "R {a.go}", "M"} {
+		if got, err := summaryPaths(line); err == nil {
+			t.Errorf("summaryPaths(%q) = %q, want an error", line, got)
+		}
+	}
+}
+
+// TestRenameOutOfTheClosureRuns is the review repro: moving the anchor
+// benchmark to docs/ leaves only the new path in the tree, so the old path
+// must reach affected() as a deletion.
+func TestRenameOutOfTheClosureRuns(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "summary")
+	summary := "R {pkg/vm/bench_ratchet_anchor_test.go => docs/perf/anchor-moved.txt}\n"
+	if err := os.WriteFile(f, []byte(summary), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := readPaths(f, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := map[string]string{"pkg/vm/vm.go": "pkg/vm"}
+	onlyNew := func(p string) bool { return p == "docs/perf/anchor-moved.txt" }
+	if reason := affected(paths, deps, onlyNew); reason == "" {
+		t.Fatalf("renaming the anchor benchmark out of pkg/vm must run the ratchet; paths = %q", paths)
 	}
 }
 

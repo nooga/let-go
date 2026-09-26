@@ -30,9 +30,16 @@ run_ratchet() { exec make bench-ratchet; }
 # so everything the pushed tree adds over main is what can move the numbers.
 # jj is the repository's VCS and plain `git merge-base` is refused here, so ask
 # jj first and fall back to git only where jj is absent (CI checkouts).
+#
+# Both sides of a rename are reported: `--name-only` prints only the new path,
+# so a rename out of the closure would read as an unrelated addition. git has
+# --no-renames for that; jj does not, so the jj branch emits `--summary` lines
+# and ratchet-scope expands them (-summary).
+in_jj() { command -v jj >/dev/null 2>&1 && jj workspace root >/dev/null 2>&1; }
+
 changed_paths() {
   local tip base
-  if command -v jj >/dev/null 2>&1 && jj workspace root >/dev/null 2>&1; then
+  if in_jj; then
     tip=$(jj log --no-graph -r "${PRE_COMMIT_TO_REF:-@}" -T 'commit_id ++ "\n"' 2>/dev/null) || return 1
     case "$tip" in ''|*$'\n'*) return 1 ;; esac
     # Deliberately NOT --ignore-working-copy: the comparison must see the tree
@@ -46,7 +53,7 @@ changed_paths() {
     for revset in "fork_point($tip | main@upstream)" "fork_point($tip | main)" 'main@upstream'; do
       if base=$(jj log --no-graph --ignore-working-copy -r "$revset" \
                   -T 'commit_id' 2>/dev/null) && [ -n "$base" ]; then
-        jj diff --name-only --from "$base" --to "$tip" 2>/dev/null && return 0
+        jj diff --summary --from "$base" --to "$tip" 2>/dev/null && return 0
       fi
     done
     return 1
@@ -57,7 +64,7 @@ changed_paths() {
     return 1
   fi
   base=$(git rev-parse --verify --quiet origin/main 2>/dev/null) || return 1
-  git diff --name-only "$base"..."$tip" 2>/dev/null || return 1
+  git diff --name-only --no-renames "$base"..."$tip" 2>/dev/null || return 1
 }
 
 paths=$(changed_paths) || {
@@ -81,7 +88,9 @@ if ! go build -o "$scope_bin" ./cmd/ratchet-scope 2>&1; then
   run_ratchet
 fi
 
-decision=$(printf '%s\n' "$paths" | "./$scope_bin" -v) || {
+scope_flags=(-v)
+in_jj && scope_flags+=(-summary)
+decision=$(printf '%s\n' "$paths" | "./$scope_bin" "${scope_flags[@]}") || {
   say "ratchet-scope failed; running the ratchet"
   run_ratchet
 }

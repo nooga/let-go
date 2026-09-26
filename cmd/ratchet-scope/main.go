@@ -100,10 +100,11 @@ func main() {
 	var (
 		filesFrom = flag.String("files-from", "-", "read newline-separated changed paths from this file (\"-\" for stdin)")
 		verbose   = flag.Bool("v", false, "explain the decision on stderr")
+		summary   = flag.Bool("summary", false, "read jj diff --summary lines instead of plain paths")
 	)
 	flag.Parse()
 
-	paths, err := readPaths(*filesFrom)
+	paths, err := readPaths(*filesFrom, *summary)
 	if err != nil {
 		// Cannot read the change set: assume the worst and run.
 		fmt.Fprintf(os.Stderr, "ratchet-scope: cannot read changed paths (%v); assuming affected\n", err)
@@ -327,8 +328,10 @@ func moduleRoot() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// readPaths reads newline-separated paths from a file or stdin.
-func readPaths(from string) ([]string, error) {
+// readPaths reads newline-separated paths from a file or stdin. With summary
+// set, each line is a `jj diff --summary` line instead, expanded by
+// summaryPaths.
+func readPaths(from string, summary bool) ([]string, error) {
 	f := os.Stdin
 	if from != "-" {
 		var err error
@@ -341,7 +344,16 @@ func readPaths(from string) ([]string, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
-		if line := strings.TrimSpace(sc.Text()); line != "" {
+		line := strings.TrimSpace(sc.Text())
+		switch {
+		case line == "":
+		case summary:
+			ps, err := summaryPaths(line)
+			if err != nil {
+				return nil, err
+			}
+			paths = append(paths, ps...)
+		default:
 			paths = append(paths, line)
 		}
 	}
@@ -350,4 +362,27 @@ func readPaths(from string) ([]string, error) {
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+// summaryPaths returns the paths one `jj diff --summary` line names. A rename
+// or copy is spelled `R prefix{old => new}suffix` and yields both sides: the
+// old side of a rename is a deletion, and a rename out of the closure is caught
+// only by the deletion rule seeing it.
+func summaryPaths(line string) ([]string, error) {
+	if len(line) < 3 || line[1] != ' ' || !strings.ContainsRune("MADRC", rune(line[0])) {
+		return nil, fmt.Errorf("unrecognised summary line %q", line)
+	}
+	p := line[2:]
+	if line[0] != 'R' && line[0] != 'C' {
+		return []string{p}, nil
+	}
+	open, arrow, end := strings.IndexByte(p, '{'), strings.Index(p, " => "), strings.LastIndexByte(p, '}')
+	if open < 0 || arrow < open || end < arrow {
+		return nil, fmt.Errorf("unrecognised rename %q", line)
+	}
+	pre, post := p[:open], p[end+1:]
+	return []string{
+		path.Clean(pre + p[open+1:arrow] + post),
+		path.Clean(pre + p[arrow+4:end] + post),
+	}, nil
 }
