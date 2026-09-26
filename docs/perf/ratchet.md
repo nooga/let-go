@@ -85,6 +85,82 @@ sample budget.
 
 Override via `-packages "github.com/nooga/let-go/pkg/X github.com/.../Y"`.
 
+### When the pre-push gate runs
+
+The ratchet is a blocking `pre-push` hook, but it does not run on every push.
+It runs when the pushed range can change what it measures:
+
+- any file the toolchain says is **compiled into or embedded by** a package in
+  the benchmark binaries — the IR and the VM **and everything they transitively
+  depend on**;
+- `pkg/rt/generated.sums` and `pkg/rt/generated.manifest`, which belong to no
+  package but whose change means the generated artifacts were rebuilt;
+- `go.mod`, `go.sum`, `mise.toml`, which change generated code beneath every
+  package (a Go version bump can move allocation counts by itself);
+- `test/compat/` and the `test/clojure-test-suite` submodule, which
+  `BenchmarkClojureTestSuite` reads from disk at run time: its namespace loader
+  is rooted there and it compiles `test/compat/clojure/core-test/portability.lg`
+  directly. A submodule bump appears as the bare gitlink path, so that spelling
+  is matched as well as the directory prefix;
+- a **deleted** file anywhere beneath a directory that still holds measured
+  files. The closure is computed from the tree after the push, so a removed
+  benchmark or embedded asset is never in it; treating deletions under the
+  closure as affected over-approximates rather than miss one.
+
+The closure is **computed**, not approximated by a path list: `cmd/ratchet-scope`
+expands the benchmarked packages with `go list -deps -test` under each build-tag
+configuration the ratchet captures, and reads each package's real file list —
+`GoFiles`, `EmbedFiles`, the test variants, and `IgnoredGoFiles` for files a
+build constraint excludes here but includes elsewhere.
+
+Matching on the file list rather than the directory tree cuts both ways, and
+both matter:
+
+- `pkg/rt` **embeds** every `core/**/*.lg` file and `core_compiled.lgb`, so
+  those are in scope automatically. They are deliberately *not* in the trigger
+  list — a hand-kept copy of what is embedded is the copy that goes stale.
+- `test/*.lg` sits in the `test` package's directory but is part of no build,
+  and `BenchmarkClojureTestSuite` reads only the vendored corpus and
+  `test/compat/`. Tree matching made every contributor
+  touching a `.lg` test pay a full benchmark run for a file that cannot affect
+  a benchmark.
+
+So `pkg/rt/lang.go` requires a run though it is not a benchmark root, while
+`docs/`, `cmd/bench-ratchet`, the baseline file and `scripts/` do not.
+
+This preserves the original reason the hook ran unconditionally — a Go runtime
+change or a regenerated bundle can regress the numbers with no benchmark file
+in the diff — while removing its worst consequence: because the gate compares
+against a committed bar, a bar that has gone stale used to fail **every** push
+from that machine regardless of content, so unrelated work could only proceed
+by first rebaselining. See #912 and #913 for the instance that prompted this.
+
+The range is the pushed tip (`PRE_COMMIT_TO_REF` under prek, else the
+checkout) against its fork point with upstream main, because the bar describes
+main. The decision reads the checked-out tree — `go list` for the closure, the
+filesystem for deletions — so it is only made when that tree **is** the pushed
+tip. Pushing a different ref, or pushing with uncommitted changes, runs the
+ratchet.
+
+It fails toward running. An undeterminable range, a pushed tip that is not the
+checkout, an empty change set, a build failure, or an unrecognised decision all
+run the ratchet: a false run costs one benchmark, a false skip defeats the gate.
+
+To check what a change set would do, without pushing:
+
+```bash
+jj diff --summary --from 'fork_point(@ | main@upstream)' --to @ \
+  | go run ./cmd/ratchet-scope -v -summary
+```
+
+`--summary` rather than `--name-only`: a rename prints as one new path under
+`--name-only`, so moving a measured file out of the closure would read as an
+unrelated addition. `-summary` reports both sides, and the old side reaches
+the deletion rule.
+
+Note that the `ir-stress-gate` hook still runs unconditionally; scoping it the
+same way is a separate change.
+
 ## Build tags
 
 Default: `-tags gogen_ir`. This compiles the lowered-to-Go VM
