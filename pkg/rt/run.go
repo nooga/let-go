@@ -43,7 +43,9 @@ func LGBVarResolver(nsName, name string) *vm.Var {
 // DecodeExecUnit decodes a .lgb payload (plain or bundle format), resolving
 // var references with LGBVarResolver.
 func DecodeExecUnit(data []byte) (*bytecode.ExecUnit, error) {
-	return bytecode.DecodeToExecUnit(bytes.NewReader(data), LGBVarResolver)
+	return decodeProgram(func() (*bytecode.ExecUnit, error) {
+		return bytecode.DecodeToExecUnit(bytes.NewReader(data), LGBVarResolver)
+	})
 }
 
 // DecodeExecUnitWithDebug decodes a payload and attaches a verified external
@@ -52,7 +54,36 @@ func DecodeExecUnitWithDebug(data, debugData []byte) (*bytecode.ExecUnit, error)
 	if len(debugData) == 0 {
 		return DecodeExecUnit(data)
 	}
-	return bytecode.DecodeToExecUnitBytesWithDebug(data, debugData, LGBVarResolver)
+	return decodeProgram(func() (*bytecode.ExecUnit, error) {
+		return bytecode.DecodeToExecUnitBytesWithDebug(data, debugData, LGBVarResolver)
+	})
+}
+
+// decodeProgram runs a program decode, then marks for loading every embedded
+// core namespace the decode materialized that the unit does not define itself.
+//
+// LGBVarResolver creates a referenced var's namespace bare, with stub vars. A
+// namespace in the core bundle is already marked for on-demand loading at boot,
+// but one loaded from embedded source (zip, data, the ir.* pipeline since #356)
+// is not, so the program's (require 'zip) found the bare namespace, treated it
+// as loaded, and every var stayed nil (#954). Only embedded namespaces are
+// marked: the program's own namespaces are either defined by the unit or have
+// no source to reload, and marking them would make a later require re-run them.
+func decodeProgram(decode func() (*bytecode.ExecUnit, error)) (*bytecode.ExecUnit, error) {
+	before := AllNSes()
+	unit, err := decode()
+	if err != nil {
+		return nil, err
+	}
+	for name := range AllNSes() {
+		if _, existed := before[name]; existed || unit.NSChunks[name] != nil {
+			continue
+		}
+		if _, embedded := EmbeddedSource(name); embedded {
+			MarkNSNeedsLoad(name)
+		}
+	}
+	return unit, nil
 }
 
 // DecodeExecUnitWithDebugFile loads and decodes a companion only when the LGB
