@@ -226,6 +226,46 @@ func TestReaderKeywordInternalColons(t *testing.T) {
 	assert.Equal(t, vm.Keyword(`keyword-target/:bar`), got)
 }
 
+func TestReaderShebang(t *testing.T) {
+	// A `#!` opener is a line comment, but only as the very first line: it
+	// lets an .lg file run as an executable script (`#!/usr/bin/env lg`).
+	// Anywhere else `#!` is what it always was — an invalid hash macro.
+	// The data reader (clojure.edn parity) never skips shebangs.
+	r := NewLispReader(strings.NewReader("#!/usr/bin/env lg\n(+ 1 2)"), "<reader>")
+	o, err := r.Read()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.EmptyList.Cons(vm.Int(2)).Cons(vm.Int(1)).Cons(vm.Symbol("+")), o)
+
+	r = NewLispReader(strings.NewReader("#!shebang"), "<reader>")
+	_, err = r.ReadSkipNoValue()
+	assert.Error(t, err, "shebang without newline is EOF mid-comment")
+
+	for _, p := range []string{"(+ 1 2)\n#!/not-first\n", "  #!/indented\n(+ 1 2)"} {
+		r := NewLispReader(strings.NewReader(p), "<reader>")
+		var err error
+		for err == nil {
+			_, err = r.ReadSkipNoValue()
+		}
+		assert.ErrorContains(t, err, "invalid hash macro", "input %q: #! off the first line stays an error", p)
+	}
+
+	_, err = ReadDataString("#!shebang\n1")
+	assert.Error(t, err, "data reader keeps Clojure behavior: #! is an error")
+
+	// Every other dispatch macro opening the input reads as before: the
+	// shebang check must not consume the rune after '#'. read-string starts
+	// a fresh reader, so this is also every (read-string "#...").
+	for _, p := range []string{"#{1 2}", "#_(skipped) 3", "#(inc %)", `#"a.b"`, "#'inc", "#?(:default 4)"} {
+		r := NewLispReader(strings.NewReader(p), "<reader>")
+		_, err := r.ReadSkipNoValue()
+		assert.NoError(t, err, "input %q: a first-rune dispatch macro must read", p)
+	}
+	r = NewLispReader(strings.NewReader("#_(skipped) 3"), "<reader>")
+	o, err = r.ReadSkipNoValue()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Int(3), o)
+}
+
 func TestReaderSkipsLeadingNoValueForms(t *testing.T) {
 	// ReadSkipNoValue (the read-string entry) skips a leading no-value reader
 	// macro (line comment, #_ discard) and returns the next real form, not the
