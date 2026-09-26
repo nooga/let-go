@@ -5,11 +5,58 @@
    [clojure.string :as str]
    [quality.forms :as f]))
 
-(defn- sh [& args]
-  (let [r (apply os/sh args)]
-    (when (zero? (:exit r)) (:out r))))
+(defn- sh
+  "Run a command, returning its stdout on success and nil on any failure.
+
+   nil on a MISSING BINARY too, not just a non-zero exit: `os/sh` throws when
+   the executable does not exist, and every caller here is an `or` chain whose
+   whole purpose is to fall back to another tool. Without this the fallback
+   cannot fire — a checkout carrying a `.jj` marker on a machine with no `jj`
+   installed crashed instead of using git, which is the one configuration the
+   fallback exists for."
+  [& args]
+  (try
+    (let [r (apply os/sh args)]
+      (when (zero? (:exit r)) (:out r)))
+    (catch Throwable _ nil)))
 
 (defn- marker? [root name] (boolean (os/stat (str root "/" name))))
+
+(defn- parent-dir
+  "The parent of an absolute path, or nil once there is none left to walk."
+  [dir]
+  (let [i (str/last-index-of dir "/")]
+    (cond
+      (nil? i) nil
+      (zero? i) (when-not (= dir "/") "/")
+      :else (subs dir 0 i))))
+
+(defn- checkout-marker?
+  "Whether `dir` is a working-copy root. Accepts either marker, so a jj
+   workspace and a plain git clone are found by the same walk."
+  [dir]
+  (or (marker? dir ".jj") (marker? dir ".git")))
+
+(defn- cwd
+  "The process's working directory, or \".\" when it cannot be determined."
+  []
+  (or (some-> (os/sh "pwd") :out str/trim) "."))
+
+(defn- nearest-root
+  "Absolute path of the nearest ancestor of the cwd holding a `.jj` or `.git`
+   marker, or the cwd when there is none.
+
+   Mirrors `checkout-root` in quality.lg, which cannot be required from here
+   (quality.lg requires this namespace). Both accept `.jj` OR `.git`, so a
+   contributor using plain git is served by the same walk — the marker decides
+   which tool answers, and neither is assumed present."
+  []
+  (let [start (cwd)]
+    (loop [dir start]
+      (cond
+        (checkout-marker? dir) dir
+        (parent-dir dir) (recur (parent-dir dir))
+        :else start))))
 
 (defn head-commit
   "{:sha s :source \"jj\"|\"git\"} -- the commit this report is measured
@@ -20,13 +67,29 @@
    not what was measured. When a `.jj` marker is present the working-copy
    PARENT (`@-`) is used instead; its `commit_id` is the git sha (the repo is
    colocated), so the same value still works as a `git log` endpoint.
-   `root` is the working copy root; falls back to git, then to \"\"."
+   `root` is the working copy root; falls back to git, then to \"\".
+
+   NOTE: this resolves `@-` unconditionally, where `scripts/current-commit.sh`
+   and `jjWorkspaceSHA` (cmd/bench-ratchet) resolve `@` when the working copy
+   differs from its parent and `@-` only when it does not. The two answers
+   diverge exactly when there are uncommitted changes, so a quality report and
+   a binary built from the same dirty workspace pin different commits. That is
+   deliberate here — a report's `:to` is also a `git rev-list` endpoint and is
+   meant to name a committed boundary — but it is a divergence to keep in mind,
+   not an accident. If it is ever unified, unify on one implementation rather
+   than a fourth copy of the rule."
   [root]
+  ;; Both branches are pinned to `root` with -R / -C. Without that they answer
+  ;; for the PROCESS's working directory instead of the directory asked about —
+  ;; the same "answers for somewhere else" defect the jj branch exists to fix,
+  ;; one level up. It is masked whenever root is an ancestor of the cwd, which
+  ;; is how quality.lg calls it, so it stays latent until someone passes an
+  ;; unrelated root.
   (or (when (marker? root ".jj")
-        (when-let [out (sh "jj" "log" "-r" "@-" "--no-graph" "-T" "commit_id")]
+        (when-let [out (sh "jj" "-R" root "log" "-r" "@-" "--no-graph" "-T" "commit_id")]
           (let [sha (str/trim (first (f/lines out)))]
             (when (re-matches #"[0-9a-f]{40}" sha) {:sha sha :source "jj"}))))
-      (when-let [out (sh "git" "rev-parse" "HEAD")]
+      (when-let [out (sh "git" "-C" root "rev-parse" "HEAD")]
         {:sha (str/trim out) :source "git"})
       {:sha "" :source "none"}))
 
@@ -34,8 +97,19 @@
   "{:from sha :to sha :since since :head-source s}. `:to` is the commit the
    report is pinned to (see `head-commit`); `:from` may be \"\" when there is
    no commit before `since` — callers should treat that as \"from the root\"."
-  ([since] (git-range since {:sha (str/trim (or (sh "git" "rev-parse" "HEAD") ""))
-                             :source "git"}))
+  ;; Delegates to `head-commit` rather than calling `git rev-parse HEAD`
+  ;; directly: in a jj workspace that bare call answers for the PRIMARY
+  ;; checkout, which is the exact defect `head-commit` above exists to fix.
+  ;; Defaulting around it meant the bug survived inside the file that fixes it
+  ;; — the production caller in quality.lg passes `head` explicitly and was
+  ;; unaffected, but any future one-arity caller would have been pinned to the
+  ;; wrong commit silently.
+  ;;
+  ;; The root comes from `nearest-root`, NOT `git rev-parse --show-toplevel`: a
+  ;; jj workspace carries `.jj` but no `.git`, so --show-toplevel walks past it
+  ;; to the main checkout and would pin this range to a different working
+  ;; copy's commit.
+  ([since] (git-range since (head-commit (nearest-root))))
   ([since head]
    {:since since
     :from (str/trim (or (sh "git" "rev-list" "-1" (str "--before=" since) (:sha head)) ""))

@@ -196,11 +196,16 @@
    nothing."
   [checkout]
   (let [jj? (boolean (os/stat (str checkout "/.jj")))
+        ;; nil on a missing binary as well as a non-zero exit: os/sh throws
+        ;; when the executable is absent, which would defeat the `or` fallback
+        ;; below on a checkout that has a .jj marker but no jj installed.
         run (fn [& args]
-              (let [r (apply os/sh args)]
-                (when (zero? (:exit r))
-                  (let [ls (remove str/blank? (forms/lines (:out r)))]
-                    (when (seq ls) (set ls))))))]
+              (try
+                (let [r (apply os/sh args)]
+                  (when (zero? (:exit r))
+                    (let [ls (remove str/blank? (forms/lines (:out r)))]
+                      (when (seq ls) (set ls)))))
+                (catch Throwable _ nil)))]
     (or (when jj? (when-let [ps (run "jj" "file" "list")] {:paths ps :source "jj"}))
         (when-let [ps (run "git" "ls-files")] {:paths ps :source "git"})
         {:paths nil :source "unfiltered"})))
