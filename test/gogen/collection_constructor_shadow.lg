@@ -1,0 +1,14 @@
+;; Intrinsic collection literals must ignore same-named vars in the source ns.
+(ns examples.collection-constructor-shadow)
+
+(def hash-map (fn [& _] :shadow-map))
+(def hash-set (fn [& _] :shadow-set))
+
+(defn- probe [k v]
+  [(count {k v})
+   (get {k v} k)
+   (count #{1 2})
+   (contains? #{1 2} 2)])
+
+(defn run ^Object []
+  (probe :a 1))

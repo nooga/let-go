@@ -4,7 +4,8 @@
 ;; should win. Regression for weavejester/dependency's MapDependencyGraph,
 ;; whose methods reference their `dependencies`/`dependents` fields by bare name.
 (ns test.defrecord-field-scope-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 (defprotocol P
   (m1 [g n])
@@ -35,3 +36,87 @@
     (is (= :label-a (pick (->R {:z 1} {}) 'a)))   ; matches the constant `a`
     (is (= :label-b (pick (->R {:z 1} {}) 'b)))   ; matches the constant `b`
     (is (= 1 (pick (->R {:z 1} {}) 'nope)))))     ; default reads field a -> {:z 1}
+
+;; --- collection-literal traversal in method bodies ------------------------
+;; -dt-rewrite dispatched on vector?/seq? only, so every other collection fell
+;; through as an atom and its field references were never rewritten:
+;;   * MAP literals have never been rewritten (pre-existing; `{:k a}` failed to
+;;     compile with "Can't resolve a in this context").
+;;   * SET literals were rewritten only by accident, because they used to READ
+;;     as (hash-set ..) lists and were caught by the seq arm. Once set literals
+;;     read as sets, that accident stopped applying.
+;; The dispatch now keys off the collection lattice, with the associative arms
+;; ahead of vector? (a map entry IS a vector) and a loud throw for any
+;; unrecognised collection.
+
+(defprotocol CollP
+  (in-map [g])
+  (in-set [g])
+  (in-nested [g])
+  (in-map-key [g]))
+
+(defrecord CollR [a b]
+  CollP
+  (in-map    [g] {:k a})          ; field inside a map VALUE
+  (in-set    [g] #{a})            ; field inside a set element
+  (in-nested [g] {:k [a #{b}]})   ; vector and set nested inside a map
+  (in-map-key [g] {a :v}))        ; field inside a map KEY
+
+(deftest collection-literals-rewrite-fields
+  (testing "map literal values are rewritten (was a compile error)"
+    (is (= {:k 1} (in-map (->CollR 1 2)))))
+  (testing "set literal elements are rewritten"
+    (is (= #{1} (in-set (->CollR 1 2)))))
+  (testing "collections nested inside a map are rewritten at every depth"
+    (is (= {:k [1 #{2}]} (in-nested (->CollR 1 2)))))
+  (testing "map literal KEYS are rewritten, not just values"
+    (is (= {1 :v} (in-map-key (->CollR 1 2))))))
+
+;; --- evaluation multiplicity through field rewriting ----------------------
+;; Rewriting turns a bare field `x` and an explicit `(.x this)` into the same
+;; form. A set or map literal must still evaluate every source slot; rebuilding
+;; it as a host set or map after rewriting drops one side-effecting element.
+;; JVM Clojure evaluates both, so the counter reaches 2.
+
+(defprotocol AliasP
+  (alias-set [t c])
+  (alias-map [t c]))
+
+(deftype AliasT [x]
+  AliasP
+  (alias-set [this c] (count #{(swap! c + x) (swap! c + (.x this))}))
+  (alias-map [this c] (count {(swap! c + x) :a (swap! c + (.x this)) :b})))
+
+(deftest aliasing-field-slots-each-evaluate
+  (testing "set literal: a bare field and its accessor both run"
+    (let [c (atom 0)]
+      (alias-set (->AliasT 1) c)
+      (is (= 2 @c))))
+  (testing "map literal: a bare field key and its accessor key both run"
+    (let [c (atom 0)]
+      (alias-map (->AliasT 1) c)
+      (is (= 2 @c)))))
+
+;; Macros are expanded before fields are rewritten, so a macro receives its
+;; arguments as source and the binding forms it expands to shadow fields.
+(defmacro sym-name [s] (name s))
+
+(defprotocol MacroP
+  (via-for [this])
+  (via-doseq [this])
+  (via-letfn [this])
+  (quoted-sym [this]))
+
+(deftype MacroT [x]
+  MacroP
+  (via-for [this] (vec (for [x [1 2 3]] x)))
+  (via-doseq [this] (let [a (atom [])] (doseq [x [4 5]] (swap! a conj x)) @a))
+  (via-letfn [this] (letfn [(x [] :local-fn)] (x)))
+  (quoted-sym [this] (sym-name x)))
+
+(deftest macros-see-source-and-their-bindings-shadow-fields
+  (let [t (->MacroT :field)]
+    (is (= [1 2 3] (via-for t)))
+    (is (= [4 5] (via-doseq t)))
+    (is (= :local-fn (via-letfn t)))
+    (is (= "x" (quoted-sym t)))))
