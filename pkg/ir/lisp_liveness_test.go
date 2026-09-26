@@ -304,6 +304,20 @@ func TestReachableNidsConsistent(t *testing.T) {
 	}
 }
 
+func TestReachableNidsUnusedTryCaptures(t *testing.T) {
+	ensureLoader()
+	f := buildLispIR(t, `(defn f [x] (try (println x) (finally nil)) 0)`)
+	got := lispEvalReturn(t, f, `
+(let [f %s
+      reached (ir.passes.liveness/reachable-nids f)
+      args (filter (fn [nid] (= :load-arg (ir/op nid f)))
+                   (range (ir/inst-count f)))]
+  (and (= 1 (count args)) (every? (fn [nid] (contains? reached nid)) args)))`)
+	if got != vm.TRUE {
+		t.Fatalf("unused try must retain its body's captured argument; IR:\n%s", lispDump(t, f))
+	}
+}
+
 // TestLivenessMemoNonCollision: two structurally-different functions must not
 // return each other's cached liveness.
 func TestLivenessMemoNonCollision(t *testing.T) {

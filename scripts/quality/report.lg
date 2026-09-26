@@ -45,7 +45,8 @@
      (str "paths " (str/join " " paths))
      (str "source-roots " (if (seq source-roots) (str/join " " source-roots) "none"))
      (str "corpus " (:files corpus) " files tracked-by " (:tracked-by corpus)
-          ", " (:generated corpus) " generated files excluded"
+          ", " (or (:generated-included corpus) (:generated corpus))
+          (if (:generated-included corpus) " generated files included" " generated files excluded")
           (if (pos? (:generated corpus))
             (str " (" (str/join ", " (take 3 (:generated-paths corpus)))
                  (if (> (:generated corpus) 3) ", ..." "") ")")
@@ -55,7 +56,9 @@
           "FORM boundaries -- s-expressions for .lg, statements and declarations "
           "for Go -- so a reported region is a thing you can lift out; then "
           "unioned per file")
-     "defects: renames credited to target via -M"
+     (if (:generated-included corpus)
+       "generated corpus: source defect history, test density, dead-source and comment-debt terms omitted"
+       "defects: renames credited to target via -M")
      (str "coverage lg=static go=" (if go-cover "dynamic" "none"))
      (str "debt: every number scored is a share in [0, 1] -- 0 is perfect, "
           "1 is worst, lower is better. Shares and rational squashes only: "

@@ -110,14 +110,10 @@ jobs:
       # TestCustomMain is -short-gated for the same reason (it builds three
       # custom lg binaries and runs -w through each); without a place in this
       # list it would never run in CI at all.
-      # TestJankSuiteDirectABIGeneratedGo is the direct-ABI half of
-      # `make native-entry-gate`: it lowers a pinned jank fixture to Go, builds
-      # and runs it. It was -short-gated and in no list, so it sat red on main
-      # from #863 until #923 noticed.
-      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip, custom main, jank direct-ABI)
+      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip, custom main)
         # No -short here so the testing.Short()-gated heavyweight e2e tests run
         # full; the fast `make test` loop passes -short to skip them.
-        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip|TestCustomMain|TestJankSuiteDirectABIGeneratedGo'
+        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip|TestCustomMain'
 
       # Standalone native-entry matrix (#425 / #628): lg-compile --entry-frame,
       # embed program.lgb, go build, run. Also covers --entry-frame opt-in.
@@ -323,8 +319,9 @@ jobs:
           echo "${{ steps.clj.outputs.version }}" > .gold-clojure-version
           echo "Goldens verified against Clojure ${{ steps.clj.outputs.version }}."
 
-  # Engine parity gate + differential engine-output check: `make gogen-diff`
-  # first runs the complete-corpus engine parity gate (strict capability and
+  # Engine parity gate + differential engine-output check: after `make lowered`
+  # builds the gitignored core_go_lowered/ tree, the job first runs the
+  # complete-corpus engine parity gate (strict capability and
   # output census over every test/gold-aot/*.lg fixture, enforcing the committed
   # case ledger test/parity-ledger.txt plus the shrink-only partial and
   # divergence baselines), then runs TestGogenAOTDiff, which builds let-go twice
@@ -341,8 +338,14 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: make gogen-diff
-        run: make gogen-diff
+      - name: Generate the lowered tree
+        run: make lowered
+      # The jank harness imports core_go_lowered/test, so it needs the lowered
+      # tree in this checkout before it can build its generated Go test module.
+      - name: Jank direct-ABI generated Go gate
+        run: make test SHORT=false PKG=./test/e2e RUN=TestJankSuiteDirectABIGeneratedGo COUNT=1
+      - name: Engine parity and differential engine gate
+        run: make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff'
 
   # Single gate for every generated artifact (Policy: docs/contribution-policy.md §3):
   # the bundle is verified in lockstep with pkg/rt/core/**/*.lg (content-based, so

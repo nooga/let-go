@@ -677,9 +677,13 @@
 
 (defn uses-count [bs]
   "Number of set bits in the uses bitset bs (popcount)."
-  (let [n (atom 0)]
-    (bs-for-each bs (fn [_] (swap! n inc)))
-    @n))
+  (reduce (fn [n word]
+            (loop [n n w word]
+              (if (zero? w)
+                n
+                ;; Clear the lowest set bit, including a sign-bit-only word.
+                (recur (inc n) (bit-and w (unchecked-dec w))))))
+          0 bs))
 
 (defn uses-first [bs]
   "Return the smallest user-id in the uses bitset, or nil if empty.
