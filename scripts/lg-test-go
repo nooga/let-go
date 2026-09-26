@@ -21,10 +21,24 @@
 (when (not= 2 (count args)) (die "usage: lg scripts/lg-test-go <tests.lg> <out-dir>"))
 (def fixture (first args))
 (def out-dir (second args))
-(def forms (read-all-string (slurp fixture)))
-(def namespaces (filter (fn [f] (and (seq? f) (= 'ns (first f)))) forms))
-(when (not= 1 (count namespaces)) (die "expected exactly one ns form"))
-(def target-ns (second (first namespaces)))
+;; The reader resolves ::key and ::alias/key against the current namespace
+;; while reading, so the rest of the file must be read inside the fixture's
+;; namespace, as `lg -c` reads it for the bundle. Only the leading ns form is
+;; read in user; evaluating it establishes the namespace and its aliases.
+;; The switch and the read stay in one expression: evaluating the ns form also
+;; changes the namespace this script's own later forms compile in.
+(def forms
+  (let [source (slurp fixture)
+        ns-form (read-string source)]
+    (when (not (and (seq? ns-form) (= 'ns (first ns-form))))
+      (die "the first form must be the ns form"))
+    (eval ns-form)
+    (let [all (read-all-string source)]
+      (eval '(ns user))
+      all)))
+(def target-ns (second (first forms)))
+(when (not= 1 (count (filter (fn [f] (and (seq? f) (= 'ns (first f)))) forms)))
+  (die "expected exactly one ns form"))
 (defn analyze [forms]
   (doseq [form forms] (eval form))
   (let [tests (binding [*file* fixture]
@@ -38,6 +52,14 @@
 (when (empty? tests) (die "no deftest bodies found"))
 (when (not= (count tests) (count (set (map first tests))))
   (die "duplicate test definitions"))
+;; Discovery only descends through top-level `do`. A deftest under any other
+;; form still registers a test var when analyzed, so check the extracted set
+;; against the registered one: an omitted test would let the suite pass.
+(let [registered (set (keep (fn [[name v]] (when (:test (meta v)) name)) (ns-interns target-ns)))
+      missing (sort (map str (remove (set (map first tests)) registered)))]
+  (when (seq missing)
+    (die (str "only a top-level deftest, or one inside a top-level do, can be lowered; not extracted: "
+              (clojure.string/join ", " missing)))))
 (doseq [name (keys (ns-interns target-ns))]
   (when (clojure.string/starts-with? (str name) "lg-test-body-")
     (die (str "generated test name collides with namespace var: " name))))

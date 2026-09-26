@@ -102,6 +102,39 @@ func TestClojureGoTestAdapter(t *testing.T) {
 			t.Fatalf("expected collision rejection: %v\n%s", err, out)
 		}
 	})
+	// Auto-resolved keywords must resolve in the fixture's namespace, as the
+	// bundle compiled by `lg -c` resolves them; reading them as :user/key made
+	// the lowered body disagree with the bundle's definitions.
+	t.Run("namespace-keywords", func(t *testing.T) {
+		fixture := filepath.Join(t.TempDir(), "keywords.lg")
+		source := `(ns adapter.keywords (:require [clojure.test :refer [deftest is]] [clojure.string :as str]))
+(def expected ::key)
+(def aliased ::str/key)
+(deftest keyword-test (is (= expected ::key)) (is (= aliased ::str/key)))`
+		if err := os.WriteFile(fixture, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dir := generateClojureGoTests(ctx, t, lg, root, fixture)
+		out, err := runCmd(ctx, t, "go", dir, []string{"test", "-count=1", "-v"})
+		if err != nil || !strings.Contains(string(out), "pass=2 fail=0 error=0") {
+			t.Fatalf("namespace keywords must resolve in the fixture namespace: %v\n%s", err, out)
+		}
+	})
+	// A deftest the discovery walk cannot extract must fail generation: a
+	// silently omitted test would let a failing suite report PASS.
+	t.Run("reject-unextracted-test", func(t *testing.T) {
+		fixture := filepath.Join(t.TempDir(), "discovery.lg")
+		source := `(ns adapter.discovery (:require [clojure.test :refer [deftest is]]))
+(deftest passing (is true))
+(when true (deftest missed (is false "this must fail")))`
+		if err := os.WriteFile(fixture, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runCmd(ctx, t, lg, root, []string{"scripts/lg-test-go", fixture, t.TempDir()})
+		if err == nil || !strings.Contains(string(out), "missed") {
+			t.Fatalf("expected generation to reject the unextracted test `missed`: %v\n%s", err, out)
+		}
+	})
 }
 
 func generateClojureGoTests(ctx context.Context, t *testing.T, lg, root, fixture string) string {
