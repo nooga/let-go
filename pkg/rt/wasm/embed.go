@@ -17,9 +17,10 @@ package wasm
 
 import (
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/nooga/let-go/pkg/rt/internal/jsonenc"
 )
 
 //go:embed lg-host-core.js
@@ -46,16 +47,16 @@ const HostBodyMarker = "__LG_HOST_JS_BODY_PLACEHOLDER__"
 // external wasm payload, the LetGoHost surface, and the optional eval hook).
 // Shared by AssembleHTML (built-in shell) and AssembleHTMLWithTemplate (custom).
 func buildHostJS(wasmExecJS, wasmGzB64 string, externalWasm, hostEval bool) string {
-	execJSON, _ := json.Marshal(wasmExecJS)
+	execJSON, _ := jsonenc.Marshal(wasmExecJS)
 
 	mode := "inline"
 	if externalWasm {
 		mode = "external"
 		wasmGzB64 = ""
 	}
-	modeJSON, _ := json.Marshal(mode)
-	b64JSON, _ := json.Marshal(wasmGzB64)
-	hostEvalJSON, _ := json.Marshal(hostEval)
+	modeJSON, _ := jsonenc.Marshal(mode)
+	b64JSON, _ := jsonenc.Marshal(wasmGzB64)
+	hostEvalJSON, _ := jsonenc.Marshal(hostEval)
 
 	hostJS := mustReplaceOnce(lgHostCoreJS, "__WASM_EXEC_JS__", string(execJSON))
 	hostJS = mustReplaceOnce(hostJS, "__WASM_MODE__", string(modeJSON))

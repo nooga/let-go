@@ -97,7 +97,7 @@ cannot be trusted to regenerate: [`regenerating-generated-artifacts.md`](regener
 | `build` | manifest fresh, regenerate, build, Go + `.lg` tests with the bundled stdlib and again with `-tags bootstrap`, jank suite both ways, lowering e2e, native-entry matrix | `make check-generated-manifest`, `go test ./...`, `go test -tags bootstrap ./...` |
 | `race` | `-race` on `pkg/vm` and `pkg/rt` | `go test -race -short ./pkg/vm/... ./pkg/rt/...` |
 | `default-deps` | untagged builds link no tag-gated subsystem | `make check-default-deps` |
-| `no-http-build` | `cmd/lg-runtime` builds and boots with `-tags lg_no_http` and without `net/http` linked | `go build -tags lg_no_http ./cmd/lg-runtime` |
+| `no-http-build` | `cmd/lg-runtime` builds and boots with `-tags lg_no_http` and without `net/http` linked, and likewise with `-tags lg_no_json` and without `encoding/json` | `go build -tags lg_no_http ./cmd/lg-runtime`, `go build -tags lg_no_json ./cmd/lg-runtime` |
 | `wasip1-build` | `GOOS=wasip1 GOARCH=wasm` builds | same |
 | `tinygo-wasi-build` | runtime-only builds under TinyGo and boots in wasmtime | `tinygo build -target=wasi ./cmd/lg-runtime` |
 | `gold-differential` | goldens re-derived from real Clojure match | cached on the Clojure version; runs on cache miss or dispatch |
