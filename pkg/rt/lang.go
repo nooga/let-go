@@ -5622,7 +5622,7 @@ func CoreSortedMapBy(vs ...vm.Value) (vm.Value, error) {
 	if len(kvs)%2 != 0 {
 		return vm.NIL, fmt.Errorf("sorted-map-by requires even number of key-value arguments")
 	}
-	return vm.NewSortedMap(fnComparator(comp), kvs), nil
+	return vm.NewSortedMapBy(vs[0], fnComparator(comp), kvs), nil
 }
 
 //lg:native
@@ -5635,7 +5635,7 @@ func CoreSortedSetBy(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("sorted-set-by first arg must be a function")
 	}
-	return vm.NewSortedSet(fnComparator(comp), vs[1:]), nil
+	return vm.NewSortedSetBy(vs[0], fnComparator(comp), vs[1:]), nil
 }
 
 //lg:native

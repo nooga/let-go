@@ -299,22 +299,37 @@ func (n *rbNode) reverseOrder(out *[]MapEntry) {
 
 // --- SortedMap ---
 
+// sortOrder is a sorted collection's ordering: the Go comparator it sorts by
+// and, for a collection built with sorted-map-by or sorted-set-by, the let-go
+// function that comparator was made from. They travel as one value so every
+// collection derived from another carries both.
+type sortOrder struct {
+	cmp Comparator
+	fn  Value // nil for the default ordering
+}
+
 type SortedMap struct {
 	root     *rbNode
 	count    int
-	cmp      Comparator
+	order    sortOrder
 	meta     Value
 	_hash    uint32
 	_hasHash bool
 }
 
-var EmptySortedMap = &SortedMap{cmp: DefaultCompare}
+var EmptySortedMap = &SortedMap{order: sortOrder{cmp: DefaultCompare}}
 
 func NewSortedMap(cmp Comparator, kvs []Value) *SortedMap {
+	return NewSortedMapBy(nil, cmp, kvs)
+}
+
+// NewSortedMapBy builds a sorted map ordered by cmp, remembering fn, the
+// let-go function cmp was made from, so ComparatorFn can return it.
+func NewSortedMapBy(fn Value, cmp Comparator, kvs []Value) *SortedMap {
 	if cmp == nil {
 		cmp = DefaultCompare
 	}
-	m := &SortedMap{cmp: cmp}
+	m := &SortedMap{order: sortOrder{cmp: cmp, fn: fn}}
 	for i := 0; i+1 < len(kvs); i += 2 {
 		m = m.assocImpl(kvs[i], kvs[i+1])
 	}
@@ -322,7 +337,7 @@ func NewSortedMap(cmp Comparator, kvs []Value) *SortedMap {
 }
 
 func (m *SortedMap) assocImpl(key, val Value) *SortedMap {
-	newRoot, replaced := m.root.insert(key, val, m.cmp)
+	newRoot, replaced := m.root.insert(key, val, m.order.cmp)
 	if newRoot != nil {
 		newRoot.color = rbBlack
 	}
@@ -330,7 +345,7 @@ func (m *SortedMap) assocImpl(key, val Value) *SortedMap {
 	if !replaced {
 		newCount++
 	}
-	return &SortedMap{root: newRoot, count: newCount, cmp: m.cmp}
+	return &SortedMap{root: newRoot, count: newCount, order: m.order}
 }
 
 // --- Value ---
@@ -394,7 +409,12 @@ func (m *SortedMap) Count() Value  { return MakeInt(m.count) }
 
 // --- Collection ---
 
-func (m *SortedMap) Empty() Collection { return EmptySortedMap }
+// Empty keeps the comparator, so (into (empty m) ...) orders like m.
+func (m *SortedMap) Empty() Collection { return &SortedMap{order: m.order} }
+
+// ComparatorFn returns the function the map was built with by sorted-map-by,
+// or nil for the default ordering.
+func (m *SortedMap) ComparatorFn() Value { return m.order.fn }
 
 func (m *SortedMap) Conj(value Value) Collection {
 	// Accept [k v] vectors or MapEntry-like things
@@ -443,14 +463,14 @@ func (m *SortedMap) Dissoc(key Value) Associative {
 	if m.root == nil {
 		return m
 	}
-	newRoot, found := m.root.delete(key, m.cmp)
+	newRoot, found := m.root.delete(key, m.order.cmp)
 	if !found {
 		return m
 	}
 	if newRoot != nil {
 		newRoot.color = rbBlack
 	}
-	return &SortedMap{root: newRoot, count: m.count - 1, cmp: m.cmp}
+	return &SortedMap{root: newRoot, count: m.count - 1, order: m.order}
 }
 
 // --- Lookup ---
@@ -459,7 +479,7 @@ func (m *SortedMap) ValueAt(key Value) Value {
 	if m.root == nil {
 		return NIL
 	}
-	v, found := m.root.find(key, m.cmp)
+	v, found := m.root.find(key, m.order.cmp)
 	if !found {
 		return NIL
 	}
@@ -470,7 +490,7 @@ func (m *SortedMap) ValueAtOr(key, dflt Value) Value {
 	if m.root == nil {
 		return dflt
 	}
-	v, found := m.root.find(key, m.cmp)
+	v, found := m.root.find(key, m.order.cmp)
 	if !found {
 		return dflt
 	}
@@ -483,7 +503,7 @@ func (m *SortedMap) Contains(key Value) Boolean {
 	if m.root == nil {
 		return FALSE
 	}
-	_, found := m.root.find(key, m.cmp)
+	_, found := m.root.find(key, m.order.cmp)
 	if found {
 		return TRUE
 	}
