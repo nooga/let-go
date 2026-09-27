@@ -22,6 +22,20 @@ func TestParseSearchPaths(t *testing.T) {
 	}
 }
 
+func TestPathsFromDepsEdnAcceptsMetadataBearingPathsVector(t *testing.T) {
+	dir := t.TempDir()
+	deps := `{:paths ^:configured ["src" "test"]}`
+	if err := os.WriteFile(filepath.Join(dir, "deps.edn"), []byte(deps), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := PathsFromDepsEdn(dir)
+	want := []string{"src", "test"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PathsFromDepsEdn() = %#v, want %#v", got, want)
+	}
+}
+
 func TestLoadReturnsCompileErrorWithoutPrinting(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "broken.lg")

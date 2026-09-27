@@ -208,6 +208,21 @@
           :else
           (recur (rest fs) (conj body head) clauses finally-clause))))))
 
+(defn meta-bearing-coll? [form]
+  (and (or (vector? form) (map? form) (set? form)) (some? (meta form))))
+
+(defn with-meta-form [form]
+  "The form a metadata-bearing collection value stands for:
+   (with-meta coll meta), as the bytecode compiler's compileAggregateWithMeta
+   compiles it. The metadata map is compiled, so ^{:a (+ 1 1)} [1] carries
+   {:a 2} and a local used only in the metadata is a use. A data-read bare type
+   hint is stored as the symbol itself ({:tag long}); it is quoted so it stays a
+   symbol, as quoteTagHint does."
+  (let [m (meta form)]
+    (list 'clojure.core/with-meta
+          (with-meta form nil)
+          (if (symbol? (:tag m)) (assoc m :tag (list 'quote (:tag m))) m))))
+
 (defn captures-of [form known-locals]
   "Return the SET of symbols `form` references that are bound in
    `known-locals`. Used by build-if/build-loop to compute which block-
@@ -229,6 +244,8 @@
   (cond
     (symbol? form)
     (if (known-locals form) #{form} #{})
+    (meta-bearing-coll? form)
+    (captures-of (with-meta-form form) known-locals)
     (or (list? form) (seq? form))
     (let [head (first form)]
       ;; Dispatch based on form head. Special forms with explicit handlers are
@@ -314,6 +331,11 @@
     ;; a cross-block direct ref to an out-of-scope InstId (same failure class
     ;; as the cluster-A bugs, for a non-cheap captured value).
     (into #{} (mapcat #(captures-of % known-locals) (concat (keys form) (vals form))))
+    (set? form)
+    ;; Same reason as the map? arm, for the set literals a data-read source
+    ;; produces (the code reader emitted a (hash-set …) call form, which the
+    ;; list arm already walked).
+    (into #{} (mapcat #(captures-of % known-locals) (seq form)))
     :else #{}))
 
 ;; --- form dispatch -------------------------------------------------------
@@ -321,7 +343,7 @@
 (declare form-heads-dispatcher
          build-list build-symbol build-if build-let build-let* build-do build-quote
          build-var build-set! build-def build-loop build-loop* build-recur build-fn*
-         build-vector build-map build-call build-try build-dot)
+         build-vector build-map build-set build-coll-const with-meta-call build-call build-try build-dot)
 
 ;; Sentinel returned by recur / any form whose current-block is already
 ;; terminated. Callers must check for this before emitting more code.
@@ -373,6 +395,10 @@
               (symbol?  form)  (build-symbol form ctx)
               (vector?  form)  (build-vector form ctx)
               (map?     form)  (build-map form ctx)
+              ;; Before list?: a set is neither list? nor map?, and only a
+              ;; data-read source (read-string) ever hands build a set VALUE —
+              ;; the code reader emits the form (hash-set …) instead.
+              (set?     form)  (build-set form ctx)
               (list?    form)  (build-list form ctx)
               ;; pr-str (not str): a BigDecimal's str drops the `M` suffix, so an
               ;; unrecognized 0.0M would mis-report as a float `0.0`. The readable
@@ -405,6 +431,8 @@
   (cond
     (symbol? form)
     (if (bound form) #{} #{form})
+    (meta-bearing-coll? form)
+    (free-vars (with-meta-form form) bound)
     (or (list? form) (seq? form))
     (let [head (first form)]
       ;; Dispatch based on form head. Special forms are gated by the catalog.
@@ -469,6 +497,10 @@
     (into #{} (mapcat #(free-vars % bound) form))
     (map? form)
     (into #{} (mapcat #(free-vars % bound) (concat (keys form) (vals form))))
+    ;; Before seq?: a data-read set literal must be walked like a vector/map
+    ;; literal, else a var captured only inside it is missed by closure emit.
+    (set? form)
+    (into #{} (mapcat #(free-vars % bound) (seq form)))
     (seq? form)
     (into #{} (mapcat #(free-vars % bound) form))
     :else #{}))
@@ -885,20 +917,48 @@
    Each element flows through build-form so sub-expressions IR-build
    correctly; build-args handles cross-block threading."
   (if (zero? (count form))
-    (add-inst! ctx (ctx-block ctx) :const [] form)
-    (let [fn-id   (add-inst! ctx (ctx-block ctx)
-                    :load-var [] (resolve 'vector))]
-      (build-call-with-head fn-id (seq form) ctx))))
+    (build-coll-const form ctx)
+    (with-meta-call form ctx
+      (fn [form ctx]
+        (let [fn-id (add-inst! ctx (ctx-block ctx)
+                      :load-var [] (resolve 'vector))]
+          (build-call-with-head fn-id (seq form) ctx))))))
 
 (defn is-literal? [v]
   "Check if v is a literal value (not a symbol or expression)."
   (or (nil? v) (integer? v) (float? v) (string? v) (keyword? v) (boolean? v)))
 
+(defn- literal-meta? [m]
+  "Metadata that is data already: literal keys and values, and a bare type
+   hint's symbol, which the bytecode compiler also keeps as a symbol."
+  (every? (fn [e]
+            (let [k (key e) v (val e)]
+              (and (is-literal? k)
+                   (or (is-literal? v) (and (= k :tag) (symbol? v))))))
+          (seq m)))
+
+(defn build-coll-const [form ctx]
+  "A collection whose elements are all literals is a Const. Literal metadata
+   stays attached to it; metadata holding expressions is compiled instead."
+  (let [m (meta form)]
+    (if (or (nil? m) (literal-meta? m))
+      (add-inst! ctx (ctx-block ctx) :const [] form)
+      (build-form (with-meta-form form) ctx))))
+
+(defn with-meta-call [form ctx build-plain]
+  "Build a collection that needs a constructor call. Metadata, if any, is
+   compiled and applied to the result, as the bytecode compiler's
+   compileAggregateWithMeta does; build-plain builds the collection itself."
+  (if (some? (meta form))
+    (build-form (with-meta-form form) ctx)
+    (build-plain form ctx)))
+
 (defn build-map [form ctx]
   "{:a 1 :b 2} → Const if all keys/values are literals; else (array-map :a 1 :b 2).
-   array-map preserves insertion order. Empty map → Const literal."
+   array-map preserves insertion order. Empty map → Const literal. Metadata is
+   kept as build-coll-const and with-meta-call describe."
   (if (zero? (count form))
-    (add-inst! ctx (ctx-block ctx) :const [] form)
+    (build-coll-const form ctx)
     ;; Check if all keys and values are literals (not symbols/expressions).
     ;; If so, emit as a constant.
     (let [all-const? (every? (fn [e]
@@ -906,10 +966,27 @@
                              (seq form))
           pairs      (vec (mapcat (fn [e] [(first e) (second e)]) (seq form)))]
       (if all-const?
-        (add-inst! ctx (ctx-block ctx) :const [] form)
-        (let [fn-id   (add-inst! ctx (ctx-block ctx)
-                        :load-var [] (resolve 'array-map))]
-          (build-call-with-head fn-id pairs ctx))))))
+        (build-coll-const form ctx)
+        (with-meta-call form ctx
+          (fn [form ctx]
+            (let [fn-id (add-inst! ctx (ctx-block ctx)
+                          :load-var [] (resolve 'array-map))]
+              (build-call-with-head fn-id pairs ctx))))))))
+
+(defn build-set [form ctx]
+  "#{a b c} → Const if every element is a literal; else (hash-set a b c).
+   Empty set → Const literal. Metadata is kept as build-coll-const and
+   with-meta-call describe.
+
+   A set VALUE only reaches build from data-read source — `read-string` returns
+   a PersistentSet where the code reader emits the form (hash-set …)."
+  (if (or (zero? (count form)) (every? is-literal? (seq form)))
+    (build-coll-const form ctx)
+    (with-meta-call form ctx
+      (fn [form ctx]
+        (let [fn-id (add-inst! ctx (ctx-block ctx)
+                      :load-var [] (resolve 'hash-set))]
+          (build-call-with-head fn-id (seq form) ctx))))))
 
 (defn build-try [form ctx]
   "(try body… (catch [Class] e handler…) (finally fin…)) — guarded region.

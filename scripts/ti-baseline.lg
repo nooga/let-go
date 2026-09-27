@@ -17,7 +17,7 @@
 (def CAP 50000)   ; drain-count per-fn typeinfer budget (default: 2,000,000)
 
 (defn read-all [path]
-  (try (read-string (str "(do " (slurp path) ")")) (catch e nil)))
+  (try (read-code-string (str "(do " (slurp path) ")")) (catch e nil)))
 (defn ns-form-of [parsed]
   (first (filter (fn [x] (and (seq? x) (= (first x) 'ns))) (rest parsed))))
 (defn require-deps! [nf]
