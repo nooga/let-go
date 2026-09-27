@@ -114,6 +114,17 @@ func hostCollectionMethod(rec vm.Value, name vm.Symbol, args []vm.Value) (vm.Val
 		return vm.NIL, false, nil
 	}
 	switch string(name) {
+	case "comparator": // java.util.SortedMap / java.util.SortedSet
+		if len(args) == 0 {
+			if c, ok := rec.(interface{ ComparatorFn() vm.Value }); ok {
+				if fn := c.ComparatorFn(); fn != nil {
+					return fn, true, nil
+				}
+				// The default ordering is core compare, so the result always
+				// rebuilds the collection: (sorted-map-by (.comparator m) ...).
+				return CoreNS.Lookup(vm.Symbol("compare")).(*vm.Var).Deref(), true, nil
+			}
+		}
 	case "valAt": // clojure.lang.ILookup
 		if l, ok := rec.(vm.Lookup); ok {
 			switch len(args) {
