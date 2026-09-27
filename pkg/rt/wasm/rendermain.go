@@ -17,12 +17,10 @@ const wasmMainTmpl = `package main
 
 import (
 	_ "embed"
-	"bytes"
 	"fmt"
 	"os"
 __LG_HOST_EVAL_IMPORTS__
 
-	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/resolver"
 	"github.com/nooga/let-go/pkg/rt"
@@ -73,16 +71,10 @@ func main() {
 		v.SetRoot(vm.NewBoxed(hostStorage))
 	}
 
-	resolve := func(nsName, name string) *vm.Var {
-		n := rt.DefNSBare(nsName)
-		v := n.LookupLocal(vm.Symbol(name))
-		if v == nil {
-			return n.DefStub(name)
-		}
-		return v
-	}
-
-	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(lgbData), resolve)
+	// rt.DecodeExecUnit, not an inline resolver: it also marks the embedded
+	// core namespaces the program references so (require 'zip) loads them
+	// (#954).
+	unit, err := rt.DecodeExecUnit(lgbData)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %%v\n", err)
 		return
