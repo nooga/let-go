@@ -1,0 +1,14 @@
+;; Native-lowering oracle for a sorted collection's comparator: generated Go
+;; must keep the ordering through empty and return the comparator function,
+;; as the bytecode VM does.
+(ns examples.sorted-comparator)
+
+(defn run ^Object []
+  (let [m (sorted-map-by > 1 :a 2 :b)
+        s (sorted-set-by > 1 2)]
+    [(keys (into (empty m) [[5 :x] [7 :y]]))
+     (seq (into (empty s) [4 9 1]))
+     (= > (.comparator m))
+     (= > (.comparator (empty s)))
+     (= compare (.comparator (sorted-map 1 :a)))
+     (keys (apply sorted-map-by (.comparator m) (mapcat identity m)))]))
