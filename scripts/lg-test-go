@@ -43,12 +43,12 @@
 ;; changes the namespace this script's own later forms compile in.
 (def forms
   (let [source (slurp fixture)
-        ns-form (read-string source)]
+        ns-form (read-code-string source)]
     (when (not (and (seq? ns-form) (= 'ns (first ns-form))))
       (die "the first form must be the ns form"))
     (eval ns-form)
     (load-string source)
-    (let [all (read-all-string source)]
+    (let [all (read-all-code-string source)]
       (eval '(ns user))
       all)))
 (def target-ns (second (first forms)))

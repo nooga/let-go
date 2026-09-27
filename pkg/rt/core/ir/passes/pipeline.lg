@@ -399,10 +399,13 @@
                 (apply list (expand-all (first expanded))
                        (doall (map expand-all (rest expanded)))))
               (expand-all expanded)))))
+      ;; Rebuilt collections keep the source's metadata: a data-read
+      ;; ^{:a (+ 1 1)} [1] still carries it when ir.build reaches the value.
       (vector? form)
-      (vec (doall (map expand-all form)))
+      (with-meta (vec (doall (map expand-all form))) (meta form))
       (map? form)
-      (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
+      (with-meta (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
+                 (meta form))
       :else form)))
 
 ;; --- canonical enumeration of a namespace's lowerable fn-units -------------

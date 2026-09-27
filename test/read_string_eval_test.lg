@@ -8,6 +8,9 @@
 (ns test.read-string-eval-test
   (:require
    [clojure.string :as str]
+   [ir.build]
+   [ir.data]
+   [ir.passes.pipeline]
    [test :refer :all]))
 
 (deftest read-string-output-compiles
@@ -71,6 +74,33 @@
       (is (= {:flag true} (meta (eval (read-string "^:flag {:a 1}")))))
       (is (= {:flag true} (meta (eval (read-string "^:flag #{1 2}"))))))))
 
+;; *ir-compile* only diverts `defn`, so evaluating a collection directly under
+;; it (the assertions above) never reaches the IR builder. Compile each probe
+;; as a defn under strict IR and compare it with the same defn on bytecode.
+(defn- meta-of-defn [ir? body]
+  (binding [*ir-compile* ir? *ir-compile-strict* ir?]
+    (let [v (eval (read-string (str "(defn meta-probe [] " body ")")))]
+      (@v))))
+
+(deftest strict-ir-defn-keeps-collection-metadata
+  (doseq [[body expected]
+          [["(meta ^{:a (+ 1 1)} [1])" {:a 2}]
+           ["(meta ^{:a (+ 1 1)} #{1})" {:a 2}]
+           ["(meta ^{:a (+ 1 1)} {:k 1})" {:a 2}]
+           ["(meta ^:flag [1])" {:flag true}]
+           ["(meta ^:flag #{1})" {:flag true}]
+           ["(meta ^:flag {:k 1})" {:flag true}]
+           ["(meta ^long [1])" {:tag 'long}]
+           ["(let [x 5] (meta ^{:a x} [1]))" {:a 5}]
+           ["(let [x 5] ((fn [] (meta ^{:a x} #{(inc x)}))))" {:a 5}]
+           ;; x reaches the closure only through the metadata map
+           ["(let [x 5] ((fn [] (meta ^{:a x} [1]))))" {:a 5}]
+           ["(let [x 5] ((fn [] (meta ^{:a x} #{1}))))" {:a 5}]
+           ["(let [x 5] ((fn [] (meta ^{:a x} {:k 1}))))" {:a 5}]]]
+    (testing body
+      (is (= expected (meta-of-defn false body)))
+      (is (= expected (meta-of-defn true body))))))
+
 ;; compileForm's vector-literal arm dispatches on Type() tags, matching how
 ;; `vector?`/`sequential?` are themselves defined in core.lg — not on a
 ;; hand-picked concrete Go type. Every ordered-vector representation
@@ -124,3 +154,49 @@
     (let [msg (str (try (eval (list 'identity (atom 1))) (catch e e)))]
       (is (str/includes? msg "cannot compile a value of type"))
       (is (not (str/includes? msg "index out of range"))))))
+
+;; The IR builder keeps metadata with the collection it belongs to: literal
+;; metadata on a literal collection stays on one Const, and metadata holding
+;; expressions is compiled and applied with with-meta.
+(defn- built-insts [src]
+  (vec (ir.data/all-insts (ir.build/build-fn (read-string src)))))
+
+(defn- consts [insts]
+  (keep (fn [i] (when (= :const (nth i 0)) (nth i 2))) insts))
+
+(defn- calls-with-meta? [insts]
+  (some (fn [i] (and (= :load-var (nth i 0))
+                     (= (resolve 'clojure.core/with-meta) (nth i 2))))
+        insts))
+
+(deftest ir-builder-keeps-collection-metadata-with-the-value
+  (doseq [[src expected] [["(defn p [] ^:flag #{1})" {:flag true}]
+                          ["(defn p [] ^:flag {:k 1})" {:flag true}]
+                          ["(defn p [] ^:flag [])" {:flag true}]
+                          ["(defn p [] ^long #{1})" {:tag 'long}]]]
+    (testing (str "literal metadata stays on the Const: " src)
+      (let [insts (built-insts src)]
+        (is (= [expected] (keep meta (consts insts))))
+        (is (not (calls-with-meta? insts))))))
+  (doseq [src ["(defn p [] ^{:a (+ 1 1)} #{1})"
+               "(defn p [] ^{:a (+ 1 1)} {:k 1})"
+               "(defn p [x] ^:flag [x])"]]
+    (testing (str "otherwise the metadata is applied with with-meta: " src)
+      (let [insts (built-insts src)]
+        (is (calls-with-meta? insts))
+        (is (empty? (keep meta (consts insts))))))))
+
+;; Tools that lower source read it as code, the way the compiler loads it, so a
+;; macro sees the same forms on every backend. read-string reads data.
+(deftest read-code-string-reads-as-the-compiler-does
+  (testing "a set literal is the call form the compiler evaluates"
+    (is (= '(hash-set 1) (read-code-string "#{1}")))
+    (is (set? (read-string "#{1}"))))
+  (testing "collection metadata is a with-meta form, not attached data"
+    (is (= '(with-meta [1] {:m true}) (read-code-string "^:m [1]")))
+    (is (= {:m true} (meta (read-string "^:m [1]")))))
+  (testing "read-all-code-string reads every form"
+    (is (= ['(a) '(hash-set 1)] (read-all-code-string "(a) #{1}")))
+    (is (= [] (read-all-code-string "  "))))
+  (testing "a syntax error is reported, not truncated"
+    (is (thrown? Exception (read-all-code-string "(a) (b")))))
