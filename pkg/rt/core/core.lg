@@ -2656,18 +2656,18 @@
    binding."
   [vars vals func]
   ;; olds must be captured eagerly (mapv, not lazy map) BEFORE rebinding, or the
-  ;; restore would read the just-installed temp roots. Restore is explicit
-  ;; (not finally), because a try/finally without a catch swallows the throw.
+  ;; restore would read the just-installed temp roots. The restore is a finally,
+  ;; not a catch: a catch clause does not see scope cancellation, and a
+  ;; cancelled body must still put the original roots back.
   (let [olds   (mapv var-get vars)
         rebind (fn [vs xs]
                  (doseq [pair (map vector vs xs)]
                    (alter-var-root (first pair) (constantly (second pair)))))]
     (rebind vars vals)
-    (let [outcome (try {:ok (func)} (catch e {:err e}))]
-      (rebind vars olds)
-      (if (contains? outcome :ok)
-        (:ok outcome)
-        (throw (:err outcome))))))
+    (try
+      (func)
+      (finally
+        (rebind vars olds)))))
 
 (defmacro with-redefs
   "(with-redefs [v1 val1 v2 val2 ...] body...) temporarily redefines the root

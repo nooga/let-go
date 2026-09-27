@@ -245,3 +245,49 @@ func TestOrdinaryGoBlockErrorStillReachesErr(t *testing.T) {
 		t.Fatalf("expected the ordinary go-block error to reach *err*/stderr, got stderr=%q", errOut)
 	}
 }
+
+// TestCancellationRestoresWithRedefs: with-redefs restores the original roots
+// when its body is cancelled. The restore used to run from a catch-everything
+// clause, which a cancellation deliberately passes through, so a cancelled
+// worker left its temporary root installed globally.
+func TestCancellationRestoresWithRedefs(t *testing.T) {
+	bin := buildLG(t)
+	src := `(def x :original) ` +
+		`(def started (promise)) ` +
+		`(with-scope [s] ` +
+		`  (go (with-redefs [x :temporary] ` +
+		`        (deliver started true) ` +
+		`        (sleep 10000))) ` +
+		`  (deref started 2000 :timeout)) ` +
+		`(println x)`
+	out, errOut, err := runLG(t, bin, src)
+	if err != nil {
+		t.Fatalf("run: %v\nstdout=%q stderr=%q", err, out, errOut)
+	}
+	if first := strings.SplitN(out, "\n", 2)[0]; first != ":original" {
+		t.Fatalf("expected with-redefs to restore x after cancellation, got stdout=%q stderr=%q", out, errOut)
+	}
+}
+
+// TestCancelledExposesItsCause: the Cancelled condition's cause, the Go
+// context error, is visible through both ex-cause and .getCause.
+func TestCancelledExposesItsCause(t *testing.T) {
+	bin := buildLG(t)
+	src := `(def result (promise)) ` +
+		`(def started (promise)) ` +
+		`(with-scope [s] ` +
+		`  (go (try ` +
+		`        (deliver started true) ` +
+		`        (sleep 10000) ` +
+		`        (catch Cancelled e ` +
+		`          (deliver result [(ex-message (ex-cause e)) (ex-message (.getCause e))])))) ` +
+		`  (deref started 2000 :timeout)) ` +
+		`(prn (deref result 2000 :timeout))`
+	out, errOut, err := runLG(t, bin, src)
+	if err != nil {
+		t.Fatalf("run: %v\nstdout=%q stderr=%q", err, out, errOut)
+	}
+	if first := strings.SplitN(out, "\n", 2)[0]; first != `["context canceled" "context canceled"]` {
+		t.Fatalf("expected ex-cause and .getCause to expose the context error, got stdout=%q stderr=%q", out, errOut)
+	}
+}

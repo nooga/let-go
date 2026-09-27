@@ -7985,11 +7985,7 @@ func CoreExCause(vs ...vm.Value) (vm.Value, error) {
 		return vm.NIL, fmt.Errorf("wrong number of arguments")
 	}
 	if ei, ok := vs[0].(*vm.ExInfo); ok {
-		if c := ei.Cause(); c != nil {
-			if cev, ok := c.(*vm.ExInfo); ok {
-				return cev, nil
-			}
-		}
+		return ei.CauseValue(), nil
 	}
 	return vm.NIL, nil
 }
