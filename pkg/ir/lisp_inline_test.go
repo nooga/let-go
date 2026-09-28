@@ -162,8 +162,8 @@ func TestInlineMultiBlockTailLoopCallee(t *testing.T) {
 	if !strings.Contains(dump, "Lt") || !strings.Contains(dump, "Inc") {
 		t.Fatalf("inlined loop body (Lt/Inc) missing:\n%s", dump)
 	}
-	// The spliced loop CFG must validate (back-edge preds, symmetric branch-if
-	// args, in-range refs, arities).
+	// The spliced loop CFG must validate (back-edge preds, in-range refs,
+	// arities).
 	assertInlineValidates(t, `(defn caller [m] (cu m))`,
 		map[string]string{"cu": callee})
 }
