@@ -183,8 +183,8 @@ func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 
 // isBundleSkippedTool reports whether namespace n is a build-time tool that
 // should be excluded from the BYTECODE bundle (but not from the Go-lowering
-// output). Two families qualify, for one reason: a plain `lg` script never
-// touches them, so decoding them on every process start is pure cost. Both
+// output). Three families qualify, for one reason: a plain `lg` script never
+// touches them, so decoding them on every process start is pure cost. All
 // load from embedded source on demand instead.
 //
 //   - the ir.* AOT/lowering pipeline, the `ir` root and any `ir.` descendant
@@ -192,13 +192,16 @@ func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 //     Match the family, not the exact name: the roadmap moves ir.* under
 //     lg.compiler.ir.*, where an exact-name check would match neither name and
 //     restore the regression silently.
+//   - lg.commands.*, the CLI subcommands (lg.commands.compile). They require
+//     lg.compiler, so bundling one would load the driver from source at boot.
 //
 // lg.compiler is 30 chunks on its own, but its requires drag the whole IR
 // pipeline into the const pool: bundling it cost 308K→1.07M and 4.1ms→23.4ms
 // of boot, past the 8ms budget (measured 2026-09-02).
 func isBundleSkippedTool(n string) bool {
 	return n == "ir" || strings.HasPrefix(n, "ir.") ||
-		n == "lg.compiler" || strings.HasPrefix(n, "lg.compiler.")
+		n == "lg.compiler" || strings.HasPrefix(n, "lg.compiler.") ||
+		strings.HasPrefix(n, "lg.commands.")
 }
 
 // hasLgbgenSkipDirective reports whether the source begins with a line
