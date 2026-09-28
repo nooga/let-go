@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-09-21
+last-verified: 2026-09-27
 authoritative-for:
   - glplat-backend-contract
   - glplat-host-capability-seam
@@ -10,7 +10,9 @@ shipped:
 remaining-open:
   - §2 seam — `rt.Display` bound at `*display*` with `api.WithDisplay`, retiring `pkg/glplat/internal/registry`
   - §5.1's amendment — the presentation target may be a bound `*surface*` rather than the backend's own window; `Init`'s title and the `Window*` names generalise with it
-  - C3 (straight alpha), C4 (painter's order), C10 (modifiers in the event) — the three behavior-changing rules
+  - C3 (straight alpha)
+  - C4 (painter's order)
+  - C10 (modifiers in the event)
   - A carrier for all of the above; #392 was named for it and closed unmerged (§5.2)
 human-verified:
 ---
@@ -21,7 +23,7 @@ human-verified:
 nooga/let-go#744 merged 2026-09-19 with the registry under `internal/` and the
 `glplat` namespace marked experimental. §2's seam and the behavior-changing
 rules are agreed but unimplemented, and **no open PR or issue carries them** —
-see §5.2.
+see §5.2. §5.3 is the checklist of what remains.
 
 **The decision this document requested has been answered.** §2 (bind the backend
 as a host capability at a dynamic var, retire the package-level registry) and §3
@@ -280,3 +282,19 @@ and this file have been untouched since #744 merged, and no open issue names
 
 This section records that gap so the decision above is not read as work in
 flight. Assigning it a carrier is a maintainer call.
+
+### 5.3 Remaining work
+
+Check an item off in the commit that closes it, and append that PR or commit,
+e.g. `— #NNN`. Keep the frontmatter in step: the item moves from
+`remaining-open:` to `shipped:` in the same commit.
+
+- [ ] A carrier: an issue or PR that owns the items below (maintainer call; §5.2)
+- [ ] §2 seam: `rt.Display` bound at `*display*` with `api.WithDisplay`,
+      retiring `pkg/glplat/internal/registry`
+- [ ] §5.1 amendment: the presentation target may be a bound `*surface*`
+      rather than the backend's own window; `Init`'s title and the `Window*`
+      names generalise with it
+- [ ] C3: straight (non-premultiplied) alpha
+- [ ] C4: painter's order
+- [ ] C10: modifiers are part of the event
