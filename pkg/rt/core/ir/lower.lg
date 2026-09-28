@@ -34,10 +34,6 @@
   (and (map? aux)
        (contains? #{:fn-template :multi-fn-template} (:kind aux))))
 
-(defn- fn-template-const? [f nid]
-  (and (= :const (ir/op nid f))
-       (fn-template-aux? (ir/aux nid f))))
-
 (defn- template-value [aux]
   (cond
     (and (fn-template-aux? aux) (= (:kind aux) :fn-template))
@@ -232,11 +228,8 @@
     (when (< i (count uses))
       (let [us (nth uses i)]
         (when-not (ir/uses-empty? us)
-          (let [def-block (ir/block-of i f)
-                def-op    (ir/op i f)]
-            (when-not (and (ir/op-cheap-load? def-op)
-                           (not= def-op :load-var)
-                           (not (fn-template-const? f i)))
+          (let [def-block (ir/block-of i f)]
+            (when-not (ir/reemittable-at-use? i f)
               (ir/uses-for-each us
                 (fn [user-id]
                   (let [user-block (ir/block-of user-id f)]
@@ -426,6 +419,10 @@
                            (reset! crosses true)))))))
                @crosses))))))
 
+(defn- ends-in-branch-if? [f bid]
+  (let [t (ir/block-term bid f)]
+    (if (nil? t) false (= :branch-if (ir/op t f)))))
+
 (defn- should-body-emit-cheap? [l nid]
   "Decide whether a cheap-load Inst should be body-emitted at its
    def site (vs. deferred to materialize at use site).
@@ -439,10 +436,15 @@
     (cond
       (zero? uc) false
       ;; A function literal is an allocation with observable identity, not a
-      ;; replayable scalar constant. Materialize it once per lowering site and
-      ;; DUP_NTH every local reuse; re-running template-value would manufacture
-      ;; a distinct *vm.Func for each reference.
-      (fn-template-const? (f-of l) nid) true
+      ;; replayable scalar constant. With more than one use, materialize it
+      ;; once per lowering site and DUP_NTH every local reuse; re-running
+      ;; template-value would manufacture a distinct *vm.Func per reference.
+      (and (> uc 1) (ir/fn-literal-const? nid (f-of l))) true
+      ;; A single use creates it once either way. Body-emit it too, except in a
+      ;; block that ends in :branch-if: there the pinned value would sit under
+      ;; the test and reach the two successors at different depths.
+      (and (ir/fn-literal-const? nid (f-of l))
+           (not (ends-in-branch-if? (f-of l) (ir/block-of nid (f-of l))))) true
       (> uc 1) false
       :else
       ;; uc == 1 already → bitset has exactly one user-id. Pull it via

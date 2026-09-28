@@ -1131,15 +1131,10 @@
         locals-map (current-locals-flat ctx)
         all-caps   (vec (sort-by (fn [sym] (get locals-map sym))
                           (keys locals-map)))
-        ;; Separate cheap (function-scoped) from non-cheap captures.
-        ;; Cheap ops can be re-emitted at any use site; they never need
-        ;; block-arg threading across block edges.
-        non-cheap-caps (vec (remove (fn [sym]
-                                      (let [o (ir/op (get locals-map sym) f)]
-                                        ;; :load-var excluded — var roots are mutable; a set!
-                                        ;; between the load and a later use would let a re-emitted
-                                        ;; rt.LookupVar read the new value, so it must stay threaded.
-                                        (and (ir/op-cheap-load? o) (not= o :load-var))))
+        ;; Separate captures that can be re-emitted at any use site from
+        ;; those that must reach the branches as block args (see
+        ;; ir/reemittable-at-use?: var loads and fn literals are threaded).
+        non-cheap-caps (vec (remove (fn [sym] (ir/reemittable-at-use? (get locals-map sym) f))
                                     all-caps))
         ;; Create blocks for then, else, join.
         then-blk  (ir/add-block f)
@@ -1257,10 +1252,7 @@
         ;; Cheap-load captures (LoadArg/Var/Const/LoadClosed) don't need
         ;; block-arg threading in the loop header — the lowerer re-emits them
         ;; at use site as function-scoped locals.
-        non-cheap-body-caps (vec (remove (fn [sym]
-                                           (let [o (ir/op (lookup-local ctx sym) f)]
-                                             ;; :load-var excluded — mutable var root must stay threaded (P1).
-                                             (and (ir/op-cheap-load? o) (not= o :load-var))))
+        non-cheap-body-caps (vec (remove (fn [sym] (ir/reemittable-at-use? (lookup-local ctx sym) f))
                                          body-caps))
         n-non-cheap-caps    (count non-cheap-body-caps)
         ;; Total header param count = n-slots (loop vars) + n-non-cheap-caps.
