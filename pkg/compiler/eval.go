@@ -89,37 +89,101 @@ func ReadString(s string) (vm.Value, error) {
 }
 
 // ReadDataString reads the first form of s with data semantics (see
-// NewLispDataReader). ReadAllDataString reads every top-level form the same
-// way; EOF at a form boundary stops cleanly, EOF mid-form is an error.
+// NewLispDataReader); an input with no form is an error. ReadAllDataString
+// reads every top-level form the same way; EOF at a form boundary stops
+// cleanly, EOF mid-form is an error. Both read only the built-in tags.
 func ReadDataString(s string) (vm.Value, error) {
-	reader := NewLispDataReader(strings.NewReader(s), "<read-string>")
-	return reader.ReadSkipNoValue()
+	return readDataString(s, nil, nil)
 }
 
 func ReadAllDataString(s string) ([]vm.Value, error) {
-	reader := NewLispDataReader(strings.NewReader(s), "<read-all-string>")
+	return readAllDataString(s, nil)
+}
+
+// readDataString reads the first form of s, resolving tags through resolver
+// (nil: only the built-in tags). When eof is non-nil an input with no form
+// reads as *eof; otherwise it is an error, as EOF inside a form always is.
+func readDataString(s string, resolver taggedDataReaderResolver, eof *vm.Value) (vm.Value, error) {
+	reader := newDataReaderWithResolvers(strings.NewReader(s), "<read-string>", nil, resolver)
+	form, found, err := readDataForm(reader)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if found {
+		return form, nil
+	}
+	if eof != nil {
+		return *eof, nil
+	}
+	return vm.NIL, NewReaderError(reader, "EOF while reading")
+}
+
+func readAllDataString(s string, resolver taggedDataReaderResolver) ([]vm.Value, error) {
+	reader := newDataReaderWithResolvers(strings.NewReader(s), "<read-all-string>", nil, resolver)
 	forms := []vm.Value{}
 	for {
-		// Same boundary handling as read-all-string: clean EOF at a form
-		// boundary ends the read; EOF mid-form is an error.
+		form, found, err := readDataForm(reader)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return forms, nil
+		}
+		forms = append(forms, form)
+	}
+}
+
+// readDataForm reads the next form, skipping comments and #_ discards. found
+// is false when the input ends at a form boundary; EOF inside a form is an
+// error. Same boundary handling as read-all-string.
+func readDataForm(reader *LispReader) (form vm.Value, found bool, err error) {
+	for {
 		_, err := reader.eatWhitespace()
 		if err != nil {
 			if errors.IsCausedBy(err, io.EOF) {
-				return forms, nil
+				return vm.NIL, false, nil
 			}
-			return nil, err
+			return vm.NIL, false, err
 		}
 		if err := reader.unread(); err != nil {
-			return nil, err
+			return vm.NIL, false, err
 		}
 		form, err := reader.Read()
 		if err != nil {
-			return nil, err
+			return vm.NIL, false, err
 		}
 		if form.Type() != vm.VoidType {
-			forms = append(forms, form)
+			return form, true, nil
 		}
 	}
+}
+
+// fnDataReaderResolver hands every tag the reader meets to (fn tag form), run
+// in ec. The fn holds the whole policy, so every tag counts as handled and a
+// nil result is an ordinary value. It never consults *data-readers*, so no
+// raw entry there (such as #go) applies.
+func fnDataReaderResolver(ec *vm.ExecContext, fn vm.Fn) taggedDataReaderResolver {
+	return &dataReaderPolicy{
+		resolve: func(tag vm.Symbol, form vm.Value) (vm.Value, bool, error) {
+			out, err := ec.Invoke(fn, []vm.Value{tag, form})
+			return out, true, err
+		},
+		rawEntry: func(string) (*RawDataReader, error) { return nil, nil },
+	}
+}
+
+// dataReaderResolverArg reads the optional resolver argument vs[1] of the
+// read-data-string natives: absent or nil leaves tag resolution to the
+// reader's built-in tags.
+func dataReaderResolverArg(name string, ec *vm.ExecContext, vs []vm.Value) (taggedDataReaderResolver, error) {
+	if len(vs) < 2 || vs[1] == vm.NIL {
+		return nil, nil
+	}
+	fn, ok := vs[1].(vm.Fn)
+	if !ok {
+		return nil, fmt.Errorf("%s: resolver must be a function, got %s", name, vs[1].Type().Name())
+	}
+	return fnDataReaderResolver(ec, fn), nil
 }
 
 func evalInit() {
@@ -259,26 +323,43 @@ func postCoreInit() {
 
 	// read-data-string / read-all-data-string: Clojure data-reading semantics
 	// for clojure.edn (metadata attached, real sets, discards splice nothing).
-	readDataStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("read-data-string: wrong number of arguments %d (expected 1)", len(vs))
+	// (read-data-string s) reads only the built-in tags and rejects an input
+	// with no form; (read-data-string s resolver) hands every tag to
+	// (resolver tag form) in the caller's context; (read-data-string s
+	// resolver eof) reads an input with no form as eof. The option policy
+	// (:readers, :default, :eof) lives in clojure.edn/read-string.
+	readDataStringFn := vm.NewArityNativeFn("read-data-string", 1, true, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("read-data-string: wrong number of arguments %d (expected 1 to 3)", len(vs))
 		}
 		s, ok := vs[0].(vm.String)
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-data-string: expected String, got %T", vs[0])
 		}
-		return ReadDataString(string(s))
+		resolver, err := dataReaderResolverArg("read-data-string", ec, vs)
+		if err != nil {
+			return vm.NIL, err
+		}
+		var eof *vm.Value
+		if len(vs) == 3 {
+			eof = &vs[2]
+		}
+		return readDataString(string(s), resolver, eof)
 	})
 	coreNS.LookupOrAdd(vm.Symbol("read-data-string")).(*vm.Var).SetRoot(readDataStringFn)
-	readAllDataStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("read-all-data-string: wrong number of arguments %d (expected 1)", len(vs))
+	readAllDataStringFn := vm.NewArityNativeFn("read-all-data-string", 1, true, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) > 2 {
+			return vm.NIL, fmt.Errorf("read-all-data-string: wrong number of arguments %d (expected 1 or 2)", len(vs))
 		}
 		s, ok := vs[0].(vm.String)
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-all-data-string: expected String, got %T", vs[0])
 		}
-		forms, err := ReadAllDataString(string(s))
+		resolver, err := dataReaderResolverArg("read-all-data-string", ec, vs)
+		if err != nil {
+			return vm.NIL, err
+		}
+		forms, err := readAllDataString(string(s), resolver)
 		if err != nil {
 			return vm.NIL, err
 		}
