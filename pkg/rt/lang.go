@@ -9350,6 +9350,43 @@ func CoreIsInst(vs ...vm.Value) (vm.Value, error) {
 	return vm.Boolean(ok), nil
 }
 
+// CoreReadBuiltinTagged reads the built-in tagged literals, #inst and #uuid,
+// from their string form. It returns nil for any other tag, so the reader's
+// tag policy (clojure.core/-read-tagged) decides what happens next.
+//
+//lg:native
+//lg:name -read-builtin-tagged
+func CoreReadBuiltinTagged(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("-read-builtin-tagged expects 2 args, got %d", len(vs))
+	}
+	tag, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, nil
+	}
+	switch tag {
+	case "uuid":
+		s, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("#uuid requires a string, got %s", vs[1].Type().Name())
+		}
+		if u := vm.ParseUUID(string(s)); u != nil {
+			return u, nil
+		}
+		return vm.NIL, fmt.Errorf("invalid UUID string: %s", s)
+	case "inst":
+		s, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("#inst requires a string, got %s", vs[1].Type().Name())
+		}
+		if i := vm.ParseInstant(string(s)); i != nil {
+			return i, nil
+		}
+		return vm.NIL, fmt.Errorf("invalid #inst literal: %s", s)
+	}
+	return vm.NIL, nil
+}
+
 //lg:native
 //lg:name parse-uuid
 func CoreParseUUID(vs ...vm.Value) (vm.Value, error) {

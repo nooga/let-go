@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-21
+last-verified: 2026-09-29
 authoritative-for:
   - custom-data-readers
   - raw-go-reader
@@ -9,8 +9,11 @@ authoritative-for:
 # Custom data readers and raw Go fragments
 
 let-go supports Clojure-style custom tagged literals through
-`clojure.core/*data-readers*`. It also provides a built-in raw `#go{...}`
-reader for tools and tests that need readable Go source fragments.
+`clojure.core/*data-readers*`, which is empty by default as in Clojure, with
+`#inst` and `#uuid` in `default-data-readers`. A native raw `#go{...}` reader for
+tools and tests that need readable Go source fragments is installed by importing
+the Go package `pkg/gofragments`; the `lg` CLI imports it unless built with
+`-tags lg_no_gofragments`.
 
 ## Register a data reader from let-go
 
@@ -39,13 +42,40 @@ Dynamic registrations are honored by `read-string`, `read-all-string`, and
 are compiled. A registration must exist before its tagged literal is read; a
 registration nested in the same unread form cannot affect that form.
 
-let-go does not yet discover classpath `data_readers.clj` files and does not
-implement `*default-data-reader-fn*`. An unregistered tag read without an
-explicit Go registry retains let-go's legacy behavior of returning its payload.
+let-go does not yet discover classpath `data_readers.clj` files.
 Explicit registry entries and dynamic `*data-readers*` entries take precedence
-over built-in `#uuid` and `#inst` handlers and the default raw `#go` handler.
+over `default-data-readers`, which holds `#inst` and `#uuid`. Rebinding
+`*data-readers*` leaves `default-data-readers` in place.
+
+## Tags nothing registers
+
+A tag that neither `*data-readers*` nor `default-data-readers` handles goes to
+`*default-data-reader-fn*`, called with the tag symbol
+and the form. When that is nil, or returns nil, reading the tag throws
+`No reader function for tag <tag>`, as in Clojure.
+
+`tagged-literal` builds the usual default: a value that keeps the tag and the
+form, answers `:tag` and `:form`, compares by value, and prints back as the
+literal it came from.
+
+```clojure
+(binding [*default-data-reader-fn* tagged-literal]
+  (let [t (read-string "#app/unknown [1 2]")]
+    [(tagged-literal? t) (:tag t) (:form t) (pr-str t)]))
+;; => [true app/unknown [1 2] "#app/unknown [1 2]"]
+```
+
+The resolution order lives in `clojure.core/-read-tagged`, in `core.lg`: the
+Go reader reads the tag and the form, and hands them to it.
 
 ## Raw `#go{...}` fragments
+
+Importing `pkg/gofragments` adds a `go` entry to the root of `*data-readers*`
+(`import _ "github.com/nooga/let-go/pkg/gofragments"`); the `lg` CLI imports it
+unless built with `-tags lg_no_gofragments`, and an embedding program opts in. The entry's value is a native raw reader, so it
+consumes the payload text itself instead of a read form. It is an ordinary
+entry: binding `*data-readers*` to a map without `go` drops it, and extending
+the map with `assoc` keeps it.
 
 `#go` consumes a balanced brace-delimited payload and returns its body as a
 string, excluding the outer braces:
@@ -109,5 +139,4 @@ payload safely. Return an error wrapping `io.EOF` for truncated input so
 callers can tell incomplete input from a malformed payload.
 
 `NewLispReaderWithTaggedReaders` installs the same registry for callers that use
-the reader directly. With an explicit registry installed, an unknown custom tag
-is an error rather than a legacy best-effort read.
+the reader directly. An explicit registry is consulted before `*data-readers*`.

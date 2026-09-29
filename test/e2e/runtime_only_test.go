@@ -139,6 +139,16 @@ func TestRuntimeOnly(t *testing.T) {
 		}
 	})
 
+	t.Run("tagged-literal loads its namespace from the bundle", func(t *testing.T) {
+		lgb := compileLGB(t, `(when-not *compiling-aot*
+  (let [t (tagged-literal 'app/x [1 2])]
+    (prn t (tagged-literal? t))))`)
+		code, out := run(t, lgb)
+		if code != 0 || strings.TrimSpace(out) != "#app/x [1 2] true" {
+			t.Fatalf("want exit 0 with output #app/x [1 2] true, got %d:\n%s", code, out)
+		}
+	})
+
 	t.Run("publishes command-line args", func(t *testing.T) {
 		lgb := compileLGB(t, `(prn *command-line-args*)`)
 		code, out := run(t, lgb, "one", "two")

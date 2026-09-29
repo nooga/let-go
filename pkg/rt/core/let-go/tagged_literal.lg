@@ -1,0 +1,24 @@
+;; let-go.tagged-literal — the TaggedLiteral value behind clojure.core/tagged-literal.
+;;
+;; Required on the first call to tagged-literal or tagged-literal?. The bundle
+;; decodes it only then, so core init does not pay for a record and its
+;; print-method that few programs ever build.
+(ns let-go.tagged-literal
+  (:refer-clojure :exclude [tagged-literal?]))
+
+(defrecord TaggedLiteral [tag form])
+
+(defmethod print-method TaggedLiteral [t w]
+  (.WriteString w "#")
+  (.WriteString w (str (:tag t)))
+  (.WriteString w " ")
+  (pr-on (:form t) w))
+
+(defn make [tag form]
+  (when-not (symbol? tag)
+    (throw (ex-info (str "tagged-literal: tag must be a symbol, got " (pr-str tag))
+                    {:fn :tagged-literal :type (type tag) :value tag})))
+  (->TaggedLiteral tag form))
+
+(defn tagged-literal? [x]
+  (instance? TaggedLiteral x))
