@@ -40,11 +40,11 @@
     (is (inst? (read-string "#inst \"2024-01-01T00:00:00Z\"")))
     (binding [*data-readers* {'test/readme (fn [value] [:readme value])}]
       (is (= [:readme {:x 1}]
-             (read-string "#test/readme {:x 1}"))))
-    (is (unsupported? "*default-data-reader-fn*")))
-  (testing "unregistered tags retain legacy payload behavior"
-    (is (= {:x 1} (read-string "#test/unknown {:x 1}")))
-    (is (not (tagged-literal? (read-string "#test/unknown {:x 1}"))))))
+             (read-string "#test/readme {:x 1}")))))
+  (testing "an unregistered tag throws unless *default-data-reader-fn* handles it"
+    (is (unsupported? "(read-string \"#test/unknown {:x 1}\")"))
+    (is (tagged-literal? (binding [*default-data-reader-fn* tagged-literal]
+                           (read-string "#test/unknown {:x 1}"))))))
 
 (defprotocol ReadmeLimitationProtocol
   (readme-value [this]))

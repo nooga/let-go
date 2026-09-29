@@ -52,7 +52,7 @@ func TestTaggedReaderRegistryRejectsDuplicateAndUnknownTags(t *testing.T) {
 		t.Fatalf("duplicate registration error = %v", err)
 	}
 	reader := NewLispReaderWithTaggedReaders(strings.NewReader("#missing 1"), "probe.lg", registry)
-	if _, err := reader.Read(); err == nil || !strings.Contains(err.Error(), "unknown tagged literal #missing") {
+	if _, err := reader.Read(); err == nil || !strings.Contains(err.Error(), "No reader function for tag missing") {
 		t.Fatalf("unknown tag error = %v", err)
 	}
 }
@@ -269,8 +269,10 @@ func TestCompilerTaggedReadersDoNotLeakBetweenCompilers(t *testing.T) {
 	if err != nil || got != vm.Keyword("explicit") {
 		t.Fatalf("explicit compiler result = %v, err = %v", got, err)
 	}
+	// Without the registry the tag is unknown, so reading it fails; a leaked
+	// registry would return :explicit instead.
 	got, err = compileWithTaggedReaders(t, nil, `(read-string "#scoped 1")`)
-	if err != nil || got != vm.Int(1) {
+	if err == nil || !strings.Contains(err.Error(), "No reader function for tag scoped") {
 		t.Fatalf("default compiler result = %v, err = %v; explicit registry leaked", got, err)
 	}
 	got, err = compileWithTaggedReaders(t, registry, `(eval '(read-string "#scoped 2"))`)
@@ -278,7 +280,7 @@ func TestCompilerTaggedReadersDoNotLeakBetweenCompilers(t *testing.T) {
 		t.Fatalf("explicit compiler eval result = %v, err = %v", got, err)
 	}
 	got, err = compileWithTaggedReaders(t, nil, `(eval '(read-string "#scoped 2"))`)
-	if err != nil || got != vm.Int(2) {
+	if err == nil || !strings.Contains(err.Error(), "No reader function for tag scoped") {
 		t.Fatalf("default compiler eval result = %v, err = %v; explicit registry leaked", got, err)
 	}
 }
@@ -337,14 +339,10 @@ func TestCompilerTaggedReadersAreConcurrentEvaluationLocal(t *testing.T) {
 	}
 }
 
-func TestLegacyReaderKeepsUnknownTagBestEffortBehavior(t *testing.T) {
+func TestReaderRejectsAnUnknownTag(t *testing.T) {
 	reader := NewLispReader(strings.NewReader("#probe 42"), "probe.lg")
-	got, err := reader.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != vm.Int(42) {
-		t.Fatalf("legacy unknown tag result = %v, want 42", got)
+	if _, err := reader.Read(); err == nil || !strings.Contains(err.Error(), "No reader function for tag probe") {
+		t.Fatalf("unknown tag error = %v", err)
 	}
 }
 
@@ -385,14 +383,31 @@ if ready {
 	}
 }
 
-func TestRawGoReaderIsAvailableByDefault(t *testing.T) {
-	reader := NewLispReader(strings.NewReader(`#go{if ready { return "}" }}`), "probe.lg")
-	got, err := reader.Read()
+// withGoDataReader installs #go into *data-readers* for one test, as importing
+// pkg/gofragments does, and restores the previous root afterwards.
+func withGoDataReader(t *testing.T) {
+	t.Helper()
+	v := rt.NS(rt.NameCoreNS).Lookup(vm.Symbol("*data-readers*")).(*vm.Var)
+	old := v.Root()
+	if err := InstallDataReader("go", GoRawDataReader()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { v.SetRoot(old) })
+}
+
+// #go is not built in: it reads only once a *data-readers* entry installs it.
+func TestRawGoReaderReadsOnceInstalled(t *testing.T) {
+	const src = `#go{if ready { return "}" }}`
+	if got, err := NewLispReader(strings.NewReader(src), "probe.lg").Read(); err == nil && got == vm.String(`if ready { return "}" }`) {
+		t.Fatal("#go read as a raw fragment without an installed reader")
+	}
+	withGoDataReader(t)
+	got, err := NewLispReader(strings.NewReader(src), "probe.lg").Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != vm.String(`if ready { return "}" }`) {
-		t.Fatalf("default #go result = %q", got)
+		t.Fatalf("installed #go result = %q", got)
 	}
 }
 
@@ -570,6 +585,7 @@ func TestRawGoReaderReportsEveryTruncatedPrefixAsIncomplete(t *testing.T) {
 // strings, rune literals, and comments can hold delimiters the counter would
 // otherwise treat as Lisp structure.
 func TestSkippedConditionalDispatchesNestedRawTags(t *testing.T) {
+	withGoDataReader(t)
 	cases := map[string]string{
 		"nested raw string":   "#?(:clj [#go{s := `))`}] :default 7) 8",
 		"nested rune literal": "#?(:clj [#go{r := ')'}] :default 7) 8",
@@ -577,7 +593,7 @@ func TestSkippedConditionalDispatchesNestedRawTags(t *testing.T) {
 		"nested in map, rune": "#?(:clj {:k #go{r := '}'}} :default 7) 8",
 	}
 	readers := map[string]func(string) *LispReader{
-		"builtin": func(src string) *LispReader {
+		"data-readers entry": func(src string) *LispReader {
 			return NewLispReader(strings.NewReader(src), "probe.lg")
 		},
 		"registered": func(src string) *LispReader {

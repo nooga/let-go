@@ -35,9 +35,12 @@ with no known failures, compile skips, panic skips, or runtime skips.
 | `syscall`            | direct Linux syscalls (mount, unshare, mknod, prctl, capset, seccomp, AppArmor)                                                                                                               |
 | `pods`               | Babashka pods over JSON / EDN / transit                                                                                                                                                       |
 
-The reader supports built-in `#uuid`, `#inst`, and raw `#go{...}` literals plus
+The reader supports `#uuid` and `#inst` through `default-data-readers` plus
 custom data readers registered as symbol-to-function entries in the dynamic
-`*data-readers*` map. Unregistered tags retain let-go's legacy payload behavior.
+`*data-readers*` map, with `*default-data-reader-fn*` for any other tag. `lg`
+also reads raw `#go{...}` fragments, a `*data-readers*` entry that importing the
+Go package `pkg/gofragments` installs (left out with `-tags lg_no_gofragments`). As in
+Clojure, a tag that nothing handles throws `No reader function for tag`.
 See [Custom data readers](custom-data-readers.md).
 
 ## Not implemented
@@ -45,7 +48,6 @@ See [Custom data readers](custom-data-readers.md).
 - **STM coordination**: `ref`/`dosync`/`alter`/`commute` are atom-backed compatibility aliases, not coordinated STM
 - **Asynchronous agents**: `agent`/`send`/`send-off` are synchronous atom-backed compatibility aliases
 - **Chunked sequences**: lazy seqs are unchunked
-- **Default tagged-literal fallback**: `*default-data-reader-fn*` is not implemented
 - **Java-style `deftype` method bodies and host interfaces**: protocol implementations work; JVM host methods on `deftype` do not. `reify` accepts `Object` method overrides: `toString` is wired into the value's string representation (`str`, `pr-str`, `println`); `hashCode`/`equals` are accepted and ignored (hash/equality stay identity-based)
 - **Spec** (no `clojure.spec`)
 - **`subseq` / `rsubseq`**: sorted collections work (`sorted-map`, `sorted-set`, `rseq`); range queries don't
