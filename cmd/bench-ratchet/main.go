@@ -110,12 +110,16 @@ const (
 	irCompilePackage = "github.com/nooga/let-go/pkg/ir"
 	irCompileFilter  = "^BenchmarkIRCompile$"
 
-	// Startup cost: decoding the precompiled core bundle and running its
-	// main chunk — exactly what `lg -e nil` does minus process spawn. This
-	// is the guard for startup regressions (the per-instruction source-map /
-	// local-var realloc churn that doubled cold-start). Its B/op and
-	// allocs/op are deterministic and machine-independent, so the ratchet
-	// catches a reintroduction even when ns/op is noisy.
+	// Startup cost: the compiler's bundle-boot path — decode the precompiled
+	// core bundle, run clojure.core, the lg baseline and the hybrid
+	// namespaces, and mark the rest needs-load — exactly what `lg -e nil`
+	// does minus process spawn. Decode covers every bundled chunk, so growth
+	// in a lazily loaded namespace still moves B/op: a real process pays that
+	// decode too. This is the guard for startup regressions (the
+	// per-instruction source-map / local-var realloc churn that doubled
+	// cold-start). Its B/op and allocs/op are deterministic and
+	// machine-independent, so the ratchet catches a reintroduction even when
+	// ns/op is noisy.
 	initPackage = "github.com/nooga/let-go/pkg/compiler"
 	initFilter  = "^BenchmarkInitFromLGB$"
 )
