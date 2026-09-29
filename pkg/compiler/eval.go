@@ -341,10 +341,18 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, nil
 		}
+		// The loaded code runs in the caller's namespace, and *ns* is restored
+		// when it returns, as in Clojure: an in-ns inside the string holds for
+		// the rest of that string only. NewCompiler sets the *ns* root, so the
+		// root is what gets restored here; a caller's thread binding of *ns* is
+		// read for compilation but never written into the root.
+		ns := ec.Deref(rt.CurrentNS).(*vm.Namespace)
+		prevRoot := rt.CurrentNS.Root()
+		defer rt.CurrentNS.SetRoot(prevRoot)
 		// Per-call transient compiler, like Eval: constants the loaded code
 		// introduces (e.g. regex literals) die with its chunks instead of
 		// rooting the process-global pool on every call.
-		c := NewTransientCompiler(consts, rt.NS(rt.NameCoreNS))
+		c := NewTransientCompiler(consts, ns)
 		c.SetTaggedReaders(taggedReadersFromExecContext(ec))
 		c.setDataReaderResolver(execContextDataReaderResolver(ec))
 		c.setExecContext(ec)
