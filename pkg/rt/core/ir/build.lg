@@ -219,13 +219,8 @@
   "The form a metadata-bearing collection value stands for:
    (with-meta coll meta), as the bytecode compiler's compileAggregateWithMeta
    compiles it. The metadata map is compiled, so ^{:a (+ 1 1)} [1] carries
-   {:a 2} and a local used only in the metadata is a use. A data-read bare type
-   hint is stored as the symbol itself ({:tag long}); it is quoted so it stays a
-   symbol, as quoteTagHint does."
-  (let [m (meta form)]
-    (list 'clojure.core/with-meta
-          (with-meta form nil)
-          (if (symbol? (:tag m)) (assoc m :tag (list 'quote (:tag m))) m))))
+   {:a 2} and a local used only in the metadata is a use."
+  (list 'clojure.core/with-meta (with-meta form nil) (forms/meta-source (meta form))))
 
 (defn captures-of [form known-locals]
   "Return the SET of symbols `form` references that are bound in

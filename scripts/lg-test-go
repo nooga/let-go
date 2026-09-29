@@ -16,6 +16,8 @@
 
 ;; Names of every test definition anywhere in an expanded form, not only where
 ;; discovery extracts them, so a definition under `when` and friends is seen.
+;; Callers pass the form through ir.forms/source-form, so map and set literals
+;; are collections here rather than compiler records.
 (defn all-test-names [form]
   (cond
     (and (seq? form) (= 'quote (first form))) []
@@ -62,7 +64,7 @@
                                     (test-bodies (ir.passes.pipeline/expand-all form))))
                              forms)))
         defined (binding [*file* fixture]
-                  (vec (mapcat (fn [form] (all-test-names (ir.passes.pipeline/expand-all form))) forms)))]
+                  (vec (mapcat (fn [form] (all-test-names (ir.forms/source-form (ir.passes.pipeline/expand-all form)))) forms)))]
     (eval '(ns user))
     [tests defined]))
 (def analysis (analyze forms))

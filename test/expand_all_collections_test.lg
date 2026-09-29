@@ -102,3 +102,20 @@
     (is (= {:a #{1}} (eval-expanded ''{:a #{1}}))))
   (testing "empty collections stay empty"
     (is (= [{} #{}] (eval-expanded '[{} #{}])))))
+
+;; Metadata a collection carries is part of its value; source-form keeps it as
+;; ir.build does, compiling the metadata map and quoting a bare :tag symbol.
+(defmacro ^:private meta-colls []
+  [(with-meta #{1} {:flag :set})
+   (with-meta {:k 1} {:flag :map})
+   (with-meta [1] {:flag :vector})])
+
+(deftest source-form-preserves-collection-metadata
+  (testing "collections a macro returns keep their metadata"
+    (is (= [{:flag :set} {:flag :map} {:flag :vector}]
+           (map meta (eval-expanded '(meta-colls))))))
+  (testing "a metadata map is compiled"
+    (is (= {:a 2} (meta (eval-expanded
+                          (list 'let '[v 1] (with-meta '#{v} {:a '(inc v)})))))))
+  (testing "a bare :tag symbol stays a symbol"
+    (is (= 'long (:tag (meta (eval-expanded (with-meta '[1] {:tag 'long}))))))))
