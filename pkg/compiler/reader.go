@@ -1556,14 +1556,14 @@ func skipReaderForm(r *LispReader) error {
 				}
 				tag.WriteRune(cc)
 			}
-			rawReader, raw, builtin, err := r.lookupRawTaggedReader(tag.String())
+			rawReader, raw, braceOnly, err := r.lookupRawTaggedReader(tag.String())
 			if err != nil {
 				return taggedLiteralError(r, tag.String(), err)
 			}
-			if raw && builtin {
-				// The built-in #go claims only a {-delimited payload here. Anything
-				// else is skipped as an ordinary tagged form, so a dead branch never
-				// fails on a payload it would not have read.
+			if raw && braceOnly {
+				// A brace-only raw reader (#go) claims only a {-delimited payload
+				// here. Anything else is skipped as an ordinary tagged form, so a
+				// dead branch never fails on a payload it would not have read.
 				next, err := r.eatWhitespace()
 				if err != nil {
 					return nil
@@ -1749,66 +1749,23 @@ func taggedLiteralError(r *LispReader, tag string, err error) error {
 	return NewReaderError(r, message).Wrap(err)
 }
 
-type builtinTaggedLiteral uint8
-
-const (
-	builtinTaggedLiteralNone builtinTaggedLiteral = iota
-	builtinTaggedLiteralUUID
-	builtinTaggedLiteralInstant
-)
-
-func classifyBuiltinTaggedLiteral(tag string) builtinTaggedLiteral {
-	switch tag {
-	case "uuid":
-		return builtinTaggedLiteralUUID
-	case "inst":
-		return builtinTaggedLiteralInstant
-	default:
-		return builtinTaggedLiteralNone
-	}
-}
-
-func (r *LispReader) resolveCustomTaggedReader(tag string) (taggedReader, bool, error) {
-	if registered, ok := r.taggedReaders.lookup(tag); ok {
-		return registered, true, nil
-	}
-	if r.dataReaderResolver != nil {
-		reader, ok, err := r.dataReaderResolver(tag, true)
-		if err != nil {
-			return taggedReader{}, false, err
-		}
-		if ok {
-			return taggedReader{data: reader}, true, nil
-		}
-	}
-	if registered, ok := defaultTaggedReader(tag); ok {
-		return registered, true, nil
-	}
-	return taggedReader{}, false, nil
-}
-
-// lookupRawTaggedReader reports the raw reader that owns tag while skipping,
-// whether it is the built-in default rather than an explicit registration, and
-// any error resolving *data-readers*. The read path treats a malformed
-// *data-readers* as fatal, so the skip path reports it too.
-func (r *LispReader) lookupRawTaggedReader(tag string) (reader TaggedRawReader, raw, builtin bool, err error) {
+// lookupRawTaggedReader reports the raw reader that owns tag: an explicit Go
+// registration, else a raw *data-readers* entry such as the default #go. A raw
+// reader consumes source text, so this runs before the form is read, on both
+// the read and the skip path. braceOnly is the entry's skip rule. A malformed
+// *data-readers* is reported, as the read path treats it as fatal.
+func (r *LispReader) lookupRawTaggedReader(tag string) (reader TaggedRawReader, raw, braceOnly bool, err error) {
 	if registered, ok := r.taggedReaders.lookup(tag); ok {
 		return registered.raw, registered.raw != nil, false, nil
 	}
-	registered, ok := defaultTaggedReader(tag)
-	if !ok || registered.raw == nil {
+	if r.dataReaderResolver == nil {
 		return nil, false, false, nil
 	}
-	if r.dataReaderResolver != nil {
-		_, present, err := r.dataReaderResolver(tag, false)
-		if err != nil {
-			return nil, false, false, err
-		}
-		if present {
-			return nil, false, false, nil
-		}
+	entry, err := r.dataReaderResolver.rawEntry(tag)
+	if err != nil || entry == nil {
+		return nil, false, false, err
 	}
-	return registered.raw, true, true, nil
+	return entry.read, true, entry.braceOnly, nil
 }
 
 func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
@@ -1817,65 +1774,49 @@ func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "reading tagged literal tag").Wrap(err)
 	}
 	tagStr := tag.String()
-	builtin := classifyBuiltinTaggedLiteral(tagStr)
-
-	registered, found, err := r.resolveCustomTaggedReader(tagStr)
+	// A raw reader consumes source text, so it is found before the form is
+	// read: an explicit registration, else a raw *data-readers* entry.
+	raw, _, _, err := r.lookupRawTaggedReader(tagStr)
 	if err != nil {
 		return vm.NIL, taggedLiteralError(r, tagStr, err)
 	}
-	if !found && builtin == builtinTaggedLiteralNone && r.taggedReaders != nil {
-		return vm.NIL, NewReaderError(r, fmt.Sprintf("unknown tagged literal #%s", tagStr))
-	}
-	if registered.raw != nil {
-		value, err := registered.raw(taggedRawInput{reader: r})
+	if raw != nil {
+		value, err := raw(taggedRawInput{reader: r})
 		if err != nil {
 			return vm.NIL, taggedLiteralError(r, tagStr, err)
 		}
 		return value, nil
 	}
-
-	var val vm.Value
-	if registered.data != nil {
-		val, err = r.ReadSkipNoValue()
-	} else {
-		val, err = r.Read()
-	}
+	form, err := r.ReadSkipNoValue()
 	if err != nil {
 		return vm.NIL, taggedLiteralError(r, tagStr, err)
 	}
-	if registered.data != nil {
-		value, err := registered.data(val)
+	// An embedder's explicit Go registry comes first, then the tag policy.
+	if registered, ok := r.taggedReaders.lookup(tagStr); ok && registered.data != nil {
+		value, err := registered.data(form)
 		if err != nil {
 			return vm.NIL, taggedLiteralError(r, tagStr, err)
 		}
 		return value, nil
 	}
-
-	switch builtin {
-	case builtinTaggedLiteralUUID:
-		s, ok := val.(vm.String)
-		if !ok {
-			return vm.NIL, NewReaderError(r, fmt.Sprintf("#uuid requires a string, got %s", val.Type().Name()))
+	if r.dataReaderResolver != nil {
+		value, handled, err := r.dataReaderResolver.resolve(vm.Symbol(tagStr), form)
+		if err != nil {
+			return vm.NIL, taggedLiteralError(r, tagStr, err)
 		}
-		u := vm.ParseUUID(string(s))
-		if u == nil {
-			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid UUID string: %s", s))
+		if handled {
+			return value, nil
 		}
-		return u, nil
-	case builtinTaggedLiteralInstant:
-		s, ok := val.(vm.String)
-		if !ok {
-			return vm.NIL, NewReaderError(r, fmt.Sprintf("#inst requires a string, got %s", val.Type().Name()))
-		}
-		i := vm.ParseInstant(string(s))
-		if i == nil {
-			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid #inst literal: %s", s))
-		}
-		return i, nil
-	default:
-		// Preserve the legacy best-effort behavior when no registry is installed.
-		return val, nil
 	}
+	// No policy available: only the built-in tags read.
+	value, err := rt.CoreReadBuiltinTagged(vm.Symbol(tagStr), form)
+	if err != nil {
+		return vm.NIL, taggedLiteralError(r, tagStr, err)
+	}
+	if value == vm.NIL {
+		return vm.NIL, NewReaderError(r, fmt.Sprintf("No reader function for tag %s", tagStr))
+	}
+	return value, nil
 }
 
 func unmatchedDelimReader(ru rune) readerFunc {
