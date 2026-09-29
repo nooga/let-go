@@ -49,6 +49,7 @@ type LispReader struct {
 	column             int
 	lastCol            int
 	lastRune           rune
+	shebangChecked     bool
 	maxPercent         int
 	inShortFn          bool
 	r                  *bufio.Reader
@@ -178,7 +179,42 @@ func (r *LispReader) unread() error {
 	return err
 }
 
+// skipShebang consumes a `#!` first line, which lets an .lg file run as an
+// executable script (`#!/usr/bin/env lg`). Only the very start of the input
+// qualifies; anywhere else `#!` stays an invalid hash macro, and the data
+// reader keeps Clojure's behavior. It peeks before any rune is read: a Peek
+// between ReadRune and UnreadRune would invalidate that UnreadRune, but here
+// no rune has been read yet, and nothing is consumed unless the line is a
+// shebang.
+func (r *LispReader) skipShebang() error {
+	if r.data || r.pos != 0 {
+		return nil
+	}
+	if b, _ := r.r.Peek(2); len(b) < 2 || b[0] != '#' || b[1] != '!' {
+		return nil
+	}
+	for {
+		c, err := r.next()
+		if err == io.EOF {
+			// Like a `;` comment, the line may end the input.
+			return nil
+		}
+		if err != nil {
+			return NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		if c == '\n' || c == '\r' {
+			return nil
+		}
+	}
+}
+
 func (r *LispReader) eatWhitespace() (rune, error) {
+	if !r.shebangChecked {
+		r.shebangChecked = true
+		if err := r.skipShebang(); err != nil {
+			return -1, err
+		}
+	}
 	ch, err := r.next()
 	if err != nil {
 		return -1, NewReaderError(r, "unexpected error").Wrap(err)
