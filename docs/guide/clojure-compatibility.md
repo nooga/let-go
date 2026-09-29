@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-09-18
+last-verified: 2026-09-29
 human-verified: 2026-08-11
 ---
 
@@ -21,7 +21,7 @@ with no known failures, compile skips, panic skips, or runtime skips.
 | `clojure.string`     | full                                                                                                                                                                                          |
 | `clojure.set`        | full                                                                                                                                                                                          |
 | `clojure.walk`       | `prewalk`, `postwalk`, `keywordize-keys`, `stringify-keys`, `walk`                                                                                                                            |
-| `clojure.edn`        | `read`, `read-string`                                                                                                                                                                         |
+| `clojure.edn`        | `read-string` (with `:readers`, `:default`, `:eof` options), `read-all-string`                                                                                                                |
 | `clojure.pprint`     | `pprint`, `cl-format` (aesthetic/radix/iteration/conditional/justify directives), `print-table`                                                                                                |
 | `clojure.repl`       | `dir`, `apropos`, `doc`, `find-doc`, `source`                                                                                                                                                 |
 | `clojure.test`       | `deftest`, `is`, `testing`, `are`, fixtures, `run-tests`, `run-test-var`/`run-test` (single var)                                                                                               |
