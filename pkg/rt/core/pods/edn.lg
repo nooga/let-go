@@ -1,0 +1,34 @@
+;; pods.edn — how a babashka pod's EDN replies are read. The pod process,
+;; the bencode transport and the proxy namespaces are native (pods.go, the
+;; pods namespace); the reading policy is language and lives here, as in
+;; babashka's pods library: EDN semantics with the pod's own readers, never
+;; *data-readers*. The natives load this namespace on demand and call in
+;; through its vars.
+(ns pods.edn
+  (:require
+   [edn]))
+
+;; A reader symbol resolves as babashka resolves it: to the existing var, or
+;; else to a var interned now and bound later, once the pod's client-side
+;; code has run. An unqualified symbol names clojure.core.
+(defn -reader-var [sym]
+  (let [ns-sym (symbol (or (namespace sym) "clojure.core"))
+        name-sym (symbol (name sym))]
+    (or (ns-resolve ns-sym name-sym)
+        (intern (create-ns ns-sym) name-sym))))
+
+;; readers is the describe reply's "readers" dict: tag string to symbol
+;; string. The result is the :readers map edn/read-string takes.
+(defn -resolve-readers [readers]
+  (into {}
+        (map (fn [[tag sym]] [(symbol tag) (-reader-var (symbol sym))])
+             readers)))
+
+;; A payload that does not read is reported on *err* with the payload before
+;; the error surfaces, as babashka does.
+(defn -read-edn [readers s]
+  (try (edn/read-string {:readers readers} s)
+       (catch Throwable e
+         (binding [*out* *err*]
+           (println "Cannot read EDN: " (pr-str s)))
+         (throw e))))
