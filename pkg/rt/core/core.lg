@@ -2066,8 +2066,22 @@
 ;; --- print/read tuning dynamic vars ---
 
 ;; Extensible tagged-literal handlers. Keys are tag symbols and values are
-;; one-argument functions invoked with the normally read payload form.
+;; one-argument functions invoked with the normally read payload form, or a
+;; native raw reader that consumes the payload text itself (importing the Go
+;; package pkg/gofragments installs one for #go). Empty by default, as in
+;; Clojure; #inst and #uuid live in default-data-readers.
 (def ^:dynamic *data-readers* {})
+
+(def default-data-readers
+  "Data readers consulted after *data-readers*, as in Clojure: #inst and
+   #uuid. Rebinding *data-readers* leaves them in place."
+  {'inst (fn read-instant [form] (-read-builtin-tagged 'inst form))
+   'uuid (fn read-uuid [form] (-read-builtin-tagged 'uuid form))})
+
+;; Called with the tag symbol and the form for a tag that neither
+;; *data-readers* nor the built-in #inst/#uuid handles. When it is nil, or
+;; returns nil, reading the tag throws "No reader function for tag".
+(def ^:dynamic *default-data-reader-fn* nil)
 
 ;; Print tuning vars are compatibility stubs; writers do not honor them yet.
 (def ^:dynamic *print-level* nil)
@@ -2089,11 +2103,6 @@
 ;; &form — code that branches on &env's value will differ from Clojure.
 (def &env nil)
 (def &form nil)
-
-;; tagged-literal? — let-go has no TaggedLiteral type yet, so no value
-;; is ever a tagged literal. Returning false unconditionally matches
-;; how Clojure treats anything that didn't go through (tagged-literal …).
-(defn tagged-literal? [_] false)
 
 ;; ->AssertionError (not AssertionError.) so syntax-quote qualifies it to
 ;; core/->AssertionError: hygienic against caller shadowing, and the dotted
@@ -3034,6 +3043,57 @@
         (pr-on (val e) w))
       (recur (next es) false)))
   (.WriteString w "}"))
+
+;; --- tagged literals ---
+
+;; TaggedLiteral itself lives in let-go.tagged-literal, loaded on the first call
+;; here: no tagged literal can exist before that namespace loads.
+(defn- tagged-literal-fn [name]
+  (require 'let-go.tagged-literal)
+  (deref (find-var (symbol "let-go.tagged-literal" name))))
+
+(defn tagged-literal
+  "The tagged literal #tag form."
+  [tag form]
+  ((tagged-literal-fn "make") tag form))
+
+(defn tagged-literal?
+  "True if x was built by tagged-literal."
+  [x]
+  ((tagged-literal-fn "tagged-literal?") x))
+
+(defn- callable-data-reader [f tag map-name]
+  (if (ifn? f)
+    f
+    (throw (ex-info (str map-name " entry for " tag " must be callable, got " (pr-str (type f)))
+                    {:fn :read-tagged :type (type f) :value f}))))
+
+(defn- data-reader-fn [entry tag map-name]
+  (callable-data-reader (if (var? entry) (deref entry) entry) tag map-name))
+
+(defn- data-reader-entry [readers tag map-name]
+  (if (map? readers)
+    (let [entry (get readers tag)]
+      (if (nil? entry) nil (data-reader-fn entry tag map-name)))
+    (if (nil? readers)
+      nil
+      (throw (ex-info (str map-name " must be a map, got " (pr-str (type readers)))
+                      {:fn :read-tagged :type (type readers) :value readers})))))
+
+(defn -read-tagged
+  "The reader's policy for a tagged literal #tag form, as Clojure's: a
+   *data-readers* entry, else a default-data-readers entry (#inst, #uuid),
+   else *default-data-reader-fn*. A tag none of them handles throws."
+  [tag form]
+  (if-let [f (or (data-reader-entry *data-readers* tag "*data-readers*")
+                 (data-reader-entry default-data-readers tag "default-data-readers"))]
+    (f form)
+    (let [default-fn *default-data-reader-fn*
+          value (when default-fn (default-fn tag form))]
+      (if (some? value)
+        value
+        (throw (ex-info (str "No reader function for tag " tag)
+                        {:fn :read-tagged :type (type tag) :value tag}))))))
 
 ;; --- Array macros ---
 

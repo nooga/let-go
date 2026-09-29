@@ -2507,6 +2507,17 @@ func _adapt_CoreIsInst(vs []vm.Value) (vm.Value, error) {
 	return r, nil
 }
 
+func _adapt_CoreReadBuiltinTagged(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReadBuiltinTagged(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
 func _adapt_CoreParseUUID(vs []vm.Value) (vm.Value, error) {
 	if len(vs) < 0 {
 		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
@@ -3049,6 +3060,7 @@ func RegisterGeneratedPrimitives() {
 			"pop!":                     {GoIdent: "CorePopBang", LgName: "pop!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
 			"uuid?":                    {GoIdent: "CoreIsUUID", LgName: "uuid?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
 			"inst?":                    {GoIdent: "CoreIsInst", LgName: "inst?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"-read-builtin-tagged":     {GoIdent: "CoreReadBuiltinTagged", LgName: "-read-builtin-tagged", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
 			"parse-uuid":               {GoIdent: "CoreParseUUID", LgName: "parse-uuid", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
 			"==":                       {GoIdent: "CoreNumericEq", LgName: "==", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
 			"name":                     {GoIdent: "Name", LgName: "name", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "string", NeedsError: true},
@@ -3527,32 +3539,34 @@ func RegisterGeneratedPrimitives() {
 		defGeneratedPrimitive(ns, "clojure.core", "uuid?", fn225)
 		fn226, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsInst(vs) })
 		defGeneratedPrimitive(ns, "clojure.core", "inst?", fn226)
-		fn227, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreParseUUID(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "parse-uuid", fn227)
-		fn228, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreNumericEq(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "==", fn228)
-		fn229, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Name(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "name", fn229)
-		fn230, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Subs(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "subs", fn230)
-		fn231, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Nth(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "nth", fn231)
-		fn232, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Deref(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "deref", fn232)
-		fn233, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Str(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "str", fn233)
-		fn234, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Get(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "get", fn234)
-		fn235, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Conj(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "conj", fn235)
+		fn227, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReadBuiltinTagged(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "-read-builtin-tagged", fn227)
+		fn228, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreParseUUID(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "parse-uuid", fn228)
+		fn229, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreNumericEq(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "==", fn229)
+		fn230, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Name(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "name", fn230)
+		fn231, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Subs(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "subs", fn231)
+		fn232, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Nth(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "nth", fn232)
+		fn233, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Deref(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "deref", fn233)
+		fn234, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Str(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "str", fn234)
+		fn235, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Get(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "get", fn235)
+		fn236, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Conj(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "conj", fn236)
 		defGeneratedPrimitive(ns, "clojure.core", "reduce", vm.NewCtxNativeFn("reduce", _adapt_Reduce))
-		fn237, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Namespace(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "namespace", fn237)
+		fn238, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Namespace(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "namespace", fn238)
 		defGeneratedPrimitive(ns, "clojure.core", "push-binding!", vm.NewCtxNativeFn("push-binding!", _adapt_PushBinding))
 		defGeneratedPrimitive(ns, "clojure.core", "pop-binding!", vm.NewCtxNativeFn("pop-binding!", _adapt_PopBinding))
 		defGeneratedPrimitive(ns, "clojure.core", "some", vm.NewCtxNativeFn("some", _adapt_Some))
-		fn241, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Int(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "int", fn241)
+		fn242, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Int(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "int", fn242)
 	}
 	RegisterNativeModule(&NativeModule{
 		GoPkg:     "github.com/nooga/let-go/pkg/rt",

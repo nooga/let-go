@@ -1,0 +1,24 @@
+;; lgbgen:skip
+;; let-go.tagged-literal — the TaggedLiteral value behind clojure.core/tagged-literal.
+;;
+;; Loaded from source on the first call to tagged-literal or tagged-literal?,
+;; and kept out of the precompiled bundle: a record and its print-method cost
+;; about 11 KB on every core init, for a value few programs ever build.
+(ns let-go.tagged-literal)
+
+(defrecord TaggedLiteral [tag form])
+
+(defmethod print-method TaggedLiteral [t w]
+  (.WriteString w "#")
+  (.WriteString w (str (:tag t)))
+  (.WriteString w " ")
+  (pr-on (:form t) w))
+
+(defn make [tag form]
+  (when-not (symbol? tag)
+    (throw (ex-info (str "tagged-literal: tag must be a symbol, got " (pr-str tag))
+                    {:fn :tagged-literal :type (type tag) :value tag})))
+  (->TaggedLiteral tag form))
+
+(defn tagged-literal? [x]
+  (instance? TaggedLiteral x))
