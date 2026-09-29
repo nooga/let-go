@@ -67,6 +67,11 @@ func PrecompiledTypeScope() *vm.TypeScope {
 // per-call transient compiler; named rather than inline so the const-pool
 // regression test can probe this exact path.
 func evalInNSChild(code string, ns *vm.Namespace) (vm.Value, error) {
+	// The compiler switches *ns* to ns for the duration of the compile;
+	// the caller's namespace is restored so that loading a pod from inside
+	// a source file leaves that file's *ns* where it was.
+	prev := rt.CurrentNS.Root()
+	defer rt.CurrentNS.SetRoot(prev)
 	c := NewTransientCompiler(consts, ns)
 	_, out, err := c.CompileMultiple(strings.NewReader(code))
 	return out, err
@@ -513,11 +518,6 @@ func postCoreInit() {
 		return vm.NIL, nil
 	})
 	coreNS.LookupOrAdd(vm.Symbol("set-read-bb!")).(*vm.Var).SetRoot(setReadBbFn)
-
-	// Wire up EDN reader for pod support
-	rt.SetReadEDN(func(s string) (vm.Value, error) {
-		return ReadString(s)
-	})
 
 	// Wire up namespace-aware eval for pod client-side code.
 	rt.SetEvalInNS(evalInNSChild)
