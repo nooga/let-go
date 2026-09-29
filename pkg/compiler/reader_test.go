@@ -236,9 +236,11 @@ func TestReaderShebang(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, vm.EmptyList.Cons(vm.Int(2)).Cons(vm.Int(1)).Cons(vm.Symbol("+")), o)
 
+	// A shebang line ends at end of input like a `;` comment does, so a file
+	// holding only `#!...` with no trailing newline reads as no forms.
 	r = NewLispReader(strings.NewReader("#!shebang"), "<reader>")
 	_, err = r.ReadSkipNoValue()
-	assert.Error(t, err, "shebang without newline is EOF mid-comment")
+	assert.True(t, IsErrorEOF(err), "shebang without newline ends the input cleanly, got %v", err)
 
 	for _, p := range []string{"(+ 1 2)\n#!/not-first\n", "  #!/indented\n(+ 1 2)"} {
 		r := NewLispReader(strings.NewReader(p), "<reader>")
@@ -264,6 +266,16 @@ func TestReaderShebang(t *testing.T) {
 	o, err = r.ReadSkipNoValue()
 	assert.NoError(t, err)
 	assert.Equal(t, vm.Int(3), o)
+}
+
+func TestEvalShebangOnlyFile(t *testing.T) {
+	// sh, python3, node, ruby, perl and clojure all run a file that is only a
+	// shebang line, with or without a trailing newline, as an empty script.
+	for _, src := range []string{"#!/usr/bin/env lg", "#!/usr/bin/env lg\n"} {
+		v, err := Eval(src)
+		assert.NoError(t, err, "input %q", src)
+		assert.Equal(t, vm.NIL, v, "input %q", src)
+	}
 }
 
 func TestReaderSkipsLeadingNoValueForms(t *testing.T) {

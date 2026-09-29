@@ -195,6 +195,10 @@ func (r *LispReader) skipShebang() error {
 	}
 	for {
 		c, err := r.next()
+		if err == io.EOF {
+			// Like a `;` comment, the line may end the input.
+			return nil
+		}
 		if err != nil {
 			return NewReaderError(r, "unexpected error").Wrap(err)
 		}
