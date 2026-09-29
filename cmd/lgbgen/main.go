@@ -526,18 +526,24 @@ func main() {
 	}
 	nsChunks := make(map[string]*vm.CodeChunk)
 	bundleOrder := make([]string, 0, len(embeddedNS)) // non-ir: encoded into the .lgb
+	// nsConstRanges records the pool range each namespace's compilation
+	// appended: the encoder proves from it which namespaces a process can
+	// leave undecoded until required (bytecode.EncodeBundleDeferrable).
+	nsConstRanges := make(map[string]bytecode.ConstRange)
 
 	compileNS := func(ns embeddedNamespace) {
 		coreNS := rt.NS(rt.NameCoreNS)
 		c := compiler.NewCompiler(consts, coreNS)
 		c.SetSource("<embedded:" + ns.name + ">")
 
+		lo := len(consts.Values())
 		chunk, _, err := c.CompileMultiple(strings.NewReader(ns.src))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s compilation failed: %v\n", ns.name, err)
 			os.Exit(1)
 		}
 		nsChunks[ns.name] = chunk
+		nsConstRanges[ns.name] = bytecode.ConstRange{Lo: lo, Hi: len(consts.Values())}
 		// Self-hosting (3b): if a Go-lowered native override is queued for this
 		// namespace (only under -tags gogen_ir), apply it now so the lowering
 		// pipeline runs on the NATIVE passes instead of the bytecode we just
@@ -596,14 +602,14 @@ func main() {
 		return
 	}
 	if targetBoth {
-		writeBundle(outPath, consts, nsChunks, bundleOrder, compress)
+		writeBundle(outPath, consts, nsChunks, bundleOrder, nsConstRanges, compress)
 		compileToolsForLowering()
 		runGoTarget(goOutDir, codeDir)
 		return
 	}
 
 	// Bytecode mode: write .lgb bundle (ir.* excluded).
-	writeBundle(outPath, consts, nsChunks, bundleOrder, compress)
+	writeBundle(outPath, consts, nsChunks, bundleOrder, nsConstRanges, compress)
 }
 
 // writeBundle encodes the compiled namespace chunks into the .lgb bundle at
@@ -611,12 +617,12 @@ func main() {
 // target against the same in-memory state). Encoding happens in a temporary
 // file in the destination directory; the previous bundle remains intact unless
 // encoding, flushing, and closing all succeed.
-func writeBundle(outPath string, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string, compress bool) {
+func writeBundle(outPath string, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string, nsConstRanges map[string]bytecode.ConstRange, compress bool) {
 	// The core bundle is decoded on every process start, so the decode path
 	// inflates it transparently; compressing here trims the embedded bytes from
 	// every binary (see the FlagCompressed decode path in pkg/bytecode).
 	size, err := writeFileAtomically(outPath, func(w io.Writer) error {
-		return bytecode.EncodeBundleOrderedCompressed(w, consts, nsChunks, nsOrder, compress)
+		return bytecode.EncodeBundleDeferrable(w, consts, nsChunks, nsOrder, nsConstRanges, compress)
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", outPath, err)

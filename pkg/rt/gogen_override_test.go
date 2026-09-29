@@ -68,3 +68,31 @@ func TestRegisterGoOverridesAppliesImmediatelyWhenNSExists(t *testing.T) {
 		t.Fatalf("nothing should be queued when applied immediately")
 	}
 }
+
+// A lazily loaded bundled namespace is registered (DefNSBare) long before
+// its chunk runs. Overrides registered in that window must wait for the
+// load: applied to the bare namespace, they would be redefined by the
+// chunk's own defs over its clojure.core refers, with a warning per name.
+func TestRegisterGoOverridesQueuesWhileNSNeedsLoad(t *testing.T) {
+	const ns = "test-gogen-needs-load"
+	delete(pendingGoOverrides, ns)
+	bare := DefNSBare(ns)
+	MarkNSNeedsLoad(ns)
+	t.Cleanup(func() { ClearNSNeedsLoad(ns) })
+	fn := fnVal(t)
+
+	RegisterGoOverrides(ns, map[string]vm.Value{"qux": fn})
+
+	if got := bare.LookupLocal(vm.Symbol("qux")); got != nil {
+		t.Fatalf("override was applied to a namespace whose chunk has not run")
+	}
+	if pendingGoOverrides[ns]["qux"] != fn {
+		t.Fatalf("override should stay queued until the namespace loads")
+	}
+
+	ClearNSNeedsLoad(ns)
+	ApplyGoOverrides(bare)
+	if got := bare.LookupLocal(vm.Symbol("qux")); got == nil || got.Deref() != fn {
+		t.Fatalf("ApplyGoOverrides after the load did not Def the queued override")
+	}
+}

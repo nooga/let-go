@@ -98,7 +98,7 @@ func main() {
 	fmt.Printf("phases_ms decode=%.3f core_replay=%.3f rest=%.3f total=%.3f\n",
 		decodeMS, coreMS, totalMS-decodeMS-coreMS, totalMS)
 	fmt.Printf("bundle_bytes=%d ns_chunks=%d core_vars=%d total_vars=%d nses=%d\n",
-		len(rt.CoreCompiledLGB), len(unit.NSChunks), coreVars, totalVars, len(nses))
+		len(rt.CoreCompiledLGB), len(unit.NSOrder), coreVars, totalVars, len(nses))
 
 	if *decodes > 0 || *replays > 0 {
 		stop := startProfile(*cpuprofile)

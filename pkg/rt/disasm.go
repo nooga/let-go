@@ -34,21 +34,7 @@ import (
 // inline args occupy in a code chunk. Must stay in sync with the
 // emission logic in pkg/compiler/compiler.go and the dispatch in
 // pkg/vm/vm.go's Frame.Run.
-func opcodeStride(op int32) int {
-	switch op & 0xff {
-	case vm.OP_TRY_PUSH:
-		return 3 // catchOffset, finallyOffset
-	case vm.OP_RECUR:
-		return 4 // offset, argc, ignore
-	case vm.OP_LOAD_ARG, vm.OP_BRANCH_TRUE, vm.OP_BRANCH_FALSE, vm.OP_JUMP,
-		vm.OP_POP_N, vm.OP_DUP_NTH, vm.OP_INVOKE, vm.OP_LOAD_CLOSEDOVER,
-		vm.OP_RECUR_FN, vm.OP_MAKE_MULTI_ARITY, vm.OP_TAIL_CALL,
-		vm.OP_LOAD_CONST, vm.OP_LOAD_VAR, vm.OP_FINALLY_END:
-		return 2 // one int32 arg
-	default:
-		return 1
-	}
-}
+func opcodeStride(op int32) int { return vm.OpcodeStride(op) }
 
 // opcodeMnemonic returns the bare mnemonic ("ADD" etc.) without the
 // sp prefix that vm.OpcodeToString includes.
@@ -186,7 +172,14 @@ func installDisasmNS() {
 		// want all reachable consts.
 		all := consts.AllValues()
 		out := make([]vm.Value, len(all))
-		copy(out, all)
+		for i, v := range all {
+			if v == nil {
+				// A function constant of a bundled namespace not required yet
+				// (bytecode.DecodeBundle) has no value until it is.
+				v = vm.NIL
+			}
+			out[i] = v
+		}
 		return vm.NewArrayVector(out), nil
 	})
 
