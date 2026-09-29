@@ -42,8 +42,9 @@ type CoreLoadOptions struct {
 // baseline namespaces (let-go.core, let-go.types) which are auto-refer'd
 // everywhere but never explicitly required, then optionally the hybrid
 // namespace chunks. Non-core/non-baseline namespaces are marked NeedsLoad so a
-// configured loader picks them up on (require ...). Returns the decoded unit so
-// a caller can read its const pool or chunk map.
+// configured loader picks them up on (require ...); their chunks are not even
+// decoded until then (unit.NSChunk). Returns the decoded unit so a caller can
+// read its const pool or materialize a namespace's chunk.
 //
 // It is the one implementation behind compiler.loadPrecompiledBundle,
 // rt.LoadCore, and rt.BootCore. Two invariants hold here:
@@ -92,8 +93,24 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 	})
 	preexisting := nativeBackedNS
 
+	// Decode only what this boot runs. A namespace left for the on-demand
+	// loader keeps its chunks undecoded until its first require
+	// (bytecode.DecodeBundle); NSChunk materializes it then. Whether a hybrid
+	// counts as run-at-boot follows EagerHybrids, so the two callers defer
+	// exactly the set they will not replay here.
+	baseline := map[string]bool{}
+	for _, name := range LgBaselineNSNames() {
+		baseline[name] = true
+	}
+	deferNS := func(name string) bool {
+		if name == NameCoreNS || baseline[name] {
+			return false
+		}
+		return !opts.EagerHybrids || !preexisting[name]
+	}
+
 	tDecode := time.Now()
-	unit, err := bytecode.DecodeToExecUnitBytes(CoreCompiledLGB, LGBVarResolver)
+	unit, err := bytecode.DecodeBundle(CoreCompiledLGB, LGBVarResolver, deferNS)
 	if err != nil {
 		return nil, fmt.Errorf("decode core bundle: %w", err)
 	}
@@ -117,9 +134,7 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 	// lg baseline namespaces depend on core's defs — run eagerly, right after.
 	// A Go-only baseline (let-go.types, predicates Def'd in Go) has no chunk;
 	// rt.runChunk does not nil-guard, so skip those here.
-	baseline := map[string]bool{}
 	for _, name := range LgBaselineNSNames() {
-		baseline[name] = true
 		if ch := unit.NSChunks[name]; ch != nil {
 			if err := runChunk(ch); err != nil {
 				return nil, fmt.Errorf("run baseline %s: %w", name, err)
@@ -127,9 +142,12 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 		}
 	}
 
-	// Everything else loads on demand.
-	for name := range unit.NSChunks {
+	// Everything else loads on demand. A deferred namespace may have had none
+	// of its var references decoded yet, so register it here rather than rely
+	// on the decode's VarRef pass having created it.
+	for _, name := range unit.NSOrder {
 		if name != NameCoreNS && !baseline[name] {
+			DefNSBare(name)
 			MarkNSNeedsLoad(name)
 		}
 	}

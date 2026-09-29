@@ -21,8 +21,19 @@ import (
 
 var pendingGoOverrides = map[string]map[string]vm.Value{}
 
+// readyNS returns the namespace only once its definitions have run. A lazily
+// loaded bundled namespace exists from startup (DefNSBare) but stays
+// NSNeedsLoad until it is required; until then it counts as not loaded, so
+// its overrides queue and the load's ApplyGoOverrides installs them.
+func readyNS(name string) *vm.Namespace {
+	if NSNeedsLoad(name) {
+		return nil
+	}
+	return LookupNS(name)
+}
+
 // RegisterGoOverrides queues a set of name → NativeFn bindings. If the
-// target namespace already exists in the registry, the defs are applied
+// target namespace is already loaded (see readyNS), the defs are applied
 // immediately (the host has already finished bundle replay); otherwise
 // they sit in pendingGoOverrides until ApplyGoOverrides drains them.
 //
@@ -39,7 +50,7 @@ func RegisterGoOverrides(nsName string, defs map[string]vm.Value) {
 	if len(defs) == 0 {
 		return
 	}
-	if ns := LookupNS(nsName); ns != nil {
+	if ns := readyNS(nsName); ns != nil {
 		for name, fn := range defs {
 			ns.Def(name, fn)
 		}
@@ -90,7 +101,7 @@ func RegisterNativeMultiFns(nsName string, names []string) {
 	if len(names) == 0 {
 		return
 	}
-	if ns := LookupNS(nsName); ns != nil {
+	if ns := readyNS(nsName); ns != nil {
 		freezeNativeMultiFns(ns, names)
 		return
 	}

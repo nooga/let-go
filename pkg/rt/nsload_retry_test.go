@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -27,17 +28,17 @@ func TestBytecodeNSLoaderReplayFailure(t *testing.T) {
 	const name = "bytecode-nsload-fixture"
 
 	prevLoader := GetNSLoader()
-	prevChunks := precompiledCoreNS
+	prevCore := precompiledCore
 	defer func() {
 		SetNSLoader(prevLoader)
-		precompiledCoreNS = prevChunks
+		precompiledCore = prevCore
 		RemoveNS(name)
 	}()
 
 	// A chunk whose replay fails: a single garbage opcode.
 	bad := vm.NewCodeChunk(vm.NewConsts())
 	bad.Append(1 << 30)
-	precompiledCoreNS = map[string]*vm.CodeChunk{name: bad}
+	precompiledCore = &bytecode.ExecUnit{NSChunks: map[string]*vm.CodeChunk{name: bad}}
 
 	// Simulate bundle decode: placeholder namespace + needs-load marker.
 	DefNSBare(name)

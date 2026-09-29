@@ -126,12 +126,18 @@ func newEncoder(w io.Writer, m *Module, liveIdx map[*vm.CodeChunk]int) *encoder 
 }
 
 // writeBody serializes everything after the header + capability section: the
-// string table, chunks, consts, NS table, and (under FlagLocalVars) the
-// per-chunk local-variable tables. Under FlagCompressed this is the byte range
+// string table, (under FlagNSRanges) the namespace ranges, chunks, consts, NS
+// table, and (under FlagLocalVars) the per-chunk local-variable tables. Under FlagCompressed this is the byte range
 // that gets deflated; uncompressed it runs inline.
 func (e *encoder) writeBody(m *Module) error {
 	if err := e.writeStringTable(); err != nil {
 		return err
+	}
+	if m.Flags&FlagNSRanges != 0 {
+		// Before the chunks: a decoder decides per chunk whether to decode it.
+		if err := e.writeNSRanges(m.NSRanges); err != nil {
+			return err
+		}
 	}
 	if err := e.writeChunks(); err != nil {
 		return err
@@ -236,6 +242,22 @@ func EncodeBundleOrdered(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm
 // body (see FlagCompressed). compress=false is byte-identical to
 // EncodeBundleOrdered.
 func EncodeBundleOrderedCompressed(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string, compress bool) error {
+	return EncodeBundleDeferrable(w, consts, nsChunks, nsOrder, nil, compress)
+}
+
+// ConstRange is the half-open const-pool index range [Lo, Hi) a namespace's
+// compilation appended: every function constant the namespace defines lives
+// there, and (values dedupe across namespaces) so may constants others share.
+type ConstRange struct{ Lo, Hi int }
+
+// EncodeBundleDeferrable is EncodeBundleOrderedCompressed plus the namespace
+// ranges section (FlagNSRanges): for each namespace in nsConstRanges it
+// checks, by walking every namespace's code, whether the namespace's function
+// chunks are reached by its code alone, and records the qualifying ones so
+// DecodeBundle can leave them undecoded until the namespace is required. A
+// namespace that does not qualify is simply omitted and decodes eagerly. With
+// nil ranges the output is byte-identical to EncodeBundleOrderedCompressed.
+func EncodeBundleDeferrable(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string, nsConstRanges map[string]ConstRange, compress bool) error {
 	b := NewModuleBuilder()
 	// Register namespace chunks in dependency order
 	for _, name := range nsOrder {
@@ -248,7 +270,13 @@ func EncodeBundleOrderedCompressed(w io.Writer, consts *vm.Consts, nsChunks map[
 	for _, v := range vals {
 		b.AddConst(v)
 	}
-	m := b.Build()
+	for name, r := range nsConstRanges {
+		b.SetNSConstRange(name, r)
+	}
+	m, err := b.BuildDeferrable()
+	if err != nil {
+		return err
+	}
 	if compress {
 		m.Flags |= FlagCompressed
 		m.Version = FormatVersion
@@ -265,6 +293,9 @@ type ModuleBuilder struct {
 	consts     []vm.Value
 	constsBase int
 	nsTable    map[string]int
+	// nsConstRange, per namespace, is the const-pool range its compilation
+	// appended (module-relative indices); input to the FlagNSRanges proof.
+	nsConstRange map[string]ConstRange
 }
 
 // NewModuleBuilder creates a new builder.
@@ -405,6 +436,31 @@ func (b *ModuleBuilder) SetNSEntry(name string, chunk *vm.CodeChunk) {
 	b.internString(name)
 	idx := b.AddChunk(chunk)
 	b.nsTable[name] = idx
+}
+
+// SetNSConstRange records the const-pool range a namespace's compilation
+// appended, so BuildDeferrable can decide whether the namespace's chunks may
+// be deferred by a decoder. Indices are relative to this module's consts.
+func (b *ModuleBuilder) SetNSConstRange(name string, r ConstRange) {
+	if b.nsConstRange == nil {
+		b.nsConstRange = make(map[string]ConstRange)
+	}
+	b.nsConstRange[name] = r
+}
+
+// BuildDeferrable is Build plus the FlagNSRanges section for the namespaces
+// registered with SetNSConstRange that prove self-contained (see nsRanges).
+func (b *ModuleBuilder) BuildDeferrable() (*Module, error) {
+	m := b.Build()
+	ranges, err := b.nsRanges()
+	if err != nil {
+		return nil, err
+	}
+	if len(ranges) > 0 {
+		m.NSRanges = ranges
+		m.Flags |= FlagNSRanges
+	}
+	return m, nil
 }
 
 // Build creates the Module.
