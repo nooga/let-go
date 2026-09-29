@@ -226,36 +226,56 @@ func (c *CodeChunk) AddLocalVar(slot int, name string) {
 // LocalVars returns the chunk's local-variable debug table (may be nil).
 func (c *CodeChunk) LocalVars() []LocalVar { return c.localVars }
 
+// OpcodeStride returns the width in words of the instruction whose opcode
+// word is op: the opcode itself plus its inline argument words. It is the
+// walker every code scan uses (Debug, the disassembler, the bundle encoder's
+// namespace reachability); a new opcode with inline arguments must be added
+// here or those scans desynchronize from the VM.
+func OpcodeStride(op int32) int {
+	switch op & 0xff {
+	case OP_TRY_PUSH:
+		return 3 // catchOffset, finallyOffset
+	case OP_RECUR:
+		return 4 // offset, argc, ignore
+	case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH,
+		OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL,
+		OP_LOAD_CONST, OP_LOAD_VAR, OP_FINALLY_END:
+		return 2 // one int32 arg
+	default:
+		return 1
+	}
+}
+
+// ReadsConst reports whether the instruction whose opcode word is op takes a
+// const-pool index as its argument word. OP_LOAD_CONST and OP_LOAD_VAR are the
+// only readers of the pool in the interpreter loop.
+func ReadsConst(op int32) bool {
+	switch op & 0xff {
+	case OP_LOAD_CONST, OP_LOAD_VAR:
+		return true
+	}
+	return false
+}
+
 func (c *CodeChunk) Debug() {
 	consts := c.consts
 	fmt.Println("code:")
 	i := 0
 	for i < len(c.code) {
 		op, _ := c.Get(i)
-		switch op & 0xff {
-		case OP_TRY_PUSH:
-			arg, _ := c.Get32(i + 1)
-			arg2, _ := c.Get32(i + 2)
-			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
-			i += 3
-		case OP_RECUR:
-			arg, _ := c.Get32(i + 1)
-			arg2, _ := c.Get32(i + 2)
-			arg3, _ := c.Get32(i + 3)
-			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
-			i += 4
-		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL, OP_FINALLY_END:
-			arg, _ := c.Get32(i + 1)
-			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
-			i += 2
-		case OP_LOAD_CONST, OP_LOAD_VAR:
-			arg, _ := c.Get32(i + 1)
-			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts.get(arg))
-			i += 2
-		default:
-			fmt.Println("  ", i, ":", OpcodeToString(op))
-			i++
+		stride := OpcodeStride(op)
+		args := make([]any, 0, stride+2)
+		args = append(args, "  ", i, ":", OpcodeToString(op))
+		for j := 1; j < stride; j++ {
+			arg, _ := c.Get32(i + j)
+			args = append(args, arg)
 		}
+		if ReadsConst(op) {
+			arg, _ := c.Get32(i + 1)
+			args = append(args, "<-", consts.get(arg))
+		}
+		fmt.Println(args...)
+		i += stride
 	}
 }
 

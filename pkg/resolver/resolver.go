@@ -260,7 +260,11 @@ func (r *NSResolver) loadEmbedded(name string) (*vm.Namespace, error) {
 	// Try precompiled bytecode first — unless this ns is pinned to source
 	// loading via LG_FORCE_SOURCE_NS (dev loop; see forceSourceNS).
 	if !forceSourceNS(name) {
-		if chunk := compiler.PrecompiledNSChunk(name); chunk != nil {
+		chunk, err := compiler.PrecompiledNSChunk(name)
+		if err != nil {
+			return nil, err
+		}
+		if chunk != nil {
 			return r.execPrecompiled(name, chunk)
 		}
 	}

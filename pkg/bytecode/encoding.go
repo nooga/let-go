@@ -138,6 +138,13 @@ func (r *Reader) HasBackingData() bool { return r.data != nil }
 // when HasBackingData() is true and [start,end] is within already-consumed input.
 func (r *Reader) Slice(start, end int) []byte { return r.data[start:end] }
 
+// Skip discards the next n bytes without copying them out.
+func (r *Reader) Skip(n int) error {
+	discarded, err := r.r.Discard(n)
+	r.pos += discarded
+	return err
+}
+
 // ReadVarint reads an unsigned LEB128-encoded integer.
 func (r *Reader) ReadVarint() (uint64, error) {
 	var result uint64

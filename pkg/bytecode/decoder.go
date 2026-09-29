@@ -22,7 +22,11 @@ type ExecUnit struct {
 	// NSChunks maps namespace names to their main chunks (for bundles).
 	NSChunks map[string]*vm.CodeChunk
 	// NSOrder lists namespace names in chunk index order (load/dependency order).
+	// A namespace DecodeBundle deferred is listed here but absent from
+	// NSChunks until NSChunk materializes it.
 	NSOrder []string
+
+	deferred *deferredBundle
 }
 
 // Decode reads a binary module from r.
@@ -117,7 +121,7 @@ func (d *decoder) decodeToExecUnitV1(parent *vm.Consts) (*ExecUnit, error) {
 		sharedConsts = vm.NewConsts()
 	}
 
-	if err := d.readLiveChunks(sharedConsts); err != nil {
+	if err := d.readLiveChunks(sharedConsts, nil); err != nil {
 		return nil, err
 	}
 
@@ -328,6 +332,13 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 	}
 	d.strings = strings
 
+	var ranges []NSRange
+	if d.flags&FlagNSRanges != 0 {
+		if ranges, err = d.readNSRanges(); err != nil {
+			return nil, err
+		}
+	}
+
 	var sharedConsts *vm.Consts
 	if parent != nil {
 		sharedConsts = vm.NewChildConsts(parent)
@@ -335,13 +346,13 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		sharedConsts = vm.NewConsts()
 	}
 
-	if err := d.readLiveChunks(sharedConsts); err != nil {
+	if err := d.readLiveChunks(sharedConsts, ranges); err != nil {
 		return nil, err
 	}
 
 	// Apply opcode migration if the bundle's signature doesn't match the runtime.
 	if d.remapFunc != nil {
-		d.remapFunc(d.chunks)
+		d.remapFunc(d.decodedChunks())
 	}
 
 	if err := d.readConstsV2Into(sharedConsts); err != nil {
@@ -378,7 +389,13 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 			if idx >= len(d.chunks) {
 				return nil, fmt.Errorf("NS table chunk index %d out of range for %q", idx, name)
 			}
-			unit.NSChunks[name] = d.chunks[idx]
+			if ns := d.deferred.lookup(name); ns != nil {
+				if ns.MainChunk != idx {
+					return nil, fmt.Errorf("namespace range %s names main chunk %d, NS table says %d", name, ns.MainChunk, idx)
+				}
+			} else {
+				unit.NSChunks[name] = d.chunks[idx]
+			}
 			entries = append(entries, nsEntry{name, idx})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
@@ -390,14 +407,53 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 			unit.MainChunk = coreChunk
 		} else if len(entries) > 0 {
 			last := entries[len(entries)-1]
+			if last.idx != 0 && d.chunks[last.idx] == nil {
+				return nil, fmt.Errorf("the unit's main chunk (namespace %s) cannot be deferred", last.name)
+			}
 			unit.MainChunk = d.chunks[last.idx]
 		}
+	}
+	if d.deferred != nil {
+		for _, ns := range d.deferred.byChunk {
+			if _, ok := nsTable[ns.Name]; !ok {
+				return nil, fmt.Errorf("namespace range %s has no NS table entry", ns.Name)
+			}
+		}
+		d.deferred.body = d.r.data
+		d.deferred.remap = d.remapFunc
+		d.deferred.consts = sharedConsts
+		d.deferred.chunks = d.chunks
+		unit.deferred = d.deferred
 	}
 
 	if err := d.finishCompressedBody(); err != nil {
 		return nil, err
 	}
 	return unit, nil
+}
+
+// lookup is nil-receiver safe: a decode with nothing deferred has no state.
+func (b *deferredBundle) lookup(name string) *deferredNS {
+	if b == nil {
+		return nil
+	}
+	return b.ns[name]
+}
+
+// decodedChunks is d.chunks without the deferred (nil) entries, for a
+// migration remap that walks each chunk's code. It is d.chunks itself when
+// nothing was deferred.
+func (d *decoder) decodedChunks() []*vm.CodeChunk {
+	if d.deferred == nil {
+		return d.chunks
+	}
+	out := make([]*vm.CodeChunk, 0, len(d.chunks))
+	for _, ch := range d.chunks {
+		if ch != nil {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 
 // DecodeWithResolver reads a binary module, resolving var references with the given function.
@@ -454,6 +510,10 @@ type decoder struct {
 	remapFunc            func([]*vm.CodeChunk) // migration to apply after chunks are decoded, or nil
 	compressedBodySize   uint64
 	compressedBodyCloser io.Closer
+	// deferNS (DecodeBundle) picks the namespaces to leave undecoded;
+	// deferred is the state selectDeferred built for them.
+	deferNS  func(name string) bool
+	deferred *deferredBundle
 }
 
 // readModuleV1 is the frozen v1 decode path. Do not modify.
@@ -529,6 +589,13 @@ func (d *decoder) readModuleV2() (*Module, error) {
 	}
 	d.strings = strings
 
+	var ranges []NSRange
+	if d.flags&FlagNSRanges != 0 {
+		if ranges, err = d.readNSRanges(); err != nil {
+			return nil, err
+		}
+	}
+
 	chunkDatas, err := d.readChunks()
 	if err != nil {
 		return nil, err
@@ -587,6 +654,7 @@ func (d *decoder) readModuleV2() (*Module, error) {
 		Consts:     consts,
 		ConstsBase: d.constsBase,
 		NSTable:    nsTable,
+		NSRanges:   ranges,
 	}
 	if d.flags&FlagCapabilities != 0 {
 		m.Capabilities = d.moduleCaps
@@ -662,96 +730,152 @@ func (d *decoder) readStringRef() (string, error) {
 	return d.strings[idx], nil
 }
 
-func (d *decoder) readLiveChunks(sharedConsts *vm.Consts) error {
+// readLiveChunks decodes the chunk section into live chunks. With ranges
+// (FlagNSRanges) and a DecodeBundle deferral, the records of a deferred
+// namespace are skipped instead: their offsets are noted for materialize and
+// their slots in d.chunks stay nil.
+func (d *decoder) readLiveChunks(sharedConsts *vm.Consts, ranges []NSRange) error {
 	count, err := d.r.ReadVarint()
 	if err != nil {
 		return fmt.Errorf("reading chunk count: %w", err)
 	}
+	if err := d.selectDeferred(ranges, int(count), -1); err != nil {
+		return err
+	}
 	d.chunks = make([]*vm.CodeChunk, count)
 	for i := range d.chunks {
-		ms, err := d.r.ReadVarint()
-		if err != nil {
-			return fmt.Errorf("reading max_stack: %w", err)
-		}
-
-		codeLen, err := d.r.ReadVarint()
-		if err != nil {
-			return fmt.Errorf("reading code_len: %w", err)
-		}
-		chunk := vm.NewCodeChunkWithCapacity(sharedConsts, int(codeLen))
-		for j := 0; j < int(codeLen); j++ {
-			op, err := d.r.ReadInt32()
-			if err != nil {
-				return fmt.Errorf("reading code[%d]: %w", j, err)
+		if ns := d.deferredOwnerOfChunk(i); ns != nil {
+			off := d.r.Offset()
+			switch i {
+			case ns.MainChunk:
+				ns.mainOff = off
+			case ns.ChunkLo:
+				ns.chunksOff = off
 			}
-			chunk.Append(op)
-		}
-		chunk.SetMaxStack(int(ms))
-
-		smCount, err := d.r.ReadVarint()
-		if err != nil {
-			return fmt.Errorf("reading source_map count: %w", err)
-		}
-		if smCount > 0 {
-			if d.r.HasBackingData() {
-				// Deferred path: capture the source-map section's raw bytes
-				// (zero-copy — the backing buffer stays resident) and decode them
-				// on first Lookup. Skips per-chunk entries allocation at load.
-				// Each entry is 6 varints: startIP, file(string ref), line, col,
-				// eline, ecol.
-				start := d.r.Offset()
-				for j := 0; j < int(smCount); j++ {
-					for k := 0; k < 6; k++ {
-						if _, err := d.r.ReadVarint(); err != nil {
-							return fmt.Errorf("skipping source_map entry: %w", err)
-						}
-					}
-				}
-				// Closure-free lazy map: allocates only the SourceMap struct at
-				// load (raw is a zero-copy slice of the resident bundle, strings
-				// is shared) — decoding is deferred to first Lookup.
-				raw := d.r.Slice(start, d.r.Offset())
-				chunk.SetSourceMap(vm.NewLazySourceMapRaw(raw, d.strings, int(smCount)))
-			} else {
-				chunk.ReserveSourceMap(int(smCount))
-				for j := 0; j < int(smCount); j++ {
-					startIP, err := d.r.ReadVarint()
-					if err != nil {
-						return err
-					}
-					file, err := d.readStringRef()
-					if err != nil {
-						return err
-					}
-					line, err := d.r.ReadVarint()
-					if err != nil {
-						return err
-					}
-					col, err := d.r.ReadVarint()
-					if err != nil {
-						return err
-					}
-					eline, err := d.r.ReadVarint()
-					if err != nil {
-						return err
-					}
-					ecol, err := d.r.ReadVarint()
-					if err != nil {
-						return err
-					}
-					chunk.AddSourceInfoAt(int(startIP), vm.SourceInfo{
-						File:      file,
-						Line:      int(line),
-						Column:    int(col),
-						EndLine:   int(eline),
-						EndColumn: int(ecol),
-					})
-				}
+			if err := d.skipChunkRecord(); err != nil {
+				return fmt.Errorf("skipping deferred chunk %d: %w", i, err)
 			}
+			continue
+		}
+		chunk, err := d.readChunkRecord(sharedConsts)
+		if err != nil {
+			return err
 		}
 		d.chunks[i] = chunk
 	}
 	return nil
+}
+
+// skipChunkRecord advances past one chunk record without decoding it.
+func (d *decoder) skipChunkRecord() error {
+	if _, err := d.r.ReadVarint(); err != nil {
+		return fmt.Errorf("reading max_stack: %w", err)
+	}
+	codeLen, err := d.r.ReadVarint()
+	if err != nil {
+		return fmt.Errorf("reading code_len: %w", err)
+	}
+	if err := d.r.Skip(int(codeLen) * 4); err != nil {
+		return fmt.Errorf("skipping code: %w", err)
+	}
+	smCount, err := d.r.ReadVarint()
+	if err != nil {
+		return fmt.Errorf("reading source_map count: %w", err)
+	}
+	for j := 0; j < int(smCount)*6; j++ {
+		if _, err := d.r.ReadVarint(); err != nil {
+			return fmt.Errorf("skipping source_map entry: %w", err)
+		}
+	}
+	return nil
+}
+
+// readChunkRecord decodes one chunk record: max_stack, code, source map.
+func (d *decoder) readChunkRecord(sharedConsts *vm.Consts) (*vm.CodeChunk, error) {
+	ms, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading max_stack: %w", err)
+	}
+
+	codeLen, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading code_len: %w", err)
+	}
+	chunk := vm.NewCodeChunkWithCapacity(sharedConsts, int(codeLen))
+	for j := 0; j < int(codeLen); j++ {
+		op, err := d.r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("reading code[%d]: %w", j, err)
+		}
+		chunk.Append(op)
+	}
+	chunk.SetMaxStack(int(ms))
+	if d.stats != nil {
+		d.stats.addChunk(int(codeLen))
+	}
+
+	smCount, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading source_map count: %w", err)
+	}
+	if smCount > 0 {
+		if d.r.HasBackingData() {
+			// Deferred path: capture the source-map section's raw bytes
+			// (zero-copy — the backing buffer stays resident) and decode them
+			// on first Lookup. Skips per-chunk entries allocation at load.
+			// Each entry is 6 varints: startIP, file(string ref), line, col,
+			// eline, ecol.
+			start := d.r.Offset()
+			for j := 0; j < int(smCount); j++ {
+				for k := 0; k < 6; k++ {
+					if _, err := d.r.ReadVarint(); err != nil {
+						return nil, fmt.Errorf("skipping source_map entry: %w", err)
+					}
+				}
+			}
+			// Closure-free lazy map: allocates only the SourceMap struct at
+			// load (raw is a zero-copy slice of the resident bundle, strings
+			// is shared) — decoding is deferred to first Lookup.
+			raw := d.r.Slice(start, d.r.Offset())
+			chunk.SetSourceMap(vm.NewLazySourceMapRaw(raw, d.strings, int(smCount)))
+		} else {
+			chunk.ReserveSourceMap(int(smCount))
+			for j := 0; j < int(smCount); j++ {
+				startIP, err := d.r.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				file, err := d.readStringRef()
+				if err != nil {
+					return nil, err
+				}
+				line, err := d.r.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				col, err := d.r.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				eline, err := d.r.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				ecol, err := d.r.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				chunk.AddSourceInfoAt(int(startIP), vm.SourceInfo{
+					File:      file,
+					Line:      int(line),
+					Column:    int(col),
+					EndLine:   int(eline),
+					EndColumn: int(ecol),
+				})
+			}
+		}
+	}
+	return chunk, nil
 }
 
 func (d *decoder) readChunks() ([]*ChunkData, error) {
@@ -927,28 +1051,67 @@ func (d *decoder) readLocalVarTables(numChunks int) ([][]LocalVarEntry, error) {
 
 // readLocalVarTablesInto reads the optional per-chunk local-variable debug
 // section directly into the live chunks, avoiding the temporary [][]LocalVarEntry
-// allocation used by the generic Module decode path.
+// allocation used by the generic Module decode path. A deferred chunk's table
+// is skipped and its offset noted for materialize.
 func (d *decoder) readLocalVarTablesInto(chunks []*vm.CodeChunk) error {
 	for i, chunk := range chunks {
-		count, err := d.r.ReadVarint()
-		if err != nil {
-			return fmt.Errorf("reading local var count[%d]: %w", i, err)
-		}
-		if count == 0 {
+		if chunk == nil {
+			if ns := d.deferredOwnerOfChunk(i); ns != nil {
+				off := d.r.Offset()
+				switch i {
+				case ns.MainChunk:
+					ns.mainLVOff = off
+				case ns.ChunkLo:
+					ns.lvOff = off
+				}
+			}
+			if err := d.skipLocalVarTable(); err != nil {
+				return fmt.Errorf("skipping local var table[%d]: %w", i, err)
+			}
 			continue
 		}
-		chunk.ReserveLocalVars(int(count))
-		for j := 0; j < int(count); j++ {
-			slot, err := d.r.ReadVarint()
-			if err != nil {
-				return fmt.Errorf("reading local var slot[%d][%d]: %w", i, j, err)
-			}
-			name, err := d.readStringRef()
-			if err != nil {
-				return fmt.Errorf("reading local var name[%d][%d]: %w", i, j, err)
-			}
-			chunk.AddLocalVar(int(slot), name)
+		if err := d.readLocalVarTableInto(chunk, i); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// skipLocalVarTable advances past one chunk's local-variable table.
+func (d *decoder) skipLocalVarTable() error {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return err
+	}
+	for j := 0; j < int(count)*2; j++ {
+		if _, err := d.r.ReadVarint(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readLocalVarTableInto reads one chunk's local-variable table (index i, for
+// error messages) into chunk.
+func (d *decoder) readLocalVarTableInto(chunk *vm.CodeChunk, i int) error {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return fmt.Errorf("reading local var count[%d]: %w", i, err)
+	}
+	if count == 0 {
+		return nil
+	}
+	chunk.ReserveLocalVars(int(count))
+	for j := 0; j < int(count); j++ {
+		slot, err := d.r.ReadVarint()
+		if err != nil {
+			return fmt.Errorf("reading local var slot[%d][%d]: %w", i, j, err)
+		}
+		name, err := d.readStringRef()
+		if err != nil {
+			return fmt.Errorf("reading local var name[%d][%d]: %w", i, j, err)
+		}
+		chunk.AddLocalVar(int(slot), name)
 	}
 	return nil
 }
@@ -1330,7 +1493,24 @@ func (d *decoder) readConstsV2Into(shared *vm.Consts) error {
 		d.constsBase = int(base)
 	}
 	shared.Reserve(int(count))
+	if d.deferred != nil {
+		if n := len(d.deferred.runs); n > 0 && d.deferred.runs[n-1].Hi > int(count) {
+			return fmt.Errorf("namespace range const run ends at %d, past %d consts", d.deferred.runs[n-1].Hi, count)
+		}
+	}
 	for i := 0; i < int(count); i++ {
+		if run := d.deferredRunAt(i); run != nil {
+			// A constant only a deferred namespace reaches keeps an empty
+			// slot; materialize re-reads the run from its first record.
+			if i == run.Lo {
+				run.ns.runOffs[run.idx] = d.r.Offset()
+			}
+			if err := d.skipValueV2(); err != nil {
+				return fmt.Errorf("skipping deferred const[%d]: %w", i, err)
+			}
+			shared.AppendDeferred()
+			continue
+		}
 		v, err := d.readValueV2()
 		if err != nil {
 			return fmt.Errorf("reading const[%d]: %w", i, err)
@@ -1338,6 +1518,141 @@ func (d *decoder) readConstsV2Into(shared *vm.Consts) error {
 		shared.Append(v)
 	}
 	return nil
+}
+
+// skipValueV2 advances past one encoded value without building it: no
+// allocation and no var resolution. It mirrors readValueV2Tagged's layout per
+// tag; TestSkipValueV2MatchesRead pins the two together over every constant
+// of the core bundle.
+func (d *decoder) skipValueV2() error {
+	tagByte, err := d.r.ReadByte()
+	if err != nil {
+		return fmt.Errorf("reading tag: %w", err)
+	}
+	tagID := tagByte & tagIDMask
+	tagVer := tagByte >> tagVersionShift
+	if tagVer != 0 && (tagID != TagIDMap || tagVer != 1) && isKnownTagID(tagID) {
+		return fmt.Errorf("unsupported tag version %d for tag ID 0x%02x", tagVer, tagID)
+	}
+	varints := func(n int) error {
+		for j := 0; j < n; j++ {
+			if _, err := d.r.ReadVarint(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	values := func(n uint64) error {
+		for j := uint64(0); j < n; j++ {
+			if err := d.skipValueV2(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	switch tagID {
+	case TagIDNil, TagIDTrue, TagIDFalse, TagIDVoid, TagIDEmptyList:
+		return nil
+	case TagIDInt:
+		_, err := d.r.ReadSvarint()
+		return err
+	case TagIDFloat:
+		return d.r.Skip(8)
+	case TagIDString, TagIDKeyword, TagIDSymbol, TagIDUUID, TagIDInstant, TagIDRegex:
+		return varints(1)
+	case TagIDChar:
+		return d.r.Skip(4)
+	case TagIDBigInt:
+		if _, err := d.r.ReadByte(); err != nil {
+			return err
+		}
+		magLen, err := d.r.ReadVarint()
+		if err != nil {
+			return err
+		}
+		return d.r.Skip(int(magLen))
+	case TagIDFunc:
+		if err := varints(2); err != nil { // chunk index, arity
+			return err
+		}
+		if _, err := d.r.ReadByte(); err != nil { // variadic
+			return err
+		}
+		return varints(1) // name
+	case TagIDVarRef:
+		return varints(2)
+	case TagIDList, TagIDVector, TagIDSet:
+		count, err := d.r.ReadVarint()
+		if err != nil {
+			return err
+		}
+		return values(count)
+	case TagIDMap:
+		count, err := d.r.ReadVarint()
+		if err != nil {
+			return err
+		}
+		return values(count * 2) // pairs: a map or def metadata
+	case TagIDRecordType:
+		if err := varints(1); err != nil { // name
+			return err
+		}
+		fieldCount, err := d.r.ReadVarint()
+		if err != nil {
+			return err
+		}
+		return varints(int(fieldCount))
+	case TagIDRecord:
+		if err := varints(1); err != nil { // type name
+			return err
+		}
+		fieldCount, err := d.r.ReadVarint()
+		if err != nil {
+			return err
+		}
+		if err := varints(int(fieldCount)); err != nil { // field keywords
+			return err
+		}
+		if err := values(fieldCount); err != nil { // fixed field values
+			return err
+		}
+		extra, err := d.r.ReadVarint() // extra map
+		if err != nil {
+			return err
+		}
+		return values(extra * 2)
+	case TagIDAtom:
+		return d.skipValueV2()
+	default:
+		return fmt.Errorf("unknown tag ID 0x%02x", tagID)
+	}
+}
+
+// readFuncRest reads the fields of a function constant that follow its chunk
+// index and builds the function over the chunk, which must be decoded.
+func (d *decoder) readFuncRest(chunkIdx int) (vm.Value, error) {
+	if chunkIdx >= len(d.chunks) {
+		return nil, fmt.Errorf("chunk index %d out of range (have %d)", chunkIdx, len(d.chunks))
+	}
+	arity, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, err
+	}
+	variadic, err := d.r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	name, err := d.readStringRef()
+	if err != nil {
+		return nil, err
+	}
+	chunk := d.chunks[chunkIdx]
+	if chunk == nil {
+		return nil, fmt.Errorf("function %q uses chunk %d of a deferred namespace from outside it", name, chunkIdx)
+	}
+	fn := vm.MakeFunc(int(arity), variadic != 0, chunk)
+	fn.SetName(name)
+	return fn, nil
 }
 
 func isKnownTagID(id byte) bool {
@@ -1357,7 +1672,11 @@ func (d *decoder) readValueV2() (vm.Value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading tag: %w", err)
 	}
+	return d.readValueV2Tagged(tagByte)
+}
 
+// readValueV2Tagged decodes the value whose tag byte was already read.
+func (d *decoder) readValueV2Tagged(tagByte byte) (vm.Value, error) {
 	tagID := tagByte & tagIDMask
 	tagVer := tagByte >> tagVersionShift
 	if d.stats != nil {
@@ -1456,24 +1775,7 @@ func (d *decoder) readValueV2() (vm.Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		if int(chunkIdx) >= len(d.chunks) {
-			return nil, fmt.Errorf("chunk index %d out of range (have %d)", chunkIdx, len(d.chunks))
-		}
-		arity, err := d.r.ReadVarint()
-		if err != nil {
-			return nil, err
-		}
-		variadic, err := d.r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		name, err := d.readStringRef()
-		if err != nil {
-			return nil, err
-		}
-		fn := vm.MakeFunc(int(arity), variadic != 0, d.chunks[chunkIdx])
-		fn.SetName(name)
-		return fn, nil
+		return d.readFuncRest(int(chunkIdx))
 	case TagIDVarRef:
 		ns, err := d.readStringRef()
 		if err != nil {
