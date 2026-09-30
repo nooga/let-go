@@ -235,3 +235,28 @@ func TestSeqFormsCompileAsCalls(t *testing.T) {
 		t.Fatalf("seq form evaluated to %v, want 42", v)
 	}
 }
+
+// A seq form is realized before it is compiled, so one that never ends would
+// hang the compiler. The known-unbounded representations are refused up front,
+// and a lazy seq the compiler cannot classify hits the realization cap.
+func TestUnboundedSeqFormsAreRefused(t *testing.T) {
+	for _, src := range []string{
+		`(iterate inc 0)`,
+		`(range)`,
+		`(repeat 1)`,
+		`(cycle [1 2])`,
+	} {
+		v := mustEval(t, src)
+		_, err := compileFormStackEffect(v)
+		if err == nil {
+			t.Fatalf("compileForm(%s) succeeded, want a refusal", src)
+		}
+		if !strings.Contains(err.Error(), "unbounded") {
+			t.Fatalf("compileForm(%s) = %v, want an error naming the unbounded sequence", src, err)
+		}
+	}
+	// A finite repeat is still a call form.
+	if _, err := compileFormStackEffect(mustEval(t, `(repeat 2 1)`)); err != nil {
+		t.Fatalf("compileForm((repeat 2 1)): %v", err)
+	}
+}

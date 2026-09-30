@@ -565,6 +565,24 @@ func (c *Context) compileError(msg string) *CompileError {
 	return NewCompileError(msg)
 }
 
+// maxFormSeqLen bounds how many elements compileForm realizes from a non-list
+// seq. Lazy sequences have no cheap finiteness test, so this is the backstop
+// for the ones isUnboundedSeq cannot recognize, such as a cycle.
+const maxFormSeqLen = 1 << 20
+
+// isUnboundedSeq reports whether o is a seq known to never end: iterate, a
+// zero-argument range, or a one-argument repeat. Realizing one of these in
+// compileForm would never return.
+func isUnboundedSeq(o vm.Value) bool {
+	switch v := o.(type) {
+	case *vm.Iterate, *vm.InfiniteRange:
+		return true
+	case *vm.Repeat:
+		return v.RawCount() < 0
+	}
+	return false
+}
+
 func (c *Context) compileForm(o vm.Value) error {
 	// Track current form for error reporting
 	prevForm := c.currentForm
@@ -747,8 +765,14 @@ func (c *Context) compileForm(o vm.Value) error {
 		lst, isList := o.(*vm.List)
 		if !isList {
 			if seq, ok := o.(vm.Seq); ok {
+				if isUnboundedSeq(o) {
+					return c.compileError("can't compile an unbounded sequence as a form")
+				}
 				var vals []vm.Value
 				for s := seq; s != nil; s = s.Next() {
+					if len(vals) >= maxFormSeqLen {
+						return c.compileError(fmt.Sprintf("can't compile a sequence of more than %d elements as a form; is it unbounded?", maxFormSeqLen))
+					}
 					vals = append(vals, s.First())
 				}
 				realized, _ := vm.ListType.Box(vals)
