@@ -1,0 +1,11 @@
+;; Native lowering reads a fixture's source the way the bytecode loader does. A
+;; macro inspects its argument, so it must see the same form on both sides; a
+;; lowering driver that read the source as data instead of code would hand the
+;; macro a different form wherever the two readers differ.
+(ns examples.source-set-macro-arg)
+
+(defmacro form-kind [x]
+  (cond (set? x) :set (seq? x) :seq :else :other))
+
+(defn run ^Object []
+  [(form-kind #{1}) (form-kind {:k 1}) (form-kind [1])])

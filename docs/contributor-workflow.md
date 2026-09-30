@@ -18,10 +18,11 @@ and a green PR. Each section points at the doc that owns the detail.
 
 ```sh
 make build              # bin/lg — runs the smoke suite, then promotes build/lg
-make test               # gogen diff smoke + go test -short ./test/... (the .lg test runner)
-go test -short ./... -skip TestClojureTestSuite   # the Go suite, as CI runs it
-go test ./test/ -run TestClojureTestSuite          # jank conformance (needs the submodule)
-go test -run 'TestRunner/coll_test.lg' ./test      # one .lg test file
+make test               # full suite: diff smoke + go test -short ./test/... (the .lg runner)
+make test RUN=coll      # run specific test matching pattern (e.g. coll_test.lg)
+make test LG_TEST=quality  # fast-path: only discover and run matching .lg test files
+make test PKG=./pkg/rt  # run unit tests in a specific package
+make test SHORT=false PKG=./test/e2e RUN=TestGogenAOTDiff  # run an e2e gate directly
 make lint               # both linters: golangci-lint over Go, comment report over .lg
 make lint-go            # golangci-lint only (v2 config), the invocation CI uses
 make lint-comments      # comment report only; report-only (docs/comment-lint.md)

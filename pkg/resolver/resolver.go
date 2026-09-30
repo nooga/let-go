@@ -62,6 +62,17 @@ func PathsFromInputs(explicit, fallback string, explicitSet bool) []string {
 	return ParseSearchPaths(raw)
 }
 
+func asVector(v vm.Value) (vm.Indexed, bool) {
+	switch v := v.(type) {
+	case vm.ArrayVector:
+		return v, true
+	case vm.PersistentVector:
+		return v, true
+	default:
+		return nil, false
+	}
+}
+
 // PathsFromDepsEdn reads deps.edn in dir and returns the :paths entries.
 // Returns nil if the file doesn't exist, can't be parsed, or has no :paths.
 func PathsFromDepsEdn(dir string) []string {
@@ -82,12 +93,13 @@ func PathsFromDepsEdn(dir string) []string {
 		return nil
 	}
 	pathsVal := m.ValueAt(vm.Keyword("paths"))
-	vec, ok := pathsVal.(vm.ArrayVector)
+	vec, ok := asVector(pathsVal)
 	if !ok {
 		return nil
 	}
-	out := make([]string, 0, len(vec))
-	for _, item := range vec {
+	out := make([]string, 0, vec.RawCount())
+	for i := 0; i < vec.RawCount(); i++ {
+		item := vec.Nth(i)
 		if s, ok := item.(vm.String); ok && s != "" {
 			out = append(out, string(s))
 		}

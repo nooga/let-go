@@ -49,6 +49,7 @@ type LispReader struct {
 	column             int
 	lastCol            int
 	lastRune           rune
+	shebangChecked     bool
 	maxPercent         int
 	inShortFn          bool
 	r                  *bufio.Reader
@@ -92,6 +93,12 @@ func newLispReaderWithResolvers(r io.Reader, inputName string, registry *TaggedR
 	reader := NewLispReader(r, inputName)
 	reader.taggedReaders = registry
 	reader.dataReaderResolver = resolver
+	return reader
+}
+
+func newDataReaderWithResolvers(r io.Reader, inputName string, registry *TaggedReaderRegistry, resolver taggedDataReaderResolver) *LispReader {
+	reader := newLispReaderWithResolvers(r, inputName, registry, resolver)
+	reader.data = true
 	return reader
 }
 
@@ -172,7 +179,42 @@ func (r *LispReader) unread() error {
 	return err
 }
 
+// skipShebang consumes a `#!` first line, which lets an .lg file run as an
+// executable script (`#!/usr/bin/env lg`). Only the very start of the input
+// qualifies; anywhere else `#!` stays an invalid hash macro, and the data
+// reader keeps Clojure's behavior. It peeks before any rune is read: a Peek
+// between ReadRune and UnreadRune would invalidate that UnreadRune, but here
+// no rune has been read yet, and nothing is consumed unless the line is a
+// shebang.
+func (r *LispReader) skipShebang() error {
+	if r.data || r.pos != 0 {
+		return nil
+	}
+	if b, _ := r.r.Peek(2); len(b) < 2 || b[0] != '#' || b[1] != '!' {
+		return nil
+	}
+	for {
+		c, err := r.next()
+		if err == io.EOF {
+			// Like a `;` comment, the line may end the input.
+			return nil
+		}
+		if err != nil {
+			return NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		if c == '\n' || c == '\r' {
+			return nil
+		}
+	}
+}
+
 func (r *LispReader) eatWhitespace() (rune, error) {
+	if !r.shebangChecked {
+		r.shebangChecked = true
+		if err := r.skipShebang(); err != nil {
+			return -1, err
+		}
+	}
 	ch, err := r.next()
 	if err != nil {
 		return -1, NewReaderError(r, "unexpected error").Wrap(err)
@@ -824,11 +866,18 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 }
 
 func readSet(r *LispReader, _ rune) (vm.Value, error) {
-	startLine := r.line
-	startCol := max(
-		// -2 because '#' and '{' were consumed
-		r.column-2, 0)
-	ret := vm.EmptyList
+	// A set literal reads as a set VALUE, the way map and vector literals read
+	// as maps and vectors. It used to read as the form `(hash-set …)`, which
+	// compiled correctly but made read-string return a constructor call instead
+	// of data:
+	//
+	//	(read-string "#{1}")   ;=> (hash-set 1)   ; before
+	//	(read-string "#{1}")   ;=> #{1}           ; now, and what Clojure returns
+	//
+	// Evaluation is unchanged: compileForm's vm.SetType case emits the same
+	// hash-set invocation and compiles each element, so `#{x (f y)}` still
+	// evaluates its elements.
+	var forms []vm.Value
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -845,28 +894,19 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		if form.Type() != vm.VoidType {
-			ret = ret.Conj(form).(*vm.List)
-		}
+		// Collection readers share appendNonVoid so #?@ elements are spliced
+		// and the reader's one-shot splicing state cannot leak to the enclosing
+		// collection. Duplicate detection must run after that expansion.
+		forms = appendNonVoid(r, forms, form)
 	}
-	if r.data {
-		vals := make([]vm.Value, 0)
-		for s := ret.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-			vals = append(vals, s.First())
+
+	result := vm.EmptyPersistentSet
+	for _, form := range forms {
+		if result.Contains(form) == vm.TRUE {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("Duplicate key: %s", form))
 		}
-		for i := range vals {
-			for j := i + 1; j < len(vals); j++ {
-				if vm.ValueEquals != nil && vm.ValueEquals(vals[i], vals[j]) {
-					return vm.NIL, NewReaderError(r, "duplicate element in set literal: "+vals[i].String())
-				}
-			}
-		}
-		return vm.NewSet(vals), nil
+		result = result.Conj(form).(*vm.PersistentSet)
 	}
-	result := ret.Cons(vm.Symbol("hash-set"))
-	vm.FormSource.Set(result, vm.SourceInfo{
-		File: r.inputName, Line: startLine, Column: startCol,
-	})
 	return result, nil
 }
 
@@ -997,6 +1037,21 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
 		}
 		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-map"), vv})
+	// Sets reach syntaxQuote as real set values since set literals read as
+	// data. Without this arm they fell to the default quote branch, so
+	// `#{~x} yielded #{(unquote x)} — unquote, gensym and namespace
+	// qualification were all skipped inside a syntax-quoted set.
+	case form.Type() == vm.SetType:
+		lform := flattenSet(form)
+		uq, err := expandUnquotes(r, lform, env)
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "expanding unquotes for set")
+		}
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat*"), uq})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing unquoted set form")
+		}
+		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-set"), vv})
 	case form.Type() == vm.ListType:
 		uq, err := expandUnquotes(r, form, env)
 		if err != nil {
@@ -1028,6 +1083,21 @@ func flattenMap(form vm.Value) vm.Value {
 			continue
 		}
 		ret = append(ret, k, v)
+	}
+	return ret
+}
+
+// flattenSet is flattenMap's counterpart for sets: a set contributes its
+// elements directly, where a map contributes alternating k, v. Needed so
+// syntaxQuote can expand unquotes inside `#{...}.
+func flattenSet(form vm.Value) vm.Value {
+	sq, ok := form.(vm.Sequable)
+	if !ok {
+		return vm.ArrayVector{}
+	}
+	ret := vm.ArrayVector{}
+	for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+		ret = append(ret, s.First())
 	}
 	return ret
 }
@@ -1473,8 +1543,13 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
-	var m vm.Value = vm.EmptyPersistentMap
+	m := vm.EmptyPersistentMap
+	dataM := vm.EmptyPersistentMap
 	tagKey := vm.Keyword("tag")
+	assoc := func(k, v vm.Value) {
+		m = m.Assoc(k, v).(*vm.PersistentMap)
+		dataM = dataM.Assoc(k, v).(*vm.PersistentMap)
+	}
 	for {
 		// Unread the lookahead so r.Read() can dispatch normally.
 		if err := r.unread(); err != nil {
@@ -1491,23 +1566,23 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 				if !ok {
 					continue
 				}
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Map:
 			for k, val := range v {
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Keyword:
-			m = m.(*vm.PersistentMap).Assoc(v, vm.TRUE).(*vm.PersistentMap)
+			assoc(v, vm.TRUE)
 		case vm.Symbol:
-			// A bare-symbol tag (`^Iterable x`) is a type hint. Preserve it as
-			// :tag metadata (the IR's typeinfer/lowering passes can use it), but
-			// quote it so the (often host-class) symbol is a datum, not an
-			// evaluated var reference that won't resolve.
+			// Compiler readers emit a with-meta form, so quote the type-hint
+			// symbol to keep it data when that form is evaluated. Data readers
+			// attach the symbol itself, matching Clojure's metadata value.
 			quotedTag := vm.NewList([]vm.Value{vm.Symbol("quote"), v})
-			m = m.(*vm.PersistentMap).Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			m = m.Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			dataM = dataM.Assoc(tagKey, v).(*vm.PersistentMap)
 		case vm.String:
-			m = m.(*vm.PersistentMap).Assoc(tagKey, v).(*vm.PersistentMap)
+			assoc(tagKey, v)
 		default:
 			return vm.NIL, NewReaderError(r, "unsupported meta form")
 		}
@@ -1532,13 +1607,18 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
 	if r.data {
-		// Attach to the value where the runtime supports metadata; values
-		// without metadata support (maps, vectors) read as themselves, which
-		// is what with-meta does for them at runtime too.
+		// Attach to the value where the runtime supports metadata. Data
+		// attaches dataM, in which a bare-symbol tag stays a symbol as in
+		// Clojure; code reading emits a (with-meta ...) form, so m quotes the
+		// tag to keep it a datum when that form is evaluated.
+		//
+		// A target that cannot carry metadata (vm.Symbol is a plain string)
+		// deliberately falls through to the wrapper form below rather than
+		// reading as itself: returning the bare form would drop the metadata
+		// silently, while the wrapper keeps it for whoever consumes the data.
 		if im, ok := form.(vm.IMeta); ok {
-			return im.WithMeta(m), nil
+			return im.WithMeta(dataM), nil
 		}
-		return form, nil
 	}
 	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
 }
