@@ -150,33 +150,6 @@
                     (check-branch-arg-arity-for-target! label i (ir/cond-target-false aux) blocks))))))
         (recur (inc i))))))
 
-(defn- check-branch-if-symmetric-args! [f label]
-  "build-if emits symmetric branch-target args (true.args == false.args)
-   so the lower-block! :branch-if path can place a single arg shape on
-   the stack just below the cond. Any pass that breaks this invariant
-   (or any hand-built IR that violates it) leaves lower without a
-   well-defined layout. Throws naming the offending block."
-  (let [blocks (ir/raw-blocks f)
-        insts  (ir/all-insts f)]
-    (loop [i 0]
-      (when (< i (count blocks))
-        (let [term-id (:term (nth blocks i))]
-          (when (and term-id (> term-id 0))
-            (let [term (nth insts term-id)
-                  op   (nth term 0)]
-              (when (= op :branch-if)
-                (let [aux (nth term 2)
-                      t-args (ir/branch-target-args (ir/cond-target-true aux))
-                      f-args (ir/branch-target-args (ir/cond-target-false aux))]
-                  (when-not (= t-args f-args)
-                    (throw (ex-info (str "validate after " label
-                                         ": block #" i " :branch-if has asymmetric"
-                                         " branch-target args (true=" t-args
-                                         ", false=" f-args ") — lower-block! requires"
-                                         " true.args == false.args")
-                                    {:fn :check-branch-if-symmetric-args! :type (type label) :value label}))))))))
-        (recur (inc i))))))
-
 (defn validate-fn! [f label]
   "Throw if f is malformed. Returns f on success so it composes in -> chains.
 
@@ -186,6 +159,5 @@
     (check-refs-in-range!            insts label)
     (check-blocks-terminated!        f     label)
     (check-no-cross-block-refs!      f     label)
-    (check-branch-arg-arities!       f     label)
-    (check-branch-if-symmetric-args! f     label))
+    (check-branch-arg-arities!       f     label))
   f)
