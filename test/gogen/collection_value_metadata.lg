@@ -1,0 +1,27 @@
+;; Native-lowering oracle for a collection VALUE that carries metadata. The code
+;; reader turns ^{:a (+ 1 1)} [1] into a (with-meta ...) form, so a source file
+;; never hands the lowerer such a value; read-string and macros do. A macro
+;; stands in for both here: it returns the collection with a metadata map whose
+;; values are still forms. Bytecode compiles that map, so the generated Go must
+;; evaluate it too rather than box it as data.
+(ns examples.collection-value-metadata)
+
+(defmacro with-data-meta [coll meta-form]
+  (with-meta coll meta-form))
+
+;; Builds the set value from a vector of elements, so the fixture does not
+;; depend on what the reader returns for a set literal.
+(defmacro set-with-data-meta [elems meta-form]
+  (with-meta (set elems) meta-form))
+
+(defn probe [x]
+  [(meta (with-data-meta [1] {:a (+ 1 1)}))
+   (meta (set-with-data-meta [1] {:a (+ 1 1)}))
+   (meta (with-data-meta {:k 1} {:a (+ 1 1)}))
+   (meta (with-data-meta [1] {:flag true}))
+   (meta (with-data-meta [1] {:a x}))
+   (meta ((fn [] (set-with-data-meta [1] {:a x}))))
+   (meta (with-data-meta [1] {:tag long}))])
+
+(defn run ^Object []
+  (probe 5))

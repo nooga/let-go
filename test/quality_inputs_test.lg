@@ -1,5 +1,6 @@
 (ns test.quality-inputs-test
   (:require
+   [clojure.string :as str]
    [quality.inputs :as in]
    [test :refer :all]))
 
@@ -68,6 +69,62 @@
     (is (or (= "" (:from r)) (re-matches #"[0-9a-f]{40}" (:from r))))
     (when (= "" (:from r))
       (is (= (:to r) (in/log-range r))))))
+
+(defn- git-in
+  "Run git against the repository at `root`."
+  [root & args]
+  (apply os/sh (concat ["git" "-C" root] args)))
+
+(defn- mkdir!
+  "Create `path` and its parents; true on success."
+  [path]
+  (zero? (:exit (os/sh "mkdir" "-p" path))))
+
+(defn- make-git-repo!
+  "Create a one-commit git repository under a fresh temp directory and return
+   its path. Kept out of the deftests so their bodies stay flat."
+  [label]
+  (let [root (str (os/temp-dir) "/" label "-" (System/nanoTime))]
+    (mkdir! root)
+    (git-in root "init" "-q" ".")
+    (git-in root "config" "user.email" "t@t")
+    (git-in root "config" "user.name" "t")
+    (spit (str root "/a.txt") "hi")
+    (git-in root "add" "a.txt")
+    (git-in root "commit" "-qm" "first")
+    root))
+
+(defn- git-head
+  "The 40-hex HEAD of the git repository at `root`."
+  [root]
+  (str/trim (:out (os/sh "git" "-C" root "rev-parse" "HEAD"))))
+
+(deftest head-commit-falls-back-to-git-without-jj
+  ;; let-go's contributors and users are not assumed to use jj. The jj branch
+  ;; is taken only behind a `.jj` marker and must degrade to git otherwise —
+  ;; including when a `.jj` marker is present but no `jj` binary is installed,
+  ;; which used to CRASH rather than fall back: os/sh throws on a missing
+  ;; executable, so the `or` chain never got the chance to try git.
+  ;;
+  ;; Built in a temp directory rather than asserting against this checkout,
+  ;; which has both markers and both tools, and so cannot exercise either
+  ;; fallback.
+  (let [root (make-git-repo! "quality-inputs-git")
+        hc (in/head-commit root)]
+    (is (= "git" (:source hc)) "a checkout with no .jj marker must use git")
+    (is (= (git-head root) (:sha hc)))))
+
+(deftest head-commit-survives-a-jj-marker-with-no-jj-binary
+  ;; The case that used to CRASH rather than fall back: os/sh throws on a
+  ;; missing executable, so the `or` chain never got the chance to try git.
+  ;; Whether jj is installed here decides which branch answers, but neither
+  ;; may throw and both must yield a usable sha.
+  (let [root (make-git-repo! "quality-inputs-jjmarker")
+        _ (mkdir! (str root "/.jj"))
+        hc (in/head-commit root)]
+    (is (re-matches #"[0-9a-f]{40}" (:sha hc))
+        "a .jj marker without a working jj must still yield a sha")
+    (is (contains? #{"jj" "git"} (:source hc)))))
 
 (deftest ci-seconds-never-invents-a-duration
   ;; Efficiency must be pinned to a RECORDED duration. With nothing recorded

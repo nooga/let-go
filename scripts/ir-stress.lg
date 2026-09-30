@@ -151,7 +151,7 @@
       ;; no trailing newline would otherwise swallow the closing `)` into the
       ;; comment, leaving `(do` unclosed (EOF). Keep `(do ` inline so file line
       ;; numbers still map 1:1 into the wrapped form for error reporting.
-      (read-string (str "(do " src "\n)")))
+      (read-code-string (str "(do " src "\n)")))
     (catch e nil)))
 
 (defn ns-name-from [ns-form-]

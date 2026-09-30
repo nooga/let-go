@@ -14,11 +14,11 @@
    [clojure.string]
    [gogen]
    [ir.data]
-   [ir.passes.pipeline]
-   [ir.passes.entry-frame]))
+   [ir.passes.entry-frame]
+   [ir.passes.pipeline]))
 
 (defn read-all [path]
-  (read-string (str "(do " (slurp path) "\n)")))
+  (read-code-string (str "(do " (slurp path) "\n)")))
 
 (defn lowerable? [f]
   ;; Multi-arity defns lower too: the pipeline splits arities into
@@ -45,8 +45,8 @@
 ;; that form isn't part of the lowered Go output anyway.
 (def definitional-heads
   (set '(ns in-ns require use import refer load load-file
-         def defn defn- defonce defmacro defmulti defmethod defprotocol
-         deftype defrecord declare definterface defmulti- def-)))
+          def defn defn- defonce defmacro defmulti defmethod defprotocol
+          deftype defrecord declare definterface defmulti- def-)))
 
 (defn definitional? [f]
   (and (seq? f) (symbol? (first f)) (contains? definitional-heads (first f))))

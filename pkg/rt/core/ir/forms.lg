@@ -1,0 +1,68 @@
+;; Compiler-only collection forms preserve source slots through macroexpansion.
+;; Runtime map and set values cannot represent distinct child forms that expand
+;; to equal host values, so IR expansion carries vector-backed children until
+;; ir.build has compiled each slot.
+(ns ir.forms)
+
+(defrecord SetForm [elements])
+(defrecord MapForm [entries])
+
+(defn set-form [elements]
+  (->SetForm (vec elements)))
+
+(defn set-form? [form]
+  (instance? SetForm form))
+
+(defn set-form-elements [form]
+  (:elements form))
+
+(defn map-form [entries]
+  (->MapForm (vec entries)))
+
+(defn map-form? [form]
+  (instance? MapForm form))
+
+(defn map-form-entries [form]
+  (:entries form))
+
+(defn meta-source
+  "Metadata m as the map form that compiles to it. A data-read bare type hint is
+   stored as the symbol itself ({:tag long}); it is quoted so it stays a symbol,
+   as the bytecode compiler's quoteTagHint does."
+  [m]
+  (if (symbol? (:tag m)) (assoc m :tag (list 'quote (:tag m))) m))
+
+(declare source-form)
+
+(defn- collection-source [form]
+  (cond
+    (set-form? form)
+    (let [elements (map source-form (set-form-elements form))]
+      (if (empty? elements)
+        #{}
+        (apply list 'clojure.core/hash-set elements)))
+    (map-form? form)
+    (let [pairs (mapcat (fn [[k v]] [(source-form k) (source-form v)])
+                        (map-form-entries form))]
+      (if (empty? pairs)
+        {}
+        (apply list 'clojure.core/array-map pairs)))
+    :else (vec (map source-form form))))
+
+(defn source-form
+  "Replace every SetForm and MapForm in form with the constructor call ir.build
+   compiles it to, so expanded forms evaluate under the bytecode compiler. Each
+   child slot survives: equal elements or keys are still each evaluated. A
+   collection's metadata is compiled onto the rebuilt value, as ir.build does.
+   Quoted data never holds these forms and is returned whole."
+  [form]
+  (cond
+    (or (set-form? form) (map-form? form) (vector? form))
+    (let [source (collection-source form)
+          m      (meta form)]
+      (if (some? m)
+        (list 'clojure.core/with-meta source (meta-source m))
+        source))
+    (and (seq? form) (= 'quote (first form))) form
+    (seq? form) (apply list (map source-form form))
+    :else form))

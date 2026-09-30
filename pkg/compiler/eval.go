@@ -80,7 +80,7 @@ func Eval(src string) (vm.Value, error) {
 // it skips leading no-value forms (comments, #_ discard) so a string that opens
 // with a ';;' comment yields the following form rather than the VOID sentinel.
 func ReadString(s string) (vm.Value, error) {
-	reader := NewLispReader(strings.NewReader(s), "<read-string>")
+	reader := newDataReaderWithResolvers(strings.NewReader(s), "<read-string>", nil, rootDataReaderResolver)
 	return reader.ReadSkipNoValue()
 }
 
@@ -246,7 +246,7 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-string: expected String, got %T", vs[0])
 		}
-		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
+		reader := newDataReaderWithResolvers(strings.NewReader(string(s)), "<read-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
 		return reader.ReadSkipNoValue()
 	})
 	coreNS := rt.NS(rt.NameCoreNS)
@@ -296,34 +296,41 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-all-string: expected String, got %T", vs[0])
 		}
-		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-all-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
-		forms := []vm.Value{}
-		for {
-			// Peek: skip whitespace, then either give up cleanly (EOF
-			// at form boundary) or put the char back so Read can see
-			// the start of the next form. Distinguishes clean EOF
-			// from mid-form EOF — both surface as IsCausedBy(io.EOF)
-			// but only the former is acceptable.
-			_, err := reader.eatWhitespace()
-			if err != nil {
-				if errors.IsCausedBy(err, io.EOF) {
-					break
-				}
-				return vm.NIL, err
-			}
-			if err := reader.unread(); err != nil {
-				return vm.NIL, err
-			}
-			form, err := reader.Read()
-			if err != nil {
-				return vm.NIL, err
-			}
-			forms = append(forms, form)
-		}
-		return vm.NewPersistentVector(forms), nil
+		reader := newDataReaderWithResolvers(strings.NewReader(string(s)), "<read-all-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
+		return readAllForms(reader)
 	})
 	rasVar := coreNS.LookupOrAdd(vm.Symbol("read-all-string"))
 	rasVar.(*vm.Var).SetRoot(readAllStringFn)
+
+	// read-code-string / read-all-code-string: read source the way the
+	// compiler loads it, not as data. The code reader reads #{1} as the call
+	// form (hash-set 1) and ^:m [1] as a (with-meta ...) form. Tools that
+	// lower source (lg.compiler, the gogen fixture trampoline) read with these
+	// so a macro sees the same forms the bytecode loader hands it.
+	readCodeStringFn := vm.NewArityNativeFn("read-code-string", 1, false, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("read-code-string: wrong number of arguments %d (expected 1)", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("read-code-string: expected String, got %T", vs[0])
+		}
+		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-code-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
+		return reader.ReadSkipNoValue()
+	})
+	coreNS.LookupOrAdd(vm.Symbol("read-code-string")).(*vm.Var).SetRoot(readCodeStringFn)
+	readAllCodeStringFn := vm.NewArityNativeFn("read-all-code-string", 1, false, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("read-all-code-string: wrong number of arguments %d (expected 1)", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("read-all-code-string: expected String, got %T", vs[0])
+		}
+		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-all-code-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
+		return readAllForms(reader)
+	})
+	coreNS.LookupOrAdd(vm.Symbol("read-all-code-string")).(*vm.Var).SetRoot(readAllCodeStringFn)
 
 	// load-string: compile and evaluate a string of code, returning the last value.
 	loadStringFn := vm.NewArityNativeFn("load-string", 1, false, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
@@ -425,4 +432,32 @@ func postCoreInit() {
 	// bytecode-produced vars with NativeFn wrappers. No-op on untagged
 	// builds — pendingGoOverrides is empty, so this is one map lookup.
 	rt.ApplyGoOverrides(coreNS)
+}
+
+// readAllForms reads every top-level form as a vector. EOF at a form boundary
+// stops cleanly; EOF mid-form or any other reader error is returned, so callers
+// see syntax errors instead of silent truncation.
+func readAllForms(reader *LispReader) (vm.Value, error) {
+	forms := []vm.Value{}
+	for {
+		// Skip whitespace, then either stop (EOF at a form boundary) or put
+		// the char back so Read sees the start of the next form. Both EOF
+		// cases surface as IsCausedBy(io.EOF); only this one is acceptable.
+		_, err := reader.eatWhitespace()
+		if err != nil {
+			if errors.IsCausedBy(err, io.EOF) {
+				break
+			}
+			return vm.NIL, err
+		}
+		if err := reader.unread(); err != nil {
+			return vm.NIL, err
+		}
+		form, err := reader.Read()
+		if err != nil {
+			return vm.NIL, err
+		}
+		forms = append(forms, form)
+	}
+	return vm.NewPersistentVector(forms), nil
 }

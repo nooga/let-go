@@ -65,6 +65,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nooga/let-go/pkg/perfdata"
@@ -1425,12 +1426,163 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// gitShortSHA reports the commit whose tree these benchmarks measured, as the
+// 12-character id recorded in a capture filename and in a profile's
+// CapturedAtSHA — which is provenance: machineIndependentBar selects a bar by
+// it, so a wrong value silently attributes a measurement to code that did not
+// produce it.
+//
+// `git rev-parse HEAD` cannot answer that in a jj repository. jj keeps ONE git
+// HEAD for the whole colocated repo, tracking whatever the default workspace
+// last exported, so every `jj workspace` shares it no matter which commit the
+// workspace is actually on. Observed here: a workspace sitting on main
+// (6cdeb6d0) with a clean working copy reported efcd30925663 — a bookmarkless
+// local commit that is not an ancestor of main@upstream and never will be. The
+// failure is silent and the recorded SHA looks plausible, so it survives
+// review; baselines on this machine carried an unreachable stamp for days.
+//
+// So ask jj for the commit this workspace is on, and fall back to git only
+// when jj is absent or errors (a plain git checkout, or a jj version whose
+// template syntax differs).
 func gitShortSHA() string {
+	if sha := jjWorkspaceSHA(); sha != "" {
+		warnUnpublishedSHA(sha)
+		return sha
+	}
 	out, err := exec.Command("git", "rev-parse", "--short=12", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// unpublishedWarned keeps the notice to one line per run; gitShortSHA is
+// called for both the capture filename and the profile's CapturedAtSHA.
+var unpublishedWarned sync.Once
+
+// warnUnpublishedSHA says so when the recorded provenance names a commit that
+// exists only in this repository. Writing such a baseline is legitimate — it
+// is how a local experiment is measured — but a reviewer reading the stamp
+// later cannot fetch it, so the run is not reproducible by anyone else until
+// the commit is pushed. Saying it at capture time is the only moment the
+// operator can still act on it.
+func warnUnpublishedSHA(sha string) {
+	if capturedSHAIsPublished(sha) {
+		return
+	}
+	unpublishedWarned.Do(func() {
+		fmt.Fprintf(os.Stderr,
+			"bench-ratchet: warning: recording SHA %s, which is not reachable from any remote-tracking ref.\n"+
+				"  The measured tree exists only in this repository, so a baseline stamped with it\n"+
+				"  cannot be reproduced by anyone who has not fetched that commit. Push it, or pass\n"+
+				"  -sha <published commit> if this run represents one.\n", sha)
+	})
+}
+
+// jjWorkspaceSHA returns this jj workspace's commit as a git-resolvable
+// 12-character sha, or "" when the directory is not in a jj repository.
+//
+// jj stores its commits in the git object store, so a jj commit id IS a git
+// sha: `git cat-file -t` reports "commit" for it, and jj pins it with a
+// refs/jj/keep/<sha> ref so it survives gc. The conversion this function
+// performs is therefore not a translation between id spaces — it is choosing
+// WHICH commit describes the measured tree, which is the part `git rev-parse
+// HEAD` gets wrong.
+//
+// It resolves to a STABLE commit rather than to @ unconditionally. jj rewrites
+// the working-copy commit on every snapshot, and for a clean checkout @ is an
+// empty commit that exists only in this repo. When @ is empty the tree being
+// measured IS the parent's tree, so the parent is both the truthful and the
+// durable answer — typically a pushed commit such as main's tip, which anyone
+// can check out with plain git. When @ is non-empty the working copy genuinely
+// differs from every named commit, and @'s own id is the only thing that
+// identifies what ran; see capturedSHAIsPublished for what that costs.
+//
+// The command deliberately snapshots (no --ignore-working-copy): emptiness has
+// to be judged against the files the benchmark just read, not a stale snapshot.
+func jjWorkspaceSHA() string {
+	const tmpl = `if(empty, parents.map(|p| p.commit_id().short(12)).join(" "), commit_id.short(12))`
+	out, err := exec.Command("jj", "log", "--no-graph", "-r", "@", "-T", tmpl).Output()
+	if err != nil {
+		return ""
+	}
+	// An empty @ with several parents is a merge; no single commit describes
+	// that tree, so fall through to @ itself rather than picking one arbitrarily.
+	fields := strings.Fields(string(out))
+	if len(fields) != 1 {
+		out, err = exec.Command("jj", "log", "--no-graph", "-r", "@", "-T", "commit_id.short(12)").Output()
+		if err != nil {
+			return ""
+		}
+		fields = strings.Fields(string(out))
+	}
+	if len(fields) != 1 {
+		return ""
+	}
+	sha := fields[0]
+
+	// Guarantee plain git can resolve what we are about to record. jj exports
+	// to git lazily, so ask it to sync before concluding the object is absent.
+	if !gitHasCommit(sha) {
+		_ = exec.Command("jj", "git", "export").Run()
+		if !gitHasCommit(sha) {
+			return ""
+		}
+	}
+	return sha
+}
+
+// gitDir returns the path to the git directory for this repository, or ""
+// if it cannot be determined. Handles jj workspaces that may not have .git
+// in their working directory.
+func gitDir() string {
+	// Try jj first: it knows the git directory even for secondary workspaces
+	// that don't have .git in their working tree.
+	out, err := exec.Command("jj", "git", "root").Output()
+	if err == nil && len(out) > 0 {
+		return strings.TrimSpace(string(out))
+	}
+	// Fall back to git: works for plain git checkouts, and is the user's
+	// configuration if jj is not in use.
+	out, err = exec.Command("git", "rev-parse", "--git-dir").Output()
+	if err == nil && len(out) > 0 {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
+}
+
+// gitHasCommit reports whether git can resolve sha to a commit object in
+// this repository's git directory.
+func gitHasCommit(sha string) bool {
+	gdir := gitDir()
+	if gdir == "" {
+		return false
+	}
+	return exec.Command("git", "--git-dir="+gdir, "cat-file", "-e", sha+"^{commit}").Run() == nil
+}
+
+// capturedSHAIsPublished reports whether sha is reachable from a
+// remote-tracking ref, i.e. whether someone who cloned this repository could
+// check the commit out.
+//
+// This is the difference between a sha that documents a measurement and one
+// that merely labels it. jj keeps every local commit alive under
+// refs/jj/keep/<sha>, which makes it resolvable HERE and is never pushed, so
+// reachability from refs/remotes/* is the only honest test of whether a
+// non-jj user could reproduce the run.
+func capturedSHAIsPublished(sha string) bool {
+	gdir := gitDir()
+	if gdir == "" {
+		return true
+	}
+	out, err := exec.Command("git", "--git-dir="+gdir, "for-each-ref", "--contains", sha,
+		"--format=%(refname)", "refs/remotes/").Output()
+	if err != nil {
+		// An older git without --contains on for-each-ref cannot answer;
+		// stay silent rather than warn on a false negative.
+		return true
+	}
+	return len(strings.Fields(string(out))) > 0
 }
 
 func writeBaseline(path string, b Baseline) error {
