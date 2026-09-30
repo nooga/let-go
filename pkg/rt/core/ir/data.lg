@@ -171,6 +171,31 @@
 (defn aux      [nid f] (nth (nth (:insts @f) nid) 2))
 (defn block-of [nid f] (nth (nth (:insts @f) nid) 3))
 
+(defn- fn-template-aux? [a]
+  (if (map? a)
+    (contains? #{:fn-template :multi-fn-template} (:kind a))
+    false))
+
+(defn fn-literal-const? [nid f]
+  "True when instruction nid is a function literal: a :const whose aux is a
+   (multi-arity) fn template. Its value is an allocation with identity, so it
+   is created once and never re-created at a use."
+  (if (= :const (op nid f))
+    (fn-template-aux? (aux nid f))
+    false))
+
+(defn reemittable-at-use? [nid f]
+  "True when instruction nid's value may be re-created in another block
+   instead of reaching it as a block argument: a cheap load, except a var load
+   (the root is mutable) and a function literal (it has identity). The IR
+   builder threads everything else through block arguments, and the validator
+   and the bytecode lowerer reject any other cross-block reference."
+  (let [o (op nid f)]
+    (cond
+      (not (ir/op-cheap-load? o)) false
+      (= o :load-var) false
+      :else (not (fn-literal-const? nid f)))))
+
 (defn type-of [nid f]
   ;; Side table first (where set-type! writes), tuple slot 5 as fallback
   ;; (construction-time default). A nil in either place reads as :unknown.
@@ -788,6 +813,7 @@
                fn-name fn-arity fn-variadic? fn-multi-arity? fn-private? fn-arg-types fn-entry fn-consts entry-block
                inst-count blocks all-insts raw-blocks all-types
                op refs aux block-of type-of source-infos
+               fn-literal-const? reemittable-at-use?
                block-params block-preds block-insts block-term
                fn-load-arg fn-load-arg-type
                branch-target-target branch-target-args

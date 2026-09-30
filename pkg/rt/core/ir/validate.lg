@@ -106,9 +106,9 @@
                      use-block (nth ins 3)]
             :when   (and (not= def-block use-block)
                          (not= :block-arg ref-op)
-                         ;; :load-var is cheap-load but mutable — a cross-block direct ref to it
-                         ;; is unsafe (must be threaded), so do NOT exempt it here (P1).
-                         (not (and (ir/op-cheap-load? ref-op) (not= ref-op :load-var))))]
+                         ;; Only a value re-emittable at its use may be referenced
+                         ;; across blocks; a var load or a fn literal must be threaded.
+                         (not (ir/reemittable-at-use? r f)))]
       (throw (ex-info (str "validate after " label
                            ": Inst #" i " (op=" op ", block=" use-block ")"
                            " has cross-block ref " r
