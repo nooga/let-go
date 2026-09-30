@@ -144,10 +144,10 @@
     (is (thrown? Exception (eval (list 'identity (into clojure.lang.PersistentQueue/EMPTY [1 2]))))))
   (testing "a namespace object embedded as a form"
     (is (thrown? Exception (eval (list 'identity *ns*)))))
-  (testing "a sorted-map value evaluated directly"
-    (is (thrown? Exception (eval (sorted-map :a 1)))))
-  (testing "a sorted-set value evaluated directly"
-    (is (thrown? Exception (eval (sorted-set 1 2)))))
+  (testing "a sorted-map value evaluated directly is rebuilt, still sorted"
+    (is (sorted? (eval (sorted-map :a 1)))))
+  (testing "a sorted-set value evaluated directly is rebuilt, still sorted"
+    (is (sorted? (eval (sorted-set 1 2)))))
   (testing "a transient vector embedded as a form"
     (is (thrown? Exception (eval (list 'identity (transient [1 2]))))))
   (testing "the error is a clean CompileError naming the type, not a stack-underflow panic"
