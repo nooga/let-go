@@ -223,6 +223,20 @@
         (vm-call "NewList"
                  [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
 
+(defn- boxed-set-expr [xs]
+  "#{…} constant → vm.NewSet([]vm.Value{…}). Set literals reach the IR as set
+   VALUES, so a set can appear as a :const aux and needs an emitter here
+   alongside vectors, lists and maps. Element order is unspecified and
+   irrelevant: NewSet re-hashes."
+  ;; vm.NewSet folds an empty slice to EmptyPersistentSet itself, but the
+  ;; shared value emits smaller and matches boxed-list-expr's empty arm.
+  (if (zero? (count xs))
+    (vm-sel "EmptyPersistentSet")
+    (let [elems (mapv boxed-value-expr (seq xs))]
+      (when (every? identity elems)
+        (vm-call "NewSet"
+                 [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
 (defn- boxed-map-expr [m]
   (if (zero? (count m))
     (vm-sel "EmptyPersistentMap")
@@ -239,6 +253,26 @@
       (when elems
         (vm-call "NewPersistentMap"
                  [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
+;; A data-read collection constant (vector/map/set) can carry reader metadata
+;; (issue #801) — evaluating it must yield a value carrying that metadata,
+;; the same contract the bytecode compiler's compileForm now honours (a
+;; `with-meta` call wrapping the constructed collection). vm.ArrayVector,
+;; vm.PersistentMap and vm.PersistentSet all implement vm.IMeta (Meta/
+;; WithMeta) unconditionally — a value with no metadata just returns itself —
+;; so the wrap is safe to apply whenever `(meta v)` is non-nil, regardless of
+;; which of the three collection kinds `built` is. The meta value itself must
+;; also be boxable; if it isn't, this — like every other boxed-*-expr — falls
+;; back to nil (whole-function bridge fallback) rather than silently dropping
+;; the metadata.
+(defn- boxed-with-meta [v built]
+  (if (or (nil? built) (nil? (meta v)))
+    built
+    (let [mexpr (boxed-value-expr (meta v))]
+      (when mexpr
+        (gogen/call
+          (gogen/field-sel (gogen/type-assert built (gogen/type "vm.IMeta")) "WithMeta")
+          [mexpr])))))
 
 (declare value-expr)
 
@@ -326,8 +360,11 @@
     (instance? java.util.regex.Pattern v)
     (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
     (list? v)       (boxed-list-expr v)
-    (vector? v)     (boxed-vector-expr v)
-    (map? v)        (boxed-map-expr v)
+    (vector? v)     (boxed-with-meta v (boxed-vector-expr v))
+    (map? v)        (boxed-with-meta v (boxed-map-expr v))
+    ;; Reachable since read-string reads data: `(quote #{1 2})` is a set
+    ;; CONSTANT, where a code-read source only ever produced (hash-set 1 2).
+    (set? v)        (boxed-with-meta v (boxed-set-expr v))
     :else nil))
 
 (declare go-name)
@@ -2197,52 +2234,52 @@
   ([f closed-exprs nid target refs]
    (trampoline-call-stmts f closed-exprs nid target refs nil))
   ([f closed-exprs nid target refs prepared-args]
-  (let [nn         (load-var-ns+name f (first refs))
-        ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
-        ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
-        ;; is var-mediated, so it resolves at runtime via the var's root
-        ;; whether or not the callee was emitted as a Go func — strictly
-        ;; more robust than a bare direct call (which dangles if the callee
-        ;; fell back) and it eliminates the per-call rt.LookupVar uniformly.
-        ;; record-cross-ns-var! no-ops when *cross-ns-vars-used* is unbound
-        ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
-        ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
-        base       (when nn (record-cross-ns-var! (first nn) (second nn)))
-        arg-exprs  (or prepared-args
-                       (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))
-        args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
-    (when (every? identity arg-exprs)
-      (if base
-        ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
-        ;; callee var ONCE (memoized through the package-level __v_* pointer)
-        ;; and re-reads its fn root each call, so per call:
-        ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
-        ;; Caching the *Var (not the fn) keeps the var as the override seam
-        ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
-        ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
-        (let [cached-fn (gogen/call
-                          (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
-                          [(gogen/unary "&" (gogen/ident base))
-                           (gogen/string-lit (first nn))
-                           (gogen/string-lit (second nn))])
-              ;; Dispatch through ec so the callee (and any dynamic vars it
-              ;; reads, or goroutines it spawns) sees the running context:
-              ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
-              invoke    (gogen/call
-                          (gogen/field-sel (gogen/ident "ec") "Invoke")
-                          [cached-fn args-slice])]
-          (emit-call-stmts f target invoke))
-        ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
-        ;; which threads ec into the dynamic invocation path.
-        (let [callee (box-as-value f closed-exprs (first refs))
-              invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
-                                 [(gogen/ident "ec") callee args-slice])]
-          (when callee
-            (if (keyword-callee-total? f refs)
-              ;; Total keyword lookup: the error is always nil at arity
-              ;; 1-2, so discard it (`_`) and skip the dead check.
-              [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
-              (emit-call-stmts f target invoke)))))))))
+   (let [nn         (load-var-ns+name f (first refs))
+         ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
+         ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
+         ;; is var-mediated, so it resolves at runtime via the var's root
+         ;; whether or not the callee was emitted as a Go func — strictly
+         ;; more robust than a bare direct call (which dangles if the callee
+         ;; fell back) and it eliminates the per-call rt.LookupVar uniformly.
+         ;; record-cross-ns-var! no-ops when *cross-ns-vars-used* is unbound
+         ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
+         ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
+         base       (when nn (record-cross-ns-var! (first nn) (second nn)))
+         arg-exprs  (or prepared-args
+                        (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))
+         args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
+     (when (every? identity arg-exprs)
+       (if base
+         ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
+         ;; callee var ONCE (memoized through the package-level __v_* pointer)
+         ;; and re-reads its fn root each call, so per call:
+         ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
+         ;; Caching the *Var (not the fn) keeps the var as the override seam
+         ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
+         ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
+         (let [cached-fn (gogen/call
+                           (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
+                           [(gogen/unary "&" (gogen/ident base))
+                            (gogen/string-lit (first nn))
+                            (gogen/string-lit (second nn))])
+               ;; Dispatch through ec so the callee (and any dynamic vars it
+               ;; reads, or goroutines it spawns) sees the running context:
+               ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
+               invoke    (gogen/call
+                           (gogen/field-sel (gogen/ident "ec") "Invoke")
+                           [cached-fn args-slice])]
+           (emit-call-stmts f target invoke))
+         ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
+         ;; which threads ec into the dynamic invocation path.
+         (let [callee (box-as-value f closed-exprs (first refs))
+               invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
+                                  [(gogen/ident "ec") callee args-slice])]
+           (when callee
+             (if (keyword-callee-total? f refs)
+               ;; Total keyword lookup: the error is always nil at arity
+               ;; 1-2, so discard it (`_`) and skip the dead check.
+               [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
+               (emit-call-stmts f target invoke)))))))))
 
 ;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
 ;; Shape: {multifn-name-str {:dispatch-type :type

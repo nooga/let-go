@@ -1,0 +1,31 @@
+(ns adapter.framework
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]))
+
+(def ^:dynamic *once-value* false)
+(def ^:dynamic *each-value* false)
+(use-fixtures :once (fn [f] (binding [*once-value* true] (f))))
+(use-fixtures :each (fn [f] (binding [*each-value* true] (f))))
+
+(deftest passing
+  (testing "fixtures and assertions"
+    (is *once-value*)
+    (is *each-value*)
+    (is (= 2 (+ 1 1)))
+    (is (thrown? Exception (throw (ex-info "expected" {}))))))
+
+(deftest failing-first
+  (testing "a failure before a successful return"
+    (is (= 1 2) "intentional mismatch")
+    (is (= 3 3)))
+  true)
+
+(deftest assertion-error
+  (is (= 1 (throw (ex-info "assertion exploded" {}))))
+  true)
+
+(deftest uncaught-error
+  (throw (ex-info "body exploded" {})))
+
+(deftest empty-test nil)
+
+(deftest composed (passing))
