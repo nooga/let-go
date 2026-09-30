@@ -4999,6 +4999,10 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	installHostHashMap(ns)
 	installHostArrayDeque(ns)
 	installHostStringBuilder(ns)
+
+	// Last: the host-class namespaces the installers above filled get their
+	// clojure.core refers only now (see defStaticNS).
+	referStaticNamespaces()
 }
 
 func longCompatValue(v int64) vm.Value { return vm.MakeInt64(v) }
