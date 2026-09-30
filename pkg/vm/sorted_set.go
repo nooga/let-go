@@ -40,10 +40,16 @@ type SortedSet struct {
 var EmptySortedSet = &SortedSet{impl: EmptySortedMap}
 
 func NewSortedSet(cmp Comparator, vals []Value) *SortedSet {
+	return NewSortedSetBy(nil, cmp, vals)
+}
+
+// NewSortedSetBy builds a sorted set ordered by cmp, remembering fn, the
+// let-go function cmp was made from, so ComparatorFn can return it.
+func NewSortedSetBy(fn Value, cmp Comparator, vals []Value) *SortedSet {
 	if cmp == nil {
 		cmp = DefaultCompare
 	}
-	m := &SortedMap{cmp: cmp}
+	m := &SortedMap{order: sortOrder{cmp: cmp, fn: fn}}
 	for _, v := range vals {
 		m = m.assocImpl(v, v)
 	}
@@ -113,7 +119,12 @@ func (s *SortedSet) Count() Value  { return MakeInt(s.impl.count) }
 
 // --- Collection ---
 
-func (s *SortedSet) Empty() Collection { return EmptySortedSet }
+// Empty keeps the comparator, so (into (empty s) ...) orders like s.
+func (s *SortedSet) Empty() Collection { return &SortedSet{impl: &SortedMap{order: s.impl.order}} }
+
+// ComparatorFn returns the function the set was built with by sorted-set-by,
+// or nil for the default ordering.
+func (s *SortedSet) ComparatorFn() Value { return s.impl.order.fn }
 
 func (s *SortedSet) Conj(value Value) Collection {
 	newImpl := s.impl.assocImpl(value, value)
@@ -144,7 +155,7 @@ func (s *SortedSet) ValueAt(key Value) Value {
 	if s.impl.root == nil {
 		return NIL
 	}
-	_, found := s.impl.root.find(key, s.impl.cmp)
+	_, found := s.impl.root.find(key, s.impl.order.cmp)
 	if found {
 		return key
 	}
@@ -155,7 +166,7 @@ func (s *SortedSet) ValueAtOr(key Value, dflt Value) Value {
 	if s.impl.root == nil {
 		return dflt
 	}
-	_, found := s.impl.root.find(key, s.impl.cmp)
+	_, found := s.impl.root.find(key, s.impl.order.cmp)
 	if found {
 		return key
 	}
@@ -246,7 +257,7 @@ func (s *SortedSet) Invoke(pargs []Value) (Value, error) {
 	if s.impl.root == nil {
 		return NIL, nil
 	}
-	_, found := s.impl.root.find(pargs[0], s.impl.cmp)
+	_, found := s.impl.root.find(pargs[0], s.impl.order.cmp)
 	if found {
 		return pargs[0], nil
 	}
