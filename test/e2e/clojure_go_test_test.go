@@ -7,6 +7,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -138,20 +139,27 @@ func TestClojureGoTestAdapter(t *testing.T) {
 		}
 	})
 	// A test redefined under another form would run the stale extracted body
-	// and report PASS for a test the ordinary runner fails.
-	t.Run("reject-redefined-test", func(t *testing.T) {
-		fixture := filepath.Join(t.TempDir(), "redefined.lg")
-		source := `(ns adapter.redefined (:require [clojure.test :refer [deftest is]]))
+	// and report PASS for a test the ordinary runner fails. Map and set
+	// literals expand to compiler records, which discovery must also see into.
+	for _, shape := range []struct{ name, wrap string }{
+		{"when", `(when true %s)`},
+		{"map", `{:replacement %s}`},
+		{"set", `#{%s}`},
+	} {
+		t.Run("reject-redefined-test/"+shape.name, func(t *testing.T) {
+			fixture := filepath.Join(t.TempDir(), "redefined.lg")
+			source := `(ns adapter.redefined (:require [clojure.test :refer [deftest is]]))
 (deftest check (is true))
-(when true (deftest check (is false "replacement must fail")))`
-		if err := os.WriteFile(fixture, []byte(source), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		out, err := runCmd(ctx, t, lg, root, []string{"scripts/lg-test-go", fixture, t.TempDir()})
-		if err == nil || !strings.Contains(string(out), "defined more than once: check") {
-			t.Fatalf("expected generation to reject the redefined test `check`: %v\n%s", err, out)
-		}
-	})
+` + fmt.Sprintf(shape.wrap, `(deftest check (is false "replacement must fail"))`)
+			if err := os.WriteFile(fixture, []byte(source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := runCmd(ctx, t, lg, root, []string{"scripts/lg-test-go", fixture, t.TempDir()})
+			if err == nil || !strings.Contains(string(out), "defined more than once: check") {
+				t.Fatalf("expected generation to reject the redefined test `check`: %v\n%s", err, out)
+			}
+		})
+	}
 	// A deftest the discovery walk cannot extract must fail generation: a
 	// silently omitted test would let a failing suite report PASS.
 	t.Run("reject-unextracted-test", func(t *testing.T) {

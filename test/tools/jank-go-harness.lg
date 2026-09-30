@@ -9,7 +9,7 @@
 ;;   lg test/tools/jank-go-harness.lg --fixture <file.cljc> --test <deftest-name> \
 ;;       --package <go-package-name> --out-dir <dir>
 
-(require 'ir.passes.pipeline 'gogen)
+(require 'ir.forms 'ir.passes.pipeline 'gogen)
 
 (defn flag [argv name]
   (loop [xs argv]
@@ -97,7 +97,9 @@
           (not (empty? (second fn-form))))
   (die (str test-name-str "'s :test metadata must be (fn* [] body...)")))
 
-(def adapted (apply list 'defn target (second fn-form) (drop 2 fn-form)))
+;; expand-all leaves map and set literals as compiler records; eval and the
+;; Go lowering both take source forms.
+(def adapted (ir.forms/source-form (apply list 'defn target (second fn-form) (drop 2 fn-form))))
 ;; The body runs directly, outside test-var, so the adapter supplies the
 ;; reporter's ref-backed counters and dynamic context. :test=1 marks this
 ;; invocation; assertion failures remain authoritative through the counters

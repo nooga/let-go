@@ -46,6 +46,28 @@ func TestContext_Compile(t *testing.T) {
 	}
 }
 
+// A map literal compiles to an array-map call, so small literals keep their
+// insertion order as Clojure's do (#764). hash-map here costs the ratchet's
+// IRCompile allocs bar and loses the ordering.
+func TestIntrinsicMapLiteralLoadsArrayMapConstructor(t *testing.T) {
+	consts := vm.NewConsts()
+	ctx := NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	_, err := ctx.Compile(`{}`)
+	assert.NoError(t, err)
+
+	hashMap := rt.CoreNS.Lookup("hash-map")
+	arrayMap := rt.CoreNS.Lookup("array-map")
+	var foundHashMap, foundArrayMap bool
+	for _, value := range consts.Values() {
+		if candidate, ok := value.(*vm.Var); ok {
+			foundHashMap = foundHashMap || candidate == hashMap
+			foundArrayMap = foundArrayMap || candidate == arrayMap
+		}
+	}
+	assert.True(t, foundArrayMap, "a map literal must invoke array-map")
+	assert.False(t, foundHashMap, "a map literal must not invoke hash-map")
+}
+
 func TestContext_CompileFn(t *testing.T) {
 	out, err := Eval("(fn [x] (+ x 1))")
 	assert.NoError(t, err)
