@@ -47,6 +47,20 @@ func (e *ExInfo) Message() string      { return e.message }
 func (e *ExInfo) Data() *PersistentMap { return e.data }
 func (e *ExInfo) Cause() error         { return e.cause }
 
+// CauseValue is the cause as a Lisp value, for ex-cause and .getCause: an
+// ex-info cause as itself, and any other Go error (a Cancelled condition's
+// context.Canceled, say) as the exception value a catch clause binds for it.
+func (e *ExInfo) CauseValue() Value {
+	switch c := e.cause.(type) {
+	case nil:
+		return NIL
+	case *ExInfo:
+		return c
+	default:
+		return errorToValue(c)
+	}
+}
+
 // Meta / WithMeta implement IMeta. Type hints compile to runtime metadata in
 // let-go, so medley's (.getMessage ^Throwable ex) reaches (with-meta ex ...);
 // supporting metadata lets that hinted call work. WithMeta returns a copy that
@@ -75,10 +89,7 @@ func (e *ExInfo) InvokeMethod(name Symbol, args []Value) (Value, error) {
 	case "getMessage":
 		return String(e.message), nil
 	case "getCause":
-		if cev, ok := e.cause.(*ExInfo); ok {
-			return cev, nil
-		}
-		return NIL, nil
+		return e.CauseValue(), nil
 	}
 	return NIL, fmt.Errorf("ExceptionInfo has no method %s", name)
 }

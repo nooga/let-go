@@ -133,14 +133,28 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      # Blocking performance ratchet. Always run before every push: Go/runtime,
-      # generated-bundle, or benchmark-policy changes can regress metrics even
-      # when no benchmark file is part of the pushed diff. `jj push` routes
-      # through pr-claim-gate -> jj-pre-push -> this prek stage.
+      # Blocking performance ratchet, scoped to changes that can move the
+      # numbers. Still `always_run: true` — the hook must see every push in
+      # order to decide — but the entry now asks cmd/ratchet-scope whether the
+      # pushed range touches the IR, the VM, anything they transitively depend
+      # on, the generated artifacts, or the module/toolchain files, and skips
+      # the benchmark run when it does not.
+      #
+      # The dependency closure is computed with `go list -deps -test` over the
+      # benchmarked packages, so the original rationale for always running is
+      # preserved: a Go runtime change or a regenerated bundle still triggers a
+      # run even though no benchmark file is in the diff. What it no longer
+      # does is gate a docs edit, or a fix to the ratchet tooling itself, on a
+      # full benchmark — which previously meant a stale bar blocked EVERY push
+      # from a machine regardless of content.
+      #
+      # It fails safe: an undeterminable range, a build failure, or any
+      # ambiguity runs the ratchet. `jj push` routes through
+      # pr-claim-gate -> jj-pre-push -> this prek stage.
       - id: bench-ratchet
-        name: benchmark performance ratchet
+        name: benchmark performance ratchet (IR/VM changes only)
         description: Fail if anchor-normalized speed or deterministic allocation/size metrics regress
-        entry: make bench-ratchet
+        entry: scripts/bench-ratchet-if-affected.sh
         language: system
         pass_filenames: false
         always_run: true

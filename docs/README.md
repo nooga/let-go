@@ -69,6 +69,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Running as a WASI (`GOOS=wasip1`) module | `guide/wasi.md` |
 | let-go under TinyGo (status: not currently supported) | `guide/tinygo.md` |
 | nREPL server + editor setup | `guide/nrepl.md` |
+| Scopes: cancelling and draining spawned work (`with-scope`) | `guide/structured-concurrency.md` |
 | HTTP server (serve, start/stop/wait) and client (`http`) | `guide/http.md` |
 | TCP client + bencode framing (`net`, `bencode`) | `guide/net.md` |
 | Processes, environment, filesystem and paths (`os`) | `guide/os.md` |

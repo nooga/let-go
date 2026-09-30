@@ -525,18 +525,18 @@ func goCallables(src string) ([]callable, error) {
 // the callables and the file's line census. Keep new per-file measurements
 // coming out of here rather than re-parsing.
 func goAnalyze(src string) ([]callable, fileCounts, error) {
-	cs, _, counts, err := analyzeSource(src)
+	cs, _, counts, err := analyzeSource("src.go", src)
 	return cs, counts, err
 }
 
 func goDeclarations(src string) ([]declaration, error) {
-	_, ds, _, err := analyzeSource(src)
+	_, ds, _, err := analyzeSource("src.go", src)
 	return ds, err
 }
 
-func analyzeSource(src string) ([]callable, []declaration, fileCounts, error) {
+func analyzeSource(filename, src string) ([]callable, []declaration, fileCounts, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "src.go", src, parser.ParseComments)
+	file, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
 		return nil, nil, fileCounts{}, err
 	}
@@ -662,9 +662,9 @@ type extent struct {
 // file, so a token-derived duplicate region can be snapped to real structure.
 // Go has no s-expressions, but it has an AST, and the parse has already
 // happened.
-func goExtents(src string) ([]extent, error) {
+func goExtents(filename, src string) ([]extent, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "src.go", src, parser.ParseComments)
+	file, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
 		return nil, err
 	}
