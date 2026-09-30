@@ -341,6 +341,10 @@ jobs:
           go-version-file: go.mod
       - name: Generate the lowered tree
         run: make lowered
+      # The jank harness imports core_go_lowered/test, so it needs the lowered
+      # tree in this checkout before it can build its generated Go test module.
+      - name: Jank direct-ABI generated Go gate
+        run: make test SHORT=false PKG=./test/e2e RUN=TestJankSuiteDirectABIGeneratedGo COUNT=1
       - name: Engine parity and differential engine gate
         run: make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff'
 
