@@ -9,8 +9,8 @@
 (defmacro with-data-meta [coll meta-form]
   (with-meta coll meta-form))
 
-;; A source #{1} reads as the call form (hash-set 1), so a set value is built
-;; from a vector of elements instead.
+;; Builds the set value from a vector of elements, so the fixture does not
+;; depend on what the reader returns for a set literal.
 (defmacro set-with-data-meta [elems meta-form]
   (with-meta (set elems) meta-form))
 

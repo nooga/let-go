@@ -1,0 +1,11 @@
+;; Native-lowering guard for set elements whose distinct source forms
+;; macroexpand identically. JVM Clojure pins the expected behavior through
+;; test/gold/set_macroexpansion_eval.cljc; gogen-trampoline runs this `run`
+;; under bytecode and generated Go and requires native dispatch.
+(ns examples.set-macroexpansion-eval)
+
+(defn run ^Object []
+  (let [calls  (atom 0)
+        values #{(-> (swap! calls inc))
+                 (swap! calls inc)}]
+    [@calls (count values) (contains? values 1) (contains? values 2)]))
