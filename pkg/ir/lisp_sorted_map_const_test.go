@@ -53,10 +53,11 @@ func TestExpandAllKeepsSortedMapOrdering(t *testing.T) {
 		t.Fatalf("expand-all stopped expanding sorted-map entries: %s", got)
 	}
 
-	// The plain-map path is unchanged.
+	// A plain map literal still takes the MapForm path, which keeps every
+	// source slot through macroexpansion; only sorted maps are exempt.
 	got = lispString(t, `(str (type (ir.passes.pipeline/expand-all {:a 1})))`)
-	if got != "let-go.lang.Map" {
-		t.Fatalf("expand-all changed the type of a plain map literal: %s", got)
+	if got != "MapForm" {
+		t.Fatalf("expand-all did not route a plain map literal through MapForm: %s", got)
 	}
 }
 
