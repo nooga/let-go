@@ -133,7 +133,8 @@ func RunExecUnit(unit *bytecode.ExecUnit) error {
 // LoadProgramNamespaces replays every namespace chunk in unit.NSOrder, draining
 // ApplyGoOverrides after each so gogen_ir NativeFn overrides land on the Vars
 // the bytecode just installed. This is the program-half of an AOT native-entry
-// frame (#425): BootCore already owns core boot+reapply; the generated main.go
+// frame (#425): the frame's core boot (pkg/compiler's init, or BootCore for a
+// runtime-only host) already owns core boot+reapply; the generated main.go
 // owns this load, then the main-chunk replay, then the entry — directly when
 // it lowered, else through InvokeProgramEntry.
 //
