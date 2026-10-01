@@ -347,10 +347,20 @@ func (l ArrayVector) RawCount() int {
 
 // Empty implements Collection
 func (l ArrayVector) Empty() Collection {
-	return make(ArrayVector, 0)
+	return EmptyVector.(ArrayVector)
 }
 
+// EmptyVector is the one empty vector: every [] literal, (vector) and
+// NewArrayVector of nothing is this value, as EmptyList and EmptyPersistentMap
+// are for their kinds, so evaluating [] boxes nothing. ArrayVector is
+// persistent — Conj, Assoc, WithMeta and transients all copy — so sharing it
+// is unobservable except through identical?.
+var EmptyVector Value = ArrayVector(make([]Value, 0))
+
 func NewArrayVector(v []Value) Value {
+	if len(v) == 0 {
+		return EmptyVector
+	}
 	if allocAttrEnabled {
 		recordAllocAttr(akNewArrayVector, len(v)*16+24)
 	}

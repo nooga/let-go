@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"reflect"
 	"unsafe"
 )
 
@@ -217,7 +218,29 @@ func (c *Consts) grow() {
 
 // constHash computes a hash for deduplication in the const pool.
 // Pointer-identity types hash by address; structural types use hashValue.
+// collectionIdentity is the identity of a collection constant: its pointer,
+// map or slice header. A collection literal is its own constant, as Clojure
+// registers constants by identity: two literals of equal content stay two
+// values, so a map literal keeps its own key order (map equality ignores it)
+// and two literal sites are never one object.
+func collectionIdentity(v Value) (uintptr, int, bool) {
+	if _, ok := v.(Collection); !ok {
+		return 0, 0, false
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map:
+		return rv.Pointer(), 0, true
+	case reflect.Slice:
+		return rv.Pointer(), rv.Len(), true
+	}
+	return 0, 0, false
+}
+
 func constHash(v Value) uint32 {
+	if p, n, ok := collectionIdentity(v); ok {
+		return hashUint64(uint64(p) ^ uint64(n)<<1)
+	}
 	switch x := v.(type) {
 	case *Func:
 		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
@@ -253,6 +276,10 @@ func constHash(v Value) uint32 {
 // Pointer-identity types use pointer equality; value types use same-type
 // structural comparison (never merging across types like Int/Float/BigInt).
 func constEqual(a, b Value) bool {
+	if pa, na, ok := collectionIdentity(a); ok {
+		pb, nb, okb := collectionIdentity(b)
+		return okb && pa == pb && na == nb && a.Type() == b.Type()
+	}
 	switch a := a.(type) {
 	case DefMetaPairs:
 		other, ok := b.(DefMetaPairs)

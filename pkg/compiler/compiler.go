@@ -636,6 +636,14 @@ func (c *Context) compileForm(o vm.Value) error {
 		if !ok {
 			return c.compileError("expected vector form")
 		}
+		if isConstantLiteral(o) {
+			// The vector is the constant: one value for every evaluation, as
+			// Clojure compiles it. Copied to exact length so a reader-built
+			// backing array with spare capacity is never shared.
+			c.loadConstant(vm.NewArrayVector(elems))
+			c.tailPosition = tp
+			return nil
+		}
 		err := c.compileAggregateWithMeta(o, func() error {
 			vector := c.constant(rt.CoreNS.Lookup("vector"))
 			c.emitWithArg(vm.OP_LOAD_CONST, vector)
@@ -657,6 +665,13 @@ func (c *Context) compileForm(o vm.Value) error {
 	case vm.MapType:
 		tp := c.tailPosition
 		c.tailPosition = false
+		if isConstantLiteral(o) {
+			// The reader built it with array-map, so it is the value the call
+			// would build, in the same order: pool it instead.
+			c.loadConstant(o)
+			c.tailPosition = tp
+			return nil
+		}
 
 		err := c.compileAggregateWithMeta(o, func() error {
 			arrayMap := c.constant(rt.CoreNS.Lookup("array-map"))
@@ -697,6 +712,11 @@ func (c *Context) compileForm(o vm.Value) error {
 	case vm.SetType:
 		tp := c.tailPosition
 		c.tailPosition = false
+		if isConstantLiteral(o) {
+			c.loadConstant(o)
+			c.tailPosition = tp
+			return nil
+		}
 
 		err := c.compileAggregateWithMeta(o, func() error {
 			hashSet := c.constant(rt.CoreNS.Lookup("hash-set"))
@@ -1872,6 +1892,59 @@ func fnFormCompiler(c *Context, sourceForm vm.Value, args vm.ArrayVector, bodyf 
 	}
 	fc.emit(vm.OP_RETURN)
 	return nil
+}
+
+// loadConstant pools v and emits the load of it.
+func (c *Context) loadConstant(v vm.Value) {
+	n := c.constant(v)
+	c.emitWithArg(vm.OP_LOAD_CONST, n)
+	c.incSP(1)
+}
+
+// isConstantLiteral reports whether a collection literal is a constant: every
+// element is self-evaluating data (or such a collection, recursively) and the
+// literal carries no metadata. Clojure compiles such a literal to one shared
+// value; a symbol, a list (a call) or metadata makes it an expression that
+// builds a fresh collection each time. The metadata rule follows Clojure,
+// where ^{:t 1} [1 2] is not shared either.
+func isConstantLiteral(o vm.Value) bool {
+	switch o.Type() {
+	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType,
+		vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType:
+		return true
+	case vm.ArrayVectorType, vm.PersistentVectorType, vm.MapType, vm.SetType:
+		if im, ok := o.(vm.IMeta); ok {
+			if m := im.Meta(); m != nil && m != vm.NIL {
+				return false
+			}
+		}
+		if elems, ok := orderedLiteralElems(o); ok {
+			for _, e := range elems {
+				if !isConstantLiteral(e) {
+					return false
+				}
+			}
+			return true
+		}
+		sq, ok := o.(vm.Sequable)
+		if !ok {
+			return false
+		}
+		for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+			e := s.First()
+			if k, v, isEntry := vm.MapEntryKV(e); isEntry {
+				if !isConstantLiteral(k) || !isConstantLiteral(v) {
+					return false
+				}
+				continue
+			}
+			if !isConstantLiteral(e) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // compileAggregateWithMeta runs emit, which must leave one value on the

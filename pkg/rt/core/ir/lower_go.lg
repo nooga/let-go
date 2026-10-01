@@ -238,10 +238,48 @@
   (gogen/call (vm-sel name) args))
 
 (defn- boxed-vector-expr [xs]
-  (let [elems (mapv boxed-value-expr xs)]
-    (when (every? identity elems)
-      (vm-call "NewArrayVector"
-               [(gogen/composite-lit (gogen/type "[]vm.Value") elems)]))))
+  (if (zero? (count xs))
+    (vm-sel "EmptyVector")
+    (let [elems (mapv boxed-value-expr xs)]
+      (when (every? identity elems)
+        (vm-call "NewArrayVector"
+                 [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
+;; A constant collection (a :const whose value is a vector, map, set or list
+;; without metadata) is one value per literal: the bytecode compiler pools each
+;; literal as its own constant, by identity, as Clojure registers constants, so
+;; lowered Go hoists it to a package-level `var __k_<n> vm.Value = …` and reads
+;; the var. A literal is its reader value: every lowering of it, an inlined
+;; copy included, carries that same object, so a var is found by identical?,
+;; never by content (two literals of equal content are two values, and a map
+;; literal keeps its own key order). The atom is bound per namespace lowering
+;; (ir.passes.pipeline) to {name {:val <the literal> :expr <gogen expr>}};
+;; unbound, every literal is built inline.
+(def ^:dynamic *hoisted-consts* nil)
+
+(defn- hoisted-const-expr [v build]
+  (let [expr (build)]
+    (if (and expr *hoisted-consts* (nil? (meta v)))
+      (let [seen (first (filter (fn [[_ e]] (and (contains? e :val) (identical? (:val e) v)))
+                                @*hoisted-consts*))]
+        (if seen
+          (gogen/ident (first seen))
+          (let [nm (str "__k_" (count (filter (fn [[_ e]] (contains? e :val)) @*hoisted-consts*)))]
+            (swap! *hoisted-consts* assoc nm {:val v :expr expr})
+            (gogen/ident nm))))
+      expr)))
+
+(defn hoisted-const-decls
+  "Package-level decls for the hoisted constants, sorted by name so the
+   file is deterministic. Each is hashed in its initializer (vm.Prehash):
+   every goroutine shares the value, and a collection caches its hash on
+   first use without synchronization."
+  [consts]
+  (mapv (fn [[nm {:keys [expr]}]]
+          {:decl (gogen/top-var-decl nm (gogen/type "vm.Value")
+                                     (vm-call "Prehash" [expr]))
+           :imports [{:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}]})
+        (sort-by first consts)))
 
 (defn- boxed-list-expr [xs]
   (if (zero? (count xs))
@@ -387,12 +425,24 @@
     ;; #"..." form (Go-quoted, so it round-trips any pattern bytes).
     (instance? java.util.regex.Pattern v)
     (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
-    (list? v)       (boxed-list-expr v)
-    (vector? v)     (boxed-with-meta v (boxed-vector-expr v))
-    (map? v)        (boxed-with-meta v (boxed-map-expr v))
+    ;; A quoted list is hoisted whatever reader metadata it carries: the
+    ;; lowered list never carried it (boxed-list-expr applies none), and the
+    ;; bytecode VM shares the quoted constant too.
+    (list? v)       (hoisted-const-expr (with-meta v nil) (fn [] (boxed-list-expr v)))
+    ;; The empty vector is vm.EmptyVector itself; other constant collections
+    ;; are hoisted. One carrying metadata is wrapped per evaluation and never
+    ;; shared, as in Clojure.
+    (vector? v)     (if (zero? (count v))
+                      (boxed-with-meta v (boxed-vector-expr v))
+                      (hoisted-const-expr v (fn [] (boxed-with-meta v (boxed-vector-expr v)))))
+    (map? v)        (if (zero? (count v))
+                      (boxed-with-meta v (boxed-map-expr v))
+                      (hoisted-const-expr v (fn [] (boxed-with-meta v (boxed-map-expr v)))))
     ;; Reachable since read-string reads data: `(quote #{1 2})` is a set
     ;; CONSTANT, where a code-read source only ever produced (hash-set 1 2).
-    (set? v)        (boxed-with-meta v (boxed-set-expr v))
+    (set? v)        (if (zero? (count v))
+                      (boxed-with-meta v (boxed-set-expr v))
+                      (hoisted-const-expr v (fn [] (boxed-with-meta v (boxed-set-expr v)))))
     :else nil))
 
 (declare go-name)
