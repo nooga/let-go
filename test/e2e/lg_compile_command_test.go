@@ -94,6 +94,25 @@ func TestLgCompileCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("a default output name that is a directory fails", func(t *testing.T) {
+		// app.lg defaults to ./app; go build -o would write app/lgprogram.
+		dir := filepath.Join(fix, "app")
+		if err := os.Mkdir(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(dir)
+		out, err := runCmd(ctx, t, bin, fix, []string{"compile", lib, app}, env...)
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+			t.Fatalf("lg compile into a directory: err=%v, want exit 1\n%s", err, out)
+		}
+		if !bytes.Contains([]byte(out), []byte("is a directory")) {
+			t.Fatalf("missing the directory diagnostic:\n%s", out)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Fatalf("lg compile wrote into %s: %v", dir, entries)
+		}
+	})
+
 	t.Run("a program without an entry fails", func(t *testing.T) {
 		out, err := runCmd(ctx, t, bin, fix, []string{"compile", lib}, env...)
 		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {

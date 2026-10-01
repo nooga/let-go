@@ -137,6 +137,11 @@ func goBuild(dir, out string) error {
 	if err != nil {
 		return err
 	}
+	// go build -o into an existing directory writes <dir>/<module name>
+	// instead, which would leave the binary somewhere other than reported.
+	if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
+		return fmt.Errorf("output %s is a directory; name the binary with -o", out)
+	}
 	cmd := exec.Command(gomod.GoToolPath(), "build", "-o", abs, ".")
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
