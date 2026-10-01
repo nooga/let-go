@@ -38,6 +38,11 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           args: --timeout=5m
+      # `run` drops formatter findings in paths the linters exclude, test files
+      # included; `fmt --diff` checks every file the formatters cover. Uses the
+      # binary the action just installed.
+      - name: Check Go formatting
+        run: golangci-lint fmt --diff
 
   # Enforce the "no test files at the repo root" guard. The pre-commit hook of
   # the same name is the local equivalent, but jj does not run git hooks, so CI
