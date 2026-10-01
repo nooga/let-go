@@ -379,13 +379,15 @@
         fieldset    (set (:fields decl))
         methods     (filter (fn [x] (and (seq? x) (symbol? (first x)) (vector? (second x))))
                             (:impls decl))
-        decls       (mapv
-                      (fn [m]
-                        (let [ir-fn  (build-method-ir-fn tname fieldset m)
-                              result (lower-go/lower-method ir-fn recv-type
-                                       (lower-go/go-export-name (first m)))]
-                          (:decl result)))
-                      methods)]
+        ;; Each method's decl is followed by the closure structs of its own
+        ;; fn literals (:decls), as for a top-level fn.
+        decls       (vec (mapcat
+                           (fn [m]
+                             (let [ir-fn  (build-method-ir-fn tname fieldset m)
+                                   result (lower-go/lower-method ir-fn recv-type
+                                            (lower-go/go-export-name (first m)))]
+                               (into [(:decl result)] (:decls result))))
+                           methods))]
     {:status :lowered :decls decls}))
 
 ;; --- end-to-end: form → IR → optimized IR → bytecode -----------------
@@ -1549,6 +1551,7 @@
                                                    :param-count  (count (first (:fn-tail meth)))
                                                    :needs-error? (:needs-error? result)}
                                             :decl {:decl (:decl result)
+                                                   :decls (:decls result)
                                                    :imports (or (:imports result) [vm-import rt-import])}})))))
                                  methods))
                           ;; Runtime multimethod semantics are last-write-wins

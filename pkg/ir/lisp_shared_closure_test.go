@@ -22,15 +22,20 @@ func TestGuardedNativeCallSharesClosureArgument(t *testing.T) {
 	if !found {
 		t.Fatal("StoreThunk was not lowered")
 	}
-	closures := 0
-	ast.Inspect(fn.Body, func(node ast.Node) bool {
-		if _, ok := node.(*ast.FuncLit); ok {
-			closures++
+	// The outer closure is constructed in StoreThunk; the inner one in the
+	// outer's CallNative body. One constructor call per closure form.
+	ctors, boxes := closureSites(fn.Body)
+	if len(ctors) != 1 || boxes != 0 {
+		t.Fatalf("got %d closure constructions %v and %d rt.BoxNativeFn calls, want 1 and 0\n%s", len(ctors), ctors, boxes, source)
+	}
+	methods := 0
+	for _, d := range parseLoweredGo(t, source).Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv != nil && fd.Name.Name == "CallNative" {
+			methods++
 		}
-		return true
-	})
-	if closures != 2 {
-		t.Fatalf("got %d closure bodies, want 2 (one per source closure)\n%s", closures, source)
+	}
+	if methods != 2 {
+		t.Fatalf("got %d closure bodies, want 2 (one per source closure)\n%s", methods, source)
 	}
 	for _, call := range []string{"rt.CoreReset(", "rt.NativePrimsIntact()", "ec.Invoke("} {
 		if !strings.Contains(source, call) {

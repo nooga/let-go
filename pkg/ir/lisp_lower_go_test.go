@@ -78,6 +78,23 @@ func bindAndRenderGoDecl(t *testing.T, result *vm.PersistentMap) string {
 	return string(s)
 }
 
+// bindAndRenderGoClosures renders a lowered result's :decl together with the
+// closure structs of its fn literals (:decls), which is where a literal's
+// body lives: the fn itself only calls the struct's constructor.
+func bindAndRenderGoClosures(t *testing.T, result *vm.PersistentMap) string {
+	t.Helper()
+	passVarCounter++
+	varName := fmt.Sprintf("*lower-go-result-%d*", passVarCounter)
+	rt.NS(rt.NameCoreNS).Def(varName, result)
+	rendered := runLispExpr(t, fmt.Sprintf(
+		`(clojure.string/join "\n" (map gogen/render (cons (:decl %s) (:decls %s))))`, varName, varName))
+	s, ok := rendered.(vm.String)
+	if !ok {
+		t.Fatalf("expected gogen/render string, got %T", rendered)
+	}
+	return string(s)
+}
+
 func bindAndRenderGoFile(t *testing.T, file vm.Value) string {
 	t.Helper()
 	passVarCounter++
@@ -704,11 +721,11 @@ func TestLowerGoStrictIdentityClosureLowersToWrappedGoClosure(t *testing.T) {
 		t.Fatalf("expected :lowered status, got %v", got)
 	}
 
-	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "rt.BoxNativeFn") {
-		t.Fatalf("expected closure lowering to wrap a Go func literal\n--- go ---\n%s", rendered)
+	rendered := bindAndRenderGoClosures(t, result)
+	if !strings.Contains(rendered, "newClosure_") {
+		t.Fatalf("expected closure lowering to construct a closure struct\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "func(arg0 vm.Value) vm.Value") {
+	if !strings.Contains(rendered, "func(ec *vm.ExecContext, arg0 vm.Value) vm.Value") {
 		t.Fatalf("expected identity closure to lower to a vm.Value-typed Go closure\n--- go ---\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "return arg0") {
@@ -791,15 +808,18 @@ func TestLowerGoStrictCapturedClosureUsesOuterGoLocal(t *testing.T) {
 		t.Fatalf("expected :lowered status, got %v", got)
 	}
 
-	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "rt.BoxNativeFn") {
-		t.Fatalf("expected captured closure to lower via rt.BoxNativeFn\n--- go ---\n%s", rendered)
+	rendered := bindAndRenderGoClosures(t, result)
+	if !strings.Contains(rendered, "newClosure_") {
+		t.Fatalf("expected captured closure to construct a closure struct\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "func() vm.Value") {
-		t.Fatalf("expected captured closure to lower to a zero-arg Go closure\n--- go ---\n%s", rendered)
+	if !regexp.MustCompile(`func\(ec \*vm\.ExecContext, c[0-9]+_cap0 vm\.Value\) vm\.Value`).MatchString(rendered) {
+		t.Fatalf("expected captured closure to lower to a zero-arg Go closure taking its capture\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "return arg0") {
-		t.Fatalf("expected captured closure to close over the outer Go local\n--- go ---\n%s", rendered)
+	if !regexp.MustCompile(`return c[0-9]+_cap0`).MatchString(rendered) {
+		t.Fatalf("expected captured closure to return its capture\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "(ec, arg0)") {
+		t.Fatalf("expected the constructor to receive the outer Go local\n--- go ---\n%s", rendered)
 	}
 }
 
@@ -814,12 +834,12 @@ func TestLowerGoStrictKeywordClosureLowersToVmKeyword(t *testing.T) {
 		t.Fatalf("expected :lowered status, got %v", got)
 	}
 
-	rendered := bindAndRenderGoDecl(t, result)
+	rendered := bindAndRenderGoClosures(t, result)
 	if !strings.Contains(rendered, `vm.Keyword("ok")`) {
 		t.Fatalf("expected keyword literal to lower through vm.Keyword\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "rt.BoxNativeFn") {
-		t.Fatalf("expected keyword-returning closure to lower via Go closure wrapping\n--- go ---\n%s", rendered)
+	if !strings.Contains(rendered, "newClosure_") {
+		t.Fatalf("expected keyword-returning closure to construct a closure struct\n--- go ---\n%s", rendered)
 	}
 }
 
@@ -834,11 +854,11 @@ func TestLowerGoStrictMultiArityClosureLowersToNativeMultiArity(t *testing.T) {
 		t.Fatalf("expected :lowered status, got %v", got)
 	}
 
-	rendered := bindAndRenderGoDecl(t, result)
+	rendered := bindAndRenderGoClosures(t, result)
 	if !strings.Contains(rendered, "rt.MakeNativeMultiArity") {
 		t.Fatalf("expected multi-arity closure to lower via rt.MakeNativeMultiArity\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "func() vm.Value") || !strings.Contains(rendered, "func(arg0 vm.Value) vm.Value") {
+	if !strings.Contains(rendered, "func(ec *vm.ExecContext) vm.Value") || !strings.Contains(rendered, "func(ec *vm.ExecContext, arg0 vm.Value) vm.Value") {
 		t.Fatalf("expected both arity branches to lower as Go closures\n--- go ---\n%s", rendered)
 	}
 }
@@ -854,12 +874,12 @@ func TestLowerGoStrictCapturedMultiArityClosureUsesOuterGoLocals(t *testing.T) {
 		t.Fatalf("expected :lowered status, got %v", got)
 	}
 
-	rendered := bindAndRenderGoDecl(t, result)
+	rendered := bindAndRenderGoClosures(t, result)
 	if !strings.Contains(rendered, "rt.MakeNativeMultiArity") {
 		t.Fatalf("expected captured multi-arity closure to lower via rt.MakeNativeMultiArity\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "return arg0") {
-		t.Fatalf("expected zero-arity branch to capture the outer Go local\n--- go ---\n%s", rendered)
+	if !regexp.MustCompile(`return c[0-9]+_cap0`).MatchString(rendered) {
+		t.Fatalf("expected zero-arity branch to return its capture of the outer Go local\n--- go ---\n%s", rendered)
 	}
 }
 
@@ -994,14 +1014,14 @@ func TestLowerGoStrictMultiArityDefnLowersToNativeMultiArity(t *testing.T) {
 		t.Fatalf("expected :lowered status, got %v (reason: %v)", got, result.ValueAt(vm.Keyword("reason")))
 	}
 
-	rendered := bindAndRenderGoDecl(t, result)
+	rendered := bindAndRenderGoClosures(t, result)
 	if !strings.Contains(rendered, "rt.MakeNativeMultiArity") {
 		t.Fatalf("expected multi-arity defn to lower via rt.MakeNativeMultiArity\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "func(arg0 vm.Value) vm.Value") {
+	if !strings.Contains(rendered, "func(ec *vm.ExecContext, arg0 vm.Value) vm.Value") {
 		t.Fatalf("expected single-arg branch to lower as Go closure\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "func(arg0 vm.Value, arg1 vm.Value) vm.Value") {
+	if !strings.Contains(rendered, "func(ec *vm.ExecContext, arg0 vm.Value, arg1 vm.Value) vm.Value") {
 		t.Fatalf("expected two-arg branch to lower as Go closure\n--- go ---\n%s", rendered)
 	}
 }
@@ -2085,21 +2105,25 @@ func TestLowerGoNestedCapturedClosurePrefixesAreLexical(t *testing.T) {
 		t.Fatalf("expected :lowered status, got %v (reason: %v)", got, result.ValueAt(vm.Keyword("reason")))
 	}
 
-	rendered := bindAndRenderGoDecl(t, result)
+	rendered := bindAndRenderGoClosures(t, result)
 
 	// Each capturing closure names its first param <prefix>arg0 where prefix is
-	// one or more c<nid>_ segments. The two nested capturing closures appear in
-	// source order: outer first, inner second. The inner prefix must LEXICALLY
-	// EXTEND the outer (c<o>_ -> c<o>_c<i>_), which guarantees distinctness
-	// regardless of whether the two templates happen to share a nid. A flat
-	// per-nid scheme would instead emit sibling prefixes (c<o>_, c<i>_) that are
-	// only accidentally distinct.
-	re := regexp.MustCompile(`func\(((?:c[0-9]+_)+)arg0 vm\.Value\)`)
+	// one or more c<nid>_ segments. The inner prefix must LEXICALLY EXTEND the
+	// outer (c<o>_ -> c<o>_c<i>_), which guarantees distinctness regardless of
+	// whether the two templates happen to share a nid. A flat per-nid scheme
+	// would instead emit sibling prefixes (c<o>_, c<i>_) that are only
+	// accidentally distinct. The closure structs render in registration
+	// order (the inner literal lowers, and registers, before its outer), so
+	// the shorter prefix is the outer one.
+	re := regexp.MustCompile(`((?:c[0-9]+_)+)arg0 vm\.Value\)`)
 	ms := re.FindAllStringSubmatch(rendered, -1)
 	if len(ms) < 2 {
 		t.Fatalf("expected two nested prefixed closure params, found %d\n--- go ---\n%s", len(ms), rendered)
 	}
 	outer, inner := ms[0][1], ms[1][1]
+	if len(inner) < len(outer) {
+		outer, inner = inner, outer
+	}
 	if inner == outer || !strings.HasPrefix(inner, outer) {
 		t.Fatalf("inner closure prefix %q must lexically extend outer %q (else inner param can shadow captured outer param)\n--- go ---\n%s", inner, outer, rendered)
 	}

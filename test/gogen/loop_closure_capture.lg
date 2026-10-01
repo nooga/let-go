@@ -1,0 +1,58 @@
+;; Native-lowering trampoline fixture: a closure made inside a loop holds the
+;; value its captures had when it was made, not the loop's later values.
+;;
+;; A lowered closure copies each capture into its own struct when the fn form
+;; is evaluated, so a later recur that rebinds the loop slot cannot reach it.
+;; The trampoline compares (run) under the lowered Go against the bytecode VM.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.loop-closure-capture)
+
+(defn capture-each [n]
+  (loop [i 0 acc []]
+    (if (< i n)
+      (recur (inc i) (conj acc (fn [] i)))
+      (mapv #(%) acc))))
+
+(defn capture-let [n]
+  (loop [i 0 acc []]
+    (if (< i n)
+      (let [j (* i 10)]
+        (recur (inc i) (conj acc (fn [] j))))
+      (mapv #(%) acc))))
+
+(defn capture-alternating [n]
+  (loop [i 0 acc []]
+    (if (< i n)
+      (recur (inc i) (conj acc (if (even? i) (fn [] i) (fn [] (- i)))))
+      (mapv #(%) acc))))
+
+(defn keep-first []
+  (loop [x 1 f nil]
+    (if (< x 3)
+      (recur (inc x) (or f (fn [] x)))
+      (f))))
+
+(defn capture-a-closure []
+  (loop [i 0 f (fn [] -1) g nil]
+    (if (< i 2)
+      (recur (inc i) (fn [] i) (fn [] (f)))
+      [(f) (g)])))
+
+(defn capture-recur-arg [n acc]
+  (if (< (count acc) n)
+    (recur n (conj acc (fn [] (count acc))))
+    (mapv #(%) acc)))
+
+(defn capture-named-recursive [n]
+  (loop [i 0 acc []]
+    (if (< i n)
+      (recur (inc i) (conj acc (fn self [k] (if (pos? k) (self (dec k)) i))))
+      (mapv #(% 2) acc))))
+
+(defn run []
+  [(capture-each 3) (capture-let 3) (capture-alternating 4)
+   (keep-first) (capture-a-closure) (capture-recur-arg 3 [])
+   (capture-named-recursive 3)])
