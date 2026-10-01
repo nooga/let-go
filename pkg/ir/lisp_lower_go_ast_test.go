@@ -133,9 +133,14 @@ func assertsType(node ast.Node, typ string) bool {
 func callsInvokeValue(node ast.Node) bool {
 	found := false
 	ast.Inspect(node, func(n ast.Node) bool {
-		if ce, ok := n.(*ast.CallExpr); ok &&
-			(isSelector(ce.Fun, "rt", "InvokeValue") || isSelector(ce.Fun, "rt", "InvokeValueEC")) {
-			found = true
+		// A call of one to four arguments uses rt.InvokeValueEC1..4, which
+		// take the arguments as parameters; wider calls take the slice form.
+		if ce, ok := n.(*ast.CallExpr); ok {
+			for _, name := range []string{"InvokeValue", "InvokeValueEC", "InvokeValueEC1", "InvokeValueEC2", "InvokeValueEC3", "InvokeValueEC4"} {
+				if isSelector(ce.Fun, "rt", name) {
+					found = true
+				}
+			}
 		}
 		return true
 	})
@@ -174,6 +179,7 @@ func basicStr(e ast.Expr) string {
 // code threads the caller's ExecContext, so the call is
 //
 //	ec.Invoke(rt.CachedVarFn(&__v_*, "ns", "name"), ARGS...)
+//	ec.InvokeN(rt.CachedVarFn(&__v_*, "ns", "name"), a0, …)   (N = 1..4 args)
 //
 // (the older method form rt.CachedVarFn(...).Invoke(ARGS...) is still
 // recognised). Returns the first match.
@@ -189,8 +195,10 @@ func findIFnDispatch(node ast.Node) (ifnDispatch, bool) {
 		if !ok {
 			return true
 		}
+		// ec.Invoke takes an argument slice; ec.Invoke1..Invoke4 take the
+		// arguments as parameters (a call of one to four arguments).
 		invSel, ok := invoke.Fun.(*ast.SelectorExpr)
-		if !ok || invSel.Sel.Name != "Invoke" {
+		if !ok || !isInvokeName(invSel.Sel.Name) {
 			return true
 		}
 		// Locate the rt.CachedVarFn(&__v_*, ns, name) call. Two shapes:
@@ -227,4 +235,12 @@ func findIFnDispatch(node ast.Node) (ifnDispatch, bool) {
 		return false
 	})
 	return res, found
+}
+
+func isInvokeName(name string) bool {
+	switch name {
+	case "Invoke", "Invoke1", "Invoke2", "Invoke3", "Invoke4":
+		return true
+	}
+	return false
 }

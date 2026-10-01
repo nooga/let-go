@@ -37,7 +37,7 @@ func TestGuardedNativeCallSharesClosureArgument(t *testing.T) {
 	if methods != 2 {
 		t.Fatalf("got %d closure bodies, want 2 (one per source closure)\n%s", methods, source)
 	}
-	for _, call := range []string{"rt.CoreReset(", "rt.NativePrimsIntact()", "ec.Invoke("} {
+	for _, call := range []string{"rt.CoreReset(", "rt.NativePrimsIntact()", "ec.Invoke2("} {
 		if !strings.Contains(source, call) {
 			t.Errorf("missing %s in generated source", call)
 		}

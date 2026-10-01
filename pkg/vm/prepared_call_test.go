@@ -170,9 +170,11 @@ func TestPreparedCallRejectsUnsupportedArities(t *testing.T) {
 	if pc := RootExecContext.PrepareCall(nullary, 0); pc != nil {
 		t.Fatal("PrepareCall accepted arity 0 with no Call0 entry point")
 	}
-	ternary := testBytecodeFnReturningArg(consts, 3)
-	if pc := RootExecContext.PrepareCall(ternary, 3); pc != nil {
-		t.Fatal("PrepareCall accepted arity 3 with no Call3 entry point")
+	// Call1 through Call4 exist (lowered calls of one to four arguments go
+	// through them); arity 5 has no entry point.
+	fiveary := testBytecodeFnReturningArg(consts, 5)
+	if pc := RootExecContext.PrepareCall(fiveary, 5); pc != nil {
+		t.Fatal("PrepareCall accepted arity 5 with no Call5 entry point")
 	}
 }
 
