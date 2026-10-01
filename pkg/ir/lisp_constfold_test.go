@@ -44,13 +44,20 @@ func ensureLoader() {
 		if res.Load("ir.build") == nil {
 			panic("ir.build namespace failed to load — bundle missing or corrupt")
 		}
+		// ir.lower-go loads BEFORE ir.passes.pipeline: pipeline's module-load
+		// block injects ir.passes.liveness/reachable-nids into lower-go's
+		// hook atom, and loading lower-go afterwards re-evaluates its `def`
+		// and empties the atom again — every lowering in this process would
+		// then run without a liveness set, on the uses-table fallback, which
+		// is not what production does.
 		for _, ns := range []string{
 			"ir.zipper", "ir.passes",
 			"ir.passes.dce", "ir.passes.constfold",
 			"ir.passes.mutability", "ir.passes.cse",
 			"ir.passes.typeinfer", "ir.passes.infer-arg-types",
 			"ir.passes.licm", "ir.passes.lambda-lift", "ir.passes.inline", "ir.passes.fusion",
-			"ir.passes.liveness", "ir.passes.blockarg", "ir.passes.cleanup", "ir.passes.legalize", "ir.passes.pipeline", "ir.dump", "ir.dominance", "ir.lower-go"} {
+			"ir.passes.liveness", "ir.passes.blockarg", "ir.passes.cleanup", "ir.passes.legalize",
+			"ir.lower-go", "ir.passes.pipeline", "ir.dump", "ir.dominance"} {
 			if res.Load(ns) == nil {
 				panic("namespace failed to load: " + ns)
 			}
