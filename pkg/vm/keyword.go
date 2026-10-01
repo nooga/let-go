@@ -54,27 +54,37 @@ func (l Keyword) Arity() int {
 }
 
 func (l Keyword) Invoke(pargs []Value) (Value, error) {
-	vl := len(pargs)
-	if vl < 1 || vl > 2 {
-		return NIL, fmt.Errorf("wrong number of arguments %d", vl)
+	switch len(pargs) {
+	case 1:
+		return l.lookup(pargs[0]), nil
+	case 2:
+		return l.lookupOr(pargs[0], pargs[1]), nil
 	}
-	as, ok := pargs[0].(Lookup)
+	return NIL, fmt.Errorf("wrong number of arguments %d", len(pargs))
+}
+
+// lookup is (:k coll): the value at l in coll, nil when coll is no Lookup.
+func (l Keyword) lookup(coll Value) Value {
+	as, ok := coll.(Lookup)
 	if !ok {
-		if vl == 2 {
-			return pargs[1], nil
-		}
-		return NIL, nil
+		return NIL
 	}
 	if kl, ok := as.(KeywordLookup); ok {
-		if vl == 1 {
-			return kl.ValueAtKeyword(l), nil
-		}
-		return kl.ValueAtKeywordOr(l, pargs[1]), nil
+		return kl.ValueAtKeyword(l)
 	}
-	if vl == 1 {
-		return as.ValueAt(l), nil
+	return as.ValueAt(l)
+}
+
+// lookupOr is (:k coll default).
+func (l Keyword) lookupOr(coll, dflt Value) Value {
+	as, ok := coll.(Lookup)
+	if !ok {
+		return dflt
 	}
-	return as.ValueAtOr(l, pargs[1]), nil
+	if kl, ok := as.(KeywordLookup); ok {
+		return kl.ValueAtKeywordOr(l, dflt)
+	}
+	return as.ValueAtOr(l, dflt)
 }
 
 func (l Keyword) NamespacedRaw() (ns Keyword, name Keyword, hasNS bool) {
