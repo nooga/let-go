@@ -197,8 +197,9 @@
 ;; AC-1 zero-lag gate: The coherence check (assert-form-head-coherence!) is invoked
 ;; at load time within build.lg during lgbgen's bootstrap phase. This happens on EVERY
 ;; `make generate` pass (the check is embedded in source, so it never becomes stale),
-;; catching handler omissions immediately on the same pass they occur. The bootstrap
-;; output above confirms "ir.form-heads catalog loaded (bidirectional coherence check passed)".
+;; catching handler omissions immediately on the same pass they occur. A failed
+;; check throws, so the bootstrap above stops with "ir.form-heads coherence check
+;; FAILED"; it prints nothing when the check passes.
 
 ;; Immediately after writing the manifest, refresh the canonical digest so
 ;; generated.sums records the new manifest hash. This ensures
