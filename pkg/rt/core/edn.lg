@@ -9,15 +9,67 @@
   (:require
    [pprint]))
 
+;; Tag resolution for EDN, as Clojure's: a :readers entry, else the built-in
+;; #inst and #uuid, else :default. EDN never consults *data-readers* or
+;; *default-data-reader-fn*, so the resolver closes over the opts alone.
+
+(defn- callable-reader [f tag]
+  (if (ifn? f)
+    f
+    (throw (ex-info (str ":readers entry for " tag " must be callable, got " (pr-str (type f)))
+                    {:fn :edn/read-string :type (type f) :value f}))))
+
+(defn- reader-fn [entry tag]
+  (callable-reader (if (var? entry) (deref entry) entry) tag))
+
+(defn- reader-entry [readers tag]
+  (if (map? readers)
+    (let [entry (get readers tag)]
+      (if (nil? entry) nil (reader-fn entry tag)))
+    (if (nil? readers)
+      nil
+      (throw (ex-info (str ":readers must be a map, got " (pr-str (type readers)))
+                      {:fn :edn/read-string :type (type readers) :value readers})))))
+
+(defn- read-unhandled-tag [default tag form]
+  (if default
+    (default tag form)
+    (throw (ex-info (str "No reader function for tag " tag)
+                    {:fn :edn/read-string :type (type tag) :value tag}))))
+
+(defn- read-tag [readers default tag form]
+  (if-let [f (reader-entry readers tag)]
+    (f form)
+    (let [builtin (core/-read-builtin-tagged tag form)]
+      (if (some? builtin)
+        builtin
+        (read-unhandled-tag default tag form)))))
+
+(defn- tag-resolver [opts]
+  (let [readers (:readers opts)
+        default (:default opts)]
+    (fn [tag form] (read-tag readers default tag form))))
+
 (defn read-string
   "Read one form with Clojure data semantics: metadata attaches to values that
    carry it, #{} reads as a set, #_ inside collections splices nothing, and
-   nothing is evaluated."
-  ([s] (core/read-data-string s)))
+   nothing is evaluated. opts: :readers, a map of tag symbol to a fn of the
+   tagged form; :default, a fn of tag and form for any other tag but the
+   built-in #inst and #uuid; :eof, what an input with no form reads as.
+   Without :eof that input is an error; without opts it reads as nil. nil s
+   reads as nil."
+  ([s] (read-string {:eof nil} s))
+  ([opts s]
+   (when s
+     (if (contains? opts :eof)
+       (core/read-data-string s (tag-resolver opts) (:eof opts))
+       (core/read-data-string s (tag-resolver opts))))))
 
 (defn read-all-string
-  "Every top-level form of s with data semantics, as a vector."
-  [s] (core/read-all-data-string s))
+  "Every top-level form of s with data semantics, as a vector. opts take
+   :readers and :default as read-string does."
+  ([s] (read-all-string {} s))
+  ([opts s] (core/read-all-data-string s (tag-resolver opts))))
 
 (defn write-string [form]
   (pr-str form))
