@@ -6,6 +6,7 @@
 package compiler_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,6 +15,49 @@ import (
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+func readAngleFragment(input compiler.TaggedRawInput) (vm.Value, error) {
+	opener, err := input.NextRune()
+	if err != nil {
+		return vm.NIL, err
+	}
+	if opener != '[' {
+		return vm.NIL, fmt.Errorf("raw fragment requires [")
+	}
+	var body strings.Builder
+	for {
+		ch, err := input.NextRune()
+		if err != nil {
+			return vm.NIL, err
+		}
+		if ch == ']' {
+			return vm.String(body.String()), nil
+		}
+		body.WriteRune(ch)
+	}
+}
+
+func TestExternalPackageCanImplementRawTaggedReader(t *testing.T) {
+	registry := compiler.NewTaggedReaderRegistry()
+	if err := registry.RegisterRaw("raw", readAngleFragment); err != nil {
+		t.Fatal(err)
+	}
+	reader := compiler.NewLispReaderWithTaggedReaders(strings.NewReader("#raw[hello] 42"), "probe.lg", registry)
+	got, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != vm.String("hello") {
+		t.Fatalf("raw fragment = %q, want hello", got)
+	}
+	next, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next != vm.Int(42) {
+		t.Fatalf("next form = %v, want 42", next)
+	}
+}
 
 func TestExternalPackageCompilerUsesRegisteredDataReader(t *testing.T) {
 	registry := compiler.NewTaggedReaderRegistry()
@@ -53,5 +97,19 @@ func TestTruncatedTaggedLiteralIsIncompleteThroughPublicAPIs(t *testing.T) {
 	}
 	if !api.IsIncomplete(err) {
 		t.Fatalf("api.IsIncomplete(%v) = false", err)
+	}
+}
+
+func TestTruncatedRawGoFragmentIsIncompleteThroughPublicAPIs(t *testing.T) {
+	for _, input := range []string{"#go", "#go{if ready {", "#go{s := `}`", "#go{x /"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := compiler.NewLispReader(strings.NewReader(input), "fragment.lg").Read()
+			if err == nil {
+				t.Fatal("truncated #go fragment returned nil error")
+			}
+			if !api.IsIncomplete(err) {
+				t.Fatalf("api.IsIncomplete(%v) = false", err)
+			}
+		})
 	}
 }
