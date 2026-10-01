@@ -155,9 +155,11 @@
       (is (str/includes? msg "cannot compile a value of type"))
       (is (not (str/includes? msg "index out of range"))))))
 
-;; The IR builder keeps metadata with the collection it belongs to: literal
-;; metadata on a literal collection stays on one Const, and metadata holding
-;; expressions is compiled and applied with with-meta.
+;; The IR builder keeps metadata with the collection it belongs to, applied
+;; with with-meta on every evaluation: a collection literal carrying metadata
+;; is not a constant, so it never folds to a Const (Clojure evaluates
+;; ^{:t 1} [1 2] to a fresh vector each time, and the bytecode compiler applies
+;; with-meta per evaluation too); only the metadata-free parts are constants.
 (defn- built-insts [src]
   (vec (ir.data/all-insts (ir.build/build-fn (read-string src)))))
 
@@ -170,18 +172,14 @@
         insts))
 
 (deftest ir-builder-keeps-collection-metadata-with-the-value
-  (doseq [[src expected] [["(defn p [] ^:flag #{1})" {:flag true}]
-                          ["(defn p [] ^:flag {:k 1})" {:flag true}]
-                          ["(defn p [] ^:flag [])" {:flag true}]
-                          ["(defn p [] ^long #{1})" {:tag 'long}]]]
-    (testing (str "literal metadata stays on the Const: " src)
-      (let [insts (built-insts src)]
-        (is (= [expected] (keep meta (consts insts))))
-        (is (not (calls-with-meta? insts))))))
-  (doseq [src ["(defn p [] ^{:a (+ 1 1)} #{1})"
+  (doseq [src ["(defn p [] ^:flag #{1})"
+               "(defn p [] ^:flag {:k 1})"
+               "(defn p [] ^:flag [])"
+               "(defn p [] ^long #{1})"
+               "(defn p [] ^{:a (+ 1 1)} #{1})"
                "(defn p [] ^{:a (+ 1 1)} {:k 1})"
                "(defn p [x] ^:flag [x])"]]
-    (testing (str "otherwise the metadata is applied with with-meta: " src)
+    (testing (str "the metadata is applied with with-meta: " src)
       (let [insts (built-insts src)]
         (is (calls-with-meta? insts))
         (is (empty? (keep meta (consts insts))))))))
