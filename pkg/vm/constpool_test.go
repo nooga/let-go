@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,4 +38,25 @@ func TestConstpoolDistinguishesEmptyListFromNilList(t *testing.T) {
 	assert.NotEqual(t, emptyIdx, nilListIdx)
 	assert.Equal(t, EmptyList, c.get(emptyIdx))
 	assert.Equal(t, nilList, c.get(nilListIdx))
+}
+
+// A collection constant is shared by every goroutine that runs its chunk, so
+// interning it must fill its hash cache: run with -race.
+func TestConstpoolPrehashesCollectionConstants(t *testing.T) {
+	c := NewConsts()
+	v := NewList([]Value{Int(1), Int(2)})
+	c.Intern(v)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			HashValue(v)
+		}()
+	}
+	close(start)
+	wg.Wait()
 }

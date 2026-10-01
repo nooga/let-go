@@ -1714,6 +1714,10 @@
                     ;; native-reg is always merged on top and never shrinks.
                     (loop [sib-reg sibling-registry guard 0]
                       (let [cross (atom {})
+                            ;; Constant collection literals hoisted by this
+                            ;; pass; fresh per pass like cross, so only the
+                            ;; converged pass's constants are emitted.
+                            consts (atom {})
                             ;; *cross-pkg-registry* (other lowered packages'
                             ;; exports) is merged like native-reg — stable, never
                             ;; shrunk — BELOW sib-reg so this ns's own siblings
@@ -1722,14 +1726,16 @@
                             res (binding [lower-go/*lowered-registry* reg
                                           lower-go/*native-imports-used* native-imports
                                           lower-go/*cross-ns-vars-used* cross
+                                          lower-go/*hoisted-consts* consts
                                           lower-go/*defmulti-dispatchers* (when (seq defmulti-registry)
                                                                             defmulti-registry)]
                                   (lower-defn-forms defn-forms))
                             sib-reg' (select-keys sib-reg (keys (emitted-registry res)))]
                         (if (or (= sib-reg' sib-reg) (>= guard cap))
-                          {:results res :cross cross}
+                          {:results res :cross cross :consts consts}
                           (recur sib-reg' (inc guard))))))
             cross-ns-vars (:cross pass2)
+            hoisted-consts (:consts pass2)
             results (:results pass2)
             ;; Filter out results with nil decls (failures that slipped through).
             valid-results (filterv (fn [r] (some? (:decl r))) results)
@@ -1764,7 +1770,8 @@
                           extra-decls)
             ;; Package-level cached *vm.Var decls + lazy accessors for the
             ;; recorded cross-ns callees (deterministic, sorted by base name).
-            cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)
+            cached-var-decls (into (lower-go/cross-ns-var-decls @cross-ns-vars)
+                                   (lower-go/hoisted-const-decls @hoisted-consts))
             ;; EPIC-012/ITER-0025 → ITER-0037: cross-package calls now resolve to
             ;; a public fn's OWN exported PascalCase name (emit-go-name), so the
             ;; `LG_<go>` forwarding-wrapper indirection is gone — no wrapper decls
