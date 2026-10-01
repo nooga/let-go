@@ -38,15 +38,19 @@ func CoreConsts() *vm.Consts {
 	return consts
 }
 
-// precompiledNS holds decoded namespace chunks from the bundle.
-var precompiledNS map[string]*vm.CodeChunk
+// precompiledCore is the decoded core bundle: the namespace chunks the
+// resolver replays on (require ...), decoded on that first require when boot
+// deferred them.
+var precompiledCore *bytecode.ExecUnit
 
-// PrecompiledNSChunk returns the precompiled main chunk for a namespace, or nil.
-func PrecompiledNSChunk(name string) *vm.CodeChunk {
-	if precompiledNS == nil {
-		return nil
+// PrecompiledNSChunk returns the precompiled main chunk for a namespace, or
+// nil when the bundle does not define it. Decoding a deferred namespace's
+// chunks happens here, so it can fail.
+func PrecompiledNSChunk(name string) (*vm.CodeChunk, error) {
+	if precompiledCore == nil {
+		return nil, nil
 	}
-	return precompiledNS[name]
+	return precompiledCore.NSChunk(name)
 }
 
 // evalInNSChild is the namespace-aware eval behind rt.SetEvalInNS (pod
@@ -218,10 +222,10 @@ func loadPrecompiledBundle() error {
 	}
 
 	// Compiler-side leftovers the runtime spine deliberately omits: the decoded
-	// const pool becomes the global pool for further compilation, and the chunk
-	// map is what the resolver+compiler NSLoader replays a namespace from.
+	// const pool becomes the global pool for further compilation, and the unit
+	// is what the resolver+compiler NSLoader replays a namespace from.
 	consts = unit.Consts
-	precompiledNS = unit.NSChunks
+	precompiledCore = unit
 
 	// Source-only namespaces (the precompiled bundle deliberately skips them
 	// because their precompiled stubs would intern nil into dependent
