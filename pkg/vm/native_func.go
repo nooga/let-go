@@ -55,6 +55,12 @@ func TooFewArgs(fn Value, got, min int) error {
 	return NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", fn, min, got))
 }
 
+// NoArityVariant is the error a multi-arity native fn returns when no arity
+// matches the call, as the bytecode VM reports it for a multi-arity fn.
+func NoArityVariant(fn Value, got int) error {
+	return NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", fn, got))
+}
+
 // orNIL maps the nil interface a Go func may return in place of NIL to NIL,
 // as the reflect path's BoxValue does, so no fast shape hands nil to callers.
 func orNIL(v Value) Value {

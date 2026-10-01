@@ -6,7 +6,7 @@
   "lispFn": "sum-all",
   "goFn": "SumAll",
   "lowering": "vm",
-  "functionFragment": "func SumAll(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n\tvar v4 vm.Value\n\tvar callErr error\n\tif rt.NativePrimsIntact() {\n\t\tv4, callErr = rt.Reduce3(ec, ec.Deref(rt.LookupVar(\"clojure.core\", \"+\")), vm.Int(0), rt.BoxRestArgs(args))\n\t\tif callErr != nil {\n\t\t\treturn nil, callErr\n\t\t}\n\t} else {\n\t\tv4, callErr = ec.Invoke(rt.CachedVarFn(&__v_clojure_core_reduce, \"clojure.core\", \"reduce\"), []vm.Value{ec.Deref(rt.LookupVar(\"clojure.core\", \"+\")), vm.Int(0), rt.BoxRestArgs(args)})\n\t\tif callErr != nil {\n\t\t\treturn nil, callErr\n\t\t}\n\t}\n\treturn v4, nil\n}",
-  "callFragment": "ec.Invoke(rt.CachedVarFn(&__v_vmbacked_sum_all, \"vmbacked\", \"sum-all\"), []vm.Value{vm.Int(1), vm.Int(2), vm.Int(3), vm.Int(4)})",
+  "functionFragment": "func SumAll(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n\tvar v4 vm.Value\n\tvar callErr error\n\tif rt.NativePrimsIntact() {\n\t\tv4, callErr = rt.Reduce3(ec, ec.Deref(rt.LookupVar(\"clojure.core\", \"+\")), vm.Int(0), rt.BoxRestArgs(args))\n\t\tif callErr != nil {\n\t\t\treturn nil, callErr\n\t\t}\n\t} else {\n\t\tv4, callErr = ec.Invoke3(rt.CachedVarFn(&__v_clojure_core_reduce, \"clojure.core\", \"reduce\"), ec.Deref(rt.LookupVar(\"clojure.core\", \"+\")), vm.Int(0), rt.BoxRestArgs(args))\n\t\tif callErr != nil {\n\t\t\treturn nil, callErr\n\t\t}\n\t}\n\treturn v4, nil\n}",
+  "callFragment": "ec.Invoke4(rt.CachedVarFn(&__v_vmbacked_sum_all, \"vmbacked\", \"sum-all\"), vm.Int(1), vm.Int(2), vm.Int(3), vm.Int(4))",
   "semanticWrap": "rt.AddValue(__EXPR__, vm.Int(1))"
 }

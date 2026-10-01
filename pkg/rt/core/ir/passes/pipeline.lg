@@ -1019,7 +1019,15 @@
     (= spec "vm.Char") expr
     :else              expr))
 
-(defn- override-wrapper-fn-lit [entry]
+(defn- override-var-value [ns-name fn-name]
+  ;; The override's own var, deref'd: an arity error names the fn as the
+  ;; bytecode VM does, and the wrapper has no other handle on its NativeFn.
+  ;; Evaluated on the error path only.
+  (gogen/call (gogen/field-sel (gogen/ident "ec") "Deref")
+              [(gogen/call (gogen/field-sel (gogen/ident "rt") "LookupVar")
+                           [(gogen/string-lit ns-name) (gogen/string-lit fn-name)])]))
+
+(defn- override-wrapper-fn-lit [ns-name entry]
   "Build the per-defn `func(args []vm.Value) (vm.Value, error)` adapter:
    arity-check, then call the generated typed fn, supplying `, nil` when
    the typed fn doesn't itself return an error.
@@ -1035,13 +1043,12 @@
         needs-error? (:needs-error? entry)
         args-id      (gogen/ident "args")
         len-call     (gogen/call (gogen/ident "len") [args-id])
-        msg          (str fn-name ": wrong number of arguments %d (expected " arity ")")
         arity-mismatch
         (gogen/return-stmt
-          [(gogen/ident "nil")
+          [(gogen/field-sel (gogen/ident "vm") "NIL")
            (gogen/call
-             (gogen/field-sel (gogen/ident "fmt") "Errorf")
-             [(gogen/string-lit msg) len-call])])
+             (gogen/field-sel (gogen/ident "vm") "WrongArgCount")
+             [(override-var-value ns-name fn-name) len-call (gogen/int-lit arity)])])
         len-check    (gogen/if-stmt
                        nil
                        (gogen/binary "!=" len-call (gogen/int-lit arity))
@@ -1072,7 +1079,35 @@
        (gogen/result (gogen/type "error"))]
       [len-check ret-stmt])))
 
-(defn- multi-arity-override-wrapper-fn-lit [arities]
+(defn- typed-override-wrapper-fn-lit [entry]
+  "The typed form of override-wrapper-fn-lit for a one-to-four parameter fn:
+   `func(ec *vm.ExecContext, a0 … vm.Value) (vm.Value, error)` applying the
+   lowered fn directly. The arity check lives in vm.NewTypedCtxNativeFn's
+   slice adapter, which reports a mismatch as the bytecode VM does, naming
+   the fn; __gogen_wrapN passes the fn's name through for that."
+  (let [arity        (:arity entry)
+        go-name      (:go-name entry)
+        needs-error? (:needs-error? entry)
+        arg-ids      (mapv (fn [i] (gogen/ident (str "a" i))) (range arity))
+        inner-call   (gogen/call (gogen/ident go-name)
+                                 (into [(gogen/ident "ec")] arg-ids))
+        boxed?       (:override-boxable-return? entry)
+        ret-spec     (:result-spec entry)
+        ret-stmt     (cond
+                       boxed?       (gogen/return-stmt
+                                      [(box-return-expr ret-spec inner-call)
+                                       (gogen/ident "nil")])
+                       needs-error? (gogen/return-stmt [inner-call])
+                       :else        (gogen/return-stmt
+                                      [inner-call (gogen/ident "nil")]))]
+    (gogen/func-lit
+      (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))]
+            (mapv (fn [i] (gogen/param (str "a" i) (gogen/type "vm.Value"))) (range arity)))
+      [(gogen/result (gogen/type "vm.Value"))
+       (gogen/result (gogen/type "error"))]
+      [ret-stmt])))
+
+(defn- multi-arity-override-wrapper-fn-lit [ns-name arities]
   "Combined `func(ec, args []vm.Value) (vm.Value, error)` adapter for a
    multi-arity fn: `switch len(args)` routes each arity to its per-arity helper
    `<name>_<arity>(ec, args[0], …)`. Registered under the bare :fn-name (via
@@ -1106,12 +1141,11 @@
                                        [inner-call (gogen/ident "nil")]))]
             (gogen/case-clause [(gogen/int-lit arity)] [ret-stmt])))
         cases    (mapv arm->case arities)
-        msg      (str fn-name ": wrong number of arguments %d")
         default  (gogen/case-clause nil
                    [(gogen/return-stmt
-                      [(gogen/ident "nil")
-                       (gogen/call (gogen/field-sel (gogen/ident "fmt") "Errorf")
-                                   [(gogen/string-lit msg) len-call])])])
+                      [(gogen/field-sel (gogen/ident "vm") "NIL")
+                       (gogen/call (gogen/field-sel (gogen/ident "vm") "NoArityVariant")
+                                   [(override-var-value ns-name fn-name) len-call])])])
         sw       (gogen/switch-stmt nil len-call (conj cases default))]
     (gogen/func-lit
       [(gogen/param "ec" (gogen/type "*vm.ExecContext"))
@@ -1137,6 +1171,29 @@
       [(gogen/result (gogen/type "vm.Value"))]
       [ret])))
 
+(defn- typed-override-arity? [entry]
+  ;; A single-arity override of one to four parameters is a typed adapter
+  ;; (func(ec, a0 … vm.Value)), reached by ec.InvokeN with no argument
+  ;; slice. Other arities and the multi-arity len-switch keep the slice form.
+  (<= 1 (:arity entry) 4))
+
+(defn- typed-override-helper-decl [arity]
+  "Build `__gogen_wrapN` for one arity:
+     func __gogen_wrap2(name string, fn func(ec *vm.ExecContext, a0 vm.Value, a1 vm.Value) (vm.Value, error)) vm.Value {
+       return vm.NewTypedCtxNativeFn(name, fn)
+     }
+   name is the defn's name, which the adapter's arity error prints."
+  (let [params (clojure.string/join ", " (map (fn [i] (str "a" i " vm.Value")) (range arity)))
+        fn-t   (str "func(ec *vm.ExecContext, " params ") (vm.Value, error)")]
+    (gogen/func-decl
+      (str "__gogen_wrap" arity)
+      [(gogen/param "name" (gogen/type "string"))
+       (gogen/param "fn" (gogen/type fn-t))]
+      [(gogen/result (gogen/type "vm.Value"))]
+      [(gogen/return-stmt
+         [(gogen/call (gogen/field-sel (gogen/ident "vm") "NewTypedCtxNativeFn")
+                      [(gogen/ident "name") (gogen/ident "fn")])])])))
+
 (defn- override-init-decl [ns-name entries multi-groups]
   "Build the package's init() that calls rt.RegisterGoOverrides with a
    map[string]vm.Value literal of __gogen_wrap-wrapped adapters. `entries` are
@@ -1145,14 +1202,18 @@
   (let [single-kvs (mapv (fn [e]
                            (gogen/kv-expr
                              (gogen/string-lit (:fn-name e))
-                             (gogen/call (gogen/ident "__gogen_wrap")
-                                         [(override-wrapper-fn-lit e)])))
+                             (if (typed-override-arity? e)
+                               (gogen/call (gogen/ident (str "__gogen_wrap" (:arity e)))
+                                           [(gogen/string-lit (:fn-name e))
+                                            (typed-override-wrapper-fn-lit e)])
+                               (gogen/call (gogen/ident "__gogen_wrap")
+                                           [(override-wrapper-fn-lit ns-name e)]))))
                          entries)
         multi-kvs  (mapv (fn [[nm arities]]
                            (gogen/kv-expr
                              (gogen/string-lit nm)
                              (gogen/call (gogen/ident "__gogen_wrap")
-                                         [(multi-arity-override-wrapper-fn-lit arities)])))
+                                         [(multi-arity-override-wrapper-fn-lit ns-name arities)])))
                          multi-groups)
         kv-pairs (into single-kvs multi-kvs)
         map-lit  (gogen/composite-lit-multi
@@ -1225,12 +1286,11 @@
                   [nm arities])))
             (sort (keys by-name))))))
 
-  ;; Extra decls reference rt + vm + fmt; attach the imports explicitly so a
+  ;; Extra decls reference rt + vm; attach the imports explicitly so a
   ;; package whose lowered fns happen to need none still compiles.
 (def ^:private override-decl-imports
   [{:path "github.com/nooga/let-go/pkg/rt" :alias "rt"}
-   {:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}
-   {:path "fmt" :alias nil}])
+   {:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}])
 
 ;; EPIC-012 / ITER-0025 (cross-package direct calls). When true, lower-ns-to-go
 ;; emits an exported thin wrapper `func LG_<go>(ec, …) <ret> { return <go>(ec, …) }`
@@ -1668,11 +1728,17 @@
             ;; registers Go-native overrides for the eligible lowered fns.
             reg-entries (override-entries valid-results)
             multi-groups (multi-arity-override-groups valid-results)
+            override-imports override-decl-imports
             extra-decls (if (or (seq reg-entries) (seq multi-groups))
-                          [{:decl (override-helper-decl)
-                            :imports override-decl-imports}
-                           {:decl (override-init-decl (str ns-name) reg-entries multi-groups)
-                            :imports override-decl-imports}]
+                          (-> [{:decl (override-helper-decl)
+                                :imports override-imports}]
+                              ;; One __gogen_wrapN per typed arity in use,
+                              ;; ascending, so the file is deterministic.
+                              (into (mapv (fn [n] {:decl (typed-override-helper-decl n)
+                                                   :imports override-imports})
+                                          (sort (distinct (map :arity (filter typed-override-arity? reg-entries))))))
+                              (conj {:decl (override-init-decl (str ns-name) reg-entries multi-groups)
+                                     :imports override-imports}))
                           [])
             ;; Native-baked multimethods (a :type dispatcher with >=1 arm) must
             ;; be frozen at ns-load so the generated MultiFnNativeFrozen guard
