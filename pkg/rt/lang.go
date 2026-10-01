@@ -575,6 +575,15 @@ func ClearNSNeedsLoad(name string) {
 	delete(nsNeedsLoad, name)
 }
 
+// NSNeedsLoad reports whether name is registered but still waiting for its
+// precompiled chunk to run — the state LoadCoreBundle leaves every
+// non-core, non-baseline bundled namespace in until it is required.
+func NSNeedsLoad(name string) bool {
+	nsMu.RLock()
+	defer nsMu.RUnlock()
+	return nsNeedsLoad[resolveNSAlias(name)]
+}
+
 // LookupNS returns a namespace if it exists, nil otherwise. Does not create.
 // lookupNSCached returns a namespace from the registry without invoking the loader.
 // Used by the VM's qualified symbol resolver to avoid triggering loads on every miss.
