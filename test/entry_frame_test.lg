@@ -3,10 +3,10 @@
 (ns test.entry-frame-test
   (:require
    [clojure.string :as str]
-   [clojure.test :refer [deftest testing is]]
+   [clojure.test :refer [deftest is testing]]
+   [ir.lower-go :as lower-go]
    [ir.passes.entry-frame :as ef]
-   [ir.passes.pipeline :as pipeline]
-   [ir.lower-go :as lower-go]))
+   [ir.passes.pipeline :as pipeline]))
 
 (deftest find-program-entry-shapes
   (testing "variadic -main"
@@ -51,7 +51,12 @@
     (is (true? (:lowered? e)))
     (is (= "Main" (:call-name e)))
     (is (str/includes? src "prog.Main(ec, argv...)"))
-    (is (str/includes? src "rt.BootCore()"))
+    (is (str/includes? src "ec := vm.NewExecContext()"))
+    (is (str/includes? src "rt.SetNSLoader(resolver.NewNSResolver(compiler.NewCompiler("))
+    (is (str/includes? src "resolver.ParseSearchPaths(os.Getenv(\"LG_SOURCE_PATHS\"))"))
+    (is (not (str/includes? src "[]string{\".\"}")))
+    (is (not (str/includes? src "rt.BootCore()"))
+        "pkg/compiler's init boots core; BootCore would replay it a second time")
     (is (str/includes? src "defer rt.ShutdownAllPods()"))
     (is (str/includes? src "rt.LoadProgramNamespaces(unit)"))
     (is (str/includes? (ef/entry-summary-line 2 e) "Main ✓"))))
@@ -239,12 +244,12 @@
 
 (deftest command-line-args-published-before-namespace-load
   ;; Top-level namespace code must observe the real argv. The frame publishes
-  ;; SetCommandLineArgs immediately after BootCore, before Decode/Load.
+  ;; SetCommandLineArgs right after its boot, before Decode/Load.
   (let [raw (ef/find-program-entry '[(defn -main [] 1)])
         e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
                                         :needs-error? true}})
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})
-        boot-i (index-of-substr src "rt.BootCore()")
+        boot-i (index-of-substr src "vm.NewExecContext()")
         args-i (index-of-substr src "rt.SetCommandLineArgs(os.Args[1:])")
         load-i (index-of-substr src "rt.LoadProgramNamespaces(unit)")]
     (is (>= boot-i 0))
@@ -255,14 +260,15 @@
     ;; Direct path must not re-publish args after load.
     (is (= 1 (count (re-seq #"SetCommandLineArgs" src))))))
 
-(deftest typed-no-error-none-omits-unused-vm-import
+(deftest typed-no-error-none-calls-without-error-handling
+  ;; The boot always uses pkg/vm (vm.NewExecContext), so the import is always
+  ;; live; what a typed no-error entry still drops is the error check.
   (let [raw (ef/find-program-entry '[(defn -main [] 0)])
         e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
                                         :needs-error? false :arity 0}})
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})]
     (is (str/includes? src "prog.Main(ec)"))
-    (is (not (str/includes? src "if _, err := prog.Main(")))
-    (is (not (str/includes? src "github.com/nooga/let-go/pkg/vm")))))
+    (is (not (str/includes? src "if _, err := prog.Main(")))))
 
 (deftest vm-fallback-is-namespace-qualified
   (testing "fallback call passes the owning namespace, not a bare name"
