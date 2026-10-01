@@ -1,0 +1,41 @@
+;; Native-lowering trampoline fixture: a capturing closure is one object.
+;;
+;; A fn that closes over a local is created when its form is evaluated and is
+;; the same object at every later use, exactly as on the bytecode VM and in
+;; Clojure. Each defn below holds one capturing closure in a local and asks
+;; whether two reads of that local are `identical?`; the four shapes cover a
+;; plain let-bound local, a loop-carried local, a local captured by a second
+;; closure, and a local stored twice in a collection. The trampoline compares
+;; (run) under the lowered Go against the bytecode VM, so any shape that
+;; allocates a fresh closure per use shows up as a false in the result.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.closure-identity)
+
+(defn same-local-cap [y]
+  (let [f (fn [x] (+ x y))]
+    (identical? f f)))
+
+(defn loop-carried-same [y]
+  (loop [f (fn [x] (+ x y)) i 0]
+    (if (< i 2)
+      (recur f (inc i))
+      (identical? f f))))
+
+(defn captured-by-closure [y]
+  (let [f (fn [x] (+ x y))
+        g (fn [] f)]
+    (identical? f (g))))
+
+(defn stored-in-collection [y]
+  (let [f (fn [x] (+ x y))
+        v [f f]]
+    (identical? (nth v 0) (nth v 1))))
+
+(defn run []
+  [(same-local-cap 1)
+   (loop-carried-same 1)
+   (captured-by-closure 1)
+   (stored-in-collection 1)])

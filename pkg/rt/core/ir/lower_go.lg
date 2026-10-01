@@ -645,9 +645,11 @@
       (load-var-crosses-effect? f nid)))
 
 (defn- used? [f nid]
+  ;; uses[nid] is a bitset (a vector of words), so its count is the word
+  ;; count, never the number of users; ask the bitset whether it is empty.
   (let [uses (ir/uses f)]
     (and (< nid (count uses))
-         (pos? (count (nth uses nid))))))
+         (not (ir/uses-empty? (nth uses nid))))))
 
 ;; live? — is nid's VALUE actually read by emitted Go? Reads the backward
 ;; read-set computed by liveness/reachable-nids and cached on f by lower-body. The IR `uses`
@@ -674,11 +676,18 @@
 ;;
 ;; param-sources ({param-nid -> [feeder-nid …]}) and a closure-info memo are
 ;; precomputed ONCE per function and cached on f by lower-body (alongside
-;; :coalesce/:live/:const-params): closure-value? is queried per param across
-;; collect-local-ids and per edge in emit-assignments, so an un-memoized
-;; block-graph re-walk would blow the lowering time budget on large functions.
-;; Both fall back to direct computation when the cache is absent (callers that
-;; run before lower-body, e.g. params-for/result-node).
+;; :coalesce/:live/:const-params): closure-info is a static query (which
+;; template and captures a value denotes — the higher-order devirt in
+;; ir.passes.inline asks it per call head), and an un-memoized block-graph
+;; re-walk would blow the lowering time budget on large functions. Both fall
+;; back to direct computation when the cache is absent (callers that run
+;; before lower-body, e.g. params-for/result-node).
+;;
+;; Resolving a value to a closure says nothing about where that closure LIVES
+;; at run time: a capturing closure is a Go local, assigned once where its
+;; :make-closure/:push-closed chain ends (closure-site?), and a block parameter
+;; fed by closures is an ordinary local that each edge assigns. Only a
+;; capture-free template (closure-value?) is a compile-time entity.
 
 (defn- term-targets [op aux]
   (cond
@@ -720,14 +729,12 @@
 
    Takes and returns [info deps] pairs — see closure-info* for both halves.
 
-   A parameter is a compile-time closure value only when EVERY incoming edge
-   agrees on the same closure, because such values carry no runtime local —
-   closure-expr re-materializes them at each use site, and a use site can only
-   materialize one closure. A join whose edges disagree (two different fn
-   literals, or a closure against nil) must therefore resolve to nil so the
-   parameter gets a real local and each edge assigns its own value. Returning
-   the first resolvable source instead silently published one branch's closure
-   as the whole join's value (#766).
+   A parameter denotes one closure only when EVERY incoming edge agrees on the
+   same closure. A join whose edges disagree (two different fn literals, or a
+   closure against nil) resolves to nil: the parameter's run-time value is
+   whichever edge was taken, and a static answer naming one of them would be
+   wrong for the other. Returning the first resolvable source instead silently
+   published one branch's closure as the whole join's value (#766).
 
    A :cycle source is set aside rather than counted as disagreement, and the
    nid it cycled back to is recorded in deps. Cycling back to THIS parameter is
@@ -785,9 +792,17 @@
                   (and (= op :const) (any-fn-template? aux))
                   [{:template aux :captures []} #{}]
 
+                  ;; Crossing a :make-closure is where a template becomes a
+                  ;; run-time object: the answer records it (:closure? true)
+                  ;; so closure-value? can tell a bare template apart from
+                  ;; the closure built from it.
                   (= op :make-closure)
                   (if (= 1 (count refs))
-                    (closure-info* f (nth refs 0) visited)
+                    (let [r (closure-info* f (nth refs 0) visited)
+                          i (nth r 0)]
+                      (if (map? i)
+                        [(assoc i :closure? true) (nth r 1)]
+                        r))
                     [nil #{}])
 
                   (= op :push-closed)
@@ -877,14 +892,50 @@
     :else nil))
 
 (defn- closure-value?
-  "True when nid denotes a closure/fn-template value — closure-info resolves it.
-   Such values are compile-time entities: closure-expr re-materializes the real
-   Go closure inline at each USE site (from the statically-resolved template +
-   captures), so they have no runtime Go local and must be excluded from
-   edge-assignment and local materialization — a bare template threaded through
-   a loop header as a block-arg has no standalone Go value."
+  "True when nid denotes a bare fn template: the template :const itself, or a
+   block parameter that build threaded the template through (a fn literal
+   inside a loop has its template hoisted to the entry block and carried in a
+   loop-header parameter; the :make-closure in the body reads the parameter).
+   A template is a compile-time entity, not a value: it carries no Go local,
+   edges never copy it, and the only Go it ever becomes is the closure
+   closure-expr builds where it is read — directly for a capture-free template
+   (the variadic ones lambda lifting leaves behind), or at the :make-closure
+   that completes it.
+
+   A CAPTURING closure is not a closure-value: it is a run-time object, built
+   once where its capture chain ends (closure-site?) and held in a Go local
+   like any other value, so two reads of it are the same object — `identical?`
+   agrees with the bytecode VM, and a read never allocates. A parameter fed by
+   such closures is an ordinary local that each edge assigns."
   [f nid]
-  (some? (closure-info f nid)))
+  (let [info (closure-info f nid)]
+    (and (some? info) (not (:closure? info)))))
+
+(defn- closure-chain-base? [f nid]
+  ;; nid is the closure a :push-closed extends, i.e. an intermediate node of a
+  ;; capture chain rather than the node whose value the program reads.
+  (let [uses (ir/uses f)]
+    (and (< nid (count uses))
+         (let [hit (atom false)]
+           (ir/uses-for-each (nth uses nid)
+                             (fn [u]
+                               (when (and (= :push-closed (ir/op u f))
+                                          (= nid (nth (ir/refs u f) 0)))
+                                 (reset! hit true))))
+           @hit))))
+
+(defn- closure-site?
+  "True when nid is where a capturing closure comes into being: the last node
+   of a :make-closure/:push-closed chain, the one every use of the closure
+   reads. Lowering materializes it as one `v = newClosure_…(ec, …)` local at
+   this point; the chain's inner nodes emit nothing. A chain whose template or
+   captures cannot be lowered yields a nil statement here and the enclosing fn
+   falls back."
+  [f nid]
+  (let [op (ir/op nid f)]
+    (and (or (= op :make-closure) (= op :push-closed))
+         (not (closure-chain-base? f nid))
+         (some? (closure-info f nid)))))
 
 (defn- closure-expr [f closed-exprs nid]
   (let [info (closure-info f nid)]
@@ -920,7 +971,11 @@
   (let [op  (ir/op nid f)
         aux (ir/aux nid f)
         t   (ir/type-of nid f)]
-    (or (closure-expr f closed-exprs nid)
+    (or (when (closure-value? f nid)
+          (closure-expr f closed-exprs nid))
+        ;; A capturing closure is read from the local its site assigned.
+        (when (and (closure-site? f nid) (live? f nid))
+          (value-ident f nid))
         ;; A constant block-param is re-materialized as the literal inline
         ;; (consts are block-free), eliding its local and its edge copies.
         (when-let [cp (const-param-of f nid)]
@@ -1125,6 +1180,7 @@
         (let [bid    (first bs)
               params (filter (fn [nid] (and (live? f nid)
                                             (not (const-param-of f nid))
+                                            ;; a threaded template has no local
                                             (not (closure-value? f nid))
                                             (not (contains? absorbed-insts nid))
                                             (infer-go-type (ir/type-of nid f))))
@@ -1134,10 +1190,11 @@
                                  (and (or (local-carrying-op? op)
                                           ;; materialised var snapshot: a set!-fn
                                           ;; target or a load live across an effect
-                                          (load-var-materialize? f nid))
+                                          (load-var-materialize? f nid)
+                                          ;; a capturing closure, built once here
+                                          (closure-site? f nid))
                                       (not= op :block-arg)
                                       (live? f nid)
-                                      (not (closure-value? f nid))
                                       ;; inlined edge-args carry no local
                                       (not (inlined-arg? f nid))
                                       (not (contains? absorbed-insts nid))
@@ -1272,6 +1329,7 @@
   ;; reads do not propagate through it.
   (reduce (fn [acc r]
             (if (and (local-carrying-op? (ir/op r f))
+                     ;; a threaded template param is not a local
                      (not (closure-value? f r)))
               (conj acc (gogen/ident-name (value-ident f r)))
               acc))
@@ -1367,21 +1425,17 @@
         (oos-sequence-copies f pairs)
         (let [pid     (nth params i)
               arg-nid (nth args i)]
-          ;; Skip when the param is unused, a const-param (materialized inline at
-          ;; each use), or when the PARAM is a compile-time template/closure
-          ;; value. Such a param carries no runtime Go local — closure-expr
-          ;; re-materializes the real closure inline at each USE site — so
-          ;; threading it across an edge would reference a local that was never
-          ;; declared.
+          ;; Skip when the param is unused, a const-param (materialized inline
+          ;; at each use), or a threaded fn template (closure-value?): a
+          ;; template has no local to assign, and the :make-closure that reads
+          ;; the param resolves it statically through block-arg lineage.
           ;;
-          ;; The ARG is deliberately NOT screened. When the param resolves to a
-          ;; real local but this edge's arg is a closure, the closure is exactly
-          ;; what this edge must assign: value-expr materializes it through
-          ;; closure-expr, giving each branch of a join its own rt.BoxNativeFn
-          ;; instead of leaving the branch empty (#766). A template threaded into
-          ;; a DCE-killed param is still skipped, by the live?/const-param tests
-          ;; on the param above; an arg whose closure cannot be lowered yields a
-          ;; nil rhs below, which abandons the whole transfer as before.
+          ;; A param fed by CLOSURES is an ordinary local. A capturing closure
+          ;; arrives as the local its site assigned, so a loop that carries one
+          ;; unchanged copies the same object around, and a join whose branches
+          ;; disagree assigns each branch's own value (#766). A capture-free
+          ;; template arg is emitted inline by closure-expr; one that cannot be
+          ;; lowered yields a nil rhs below, which abandons the whole transfer.
           (if (or (not (live? f pid))
                   (const-param-of f pid)
                   (closure-value? f pid))
@@ -2603,8 +2657,14 @@
       (ops/lower-op op f closed-exprs nid)
       (= op :const)
       []
-      (= op :make-closure) []
-      (= op :push-closed)  []
+      ;; A capturing closure is built exactly once, where its capture chain
+      ;; ends; the chain's inner nodes are folded into that one expression.
+      (or (= op :make-closure) (= op :push-closed))
+      (if (and (closure-site? f nid) (live? f nid))
+        (let [rhs (closure-expr f closed-exprs nid)]
+          (when rhs
+            [(gogen/assign "=" (value-ident f nid) rhs)]))
+        [])
       (= op :block-arg) []
       (contains? binary-op op)
       (if (live? f nid)
