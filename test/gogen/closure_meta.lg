@@ -1,0 +1,59 @@
+;; Native-lowering trampoline fixture: a lowered closure is a fn like any other.
+;;
+;; A fn literal lowered to Go is one struct holding the NativeFn and its
+;; captures. Everything that inspects a fn must see no difference from the
+;; bytecode VM: `fn?`, `meta`/`with-meta` (a copy that still calls the same
+;; body with the same captures, leaving the original without meta), and the
+;; arity check (a wrong-arity call throws the VM's error, with its message;
+;; the printed fn inside the message is normalized, since a lowered fn prints
+;; as a native-fn). The trampoline compares (run) under the lowered Go against
+;; the bytecode VM.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.closure-meta)
+
+(defn adder [n]
+  (fn [x] (+ x n)))
+
+(def add5 (adder 5))
+
+(defn tagged [n]
+  (let [f (fn [x] (+ x n))
+        g (with-meta f {:tag :plus})]
+    [(fn? f)
+     (fn? g)
+     (meta f)
+     (meta g)
+     (f 1)
+     (g 1)
+     (identical? f g)
+     (meta (with-meta g {:a 1}))
+     (meta g)]))
+
+(defn- arity-message [thunk]
+  (try (do (thunk) :no-error)
+       (catch e (clojure.string/replace (ex-message e) #"<[^>]*>" "<fn>"))))
+
+(defn arity-checked [n]
+  (let [f (fn [x] (+ x n))]
+    [(arity-message #(f 1 2))
+     (arity-message #(f))
+     (f 2)]))
+
+;; A multi-arity literal with a rest arm: an exactly-minimum call reaches the
+;; rest arm, a call too short for every arm is an error, as on the VM.
+(defn mixed-arm [n]
+  (let [f (fn ([a] (+ a n)) ([a b c & r] [a b c r]))]
+    [(f 1)
+     (f 1 2 3)
+     (f 1 2 3 4 5)
+     (arity-message #(f 1 2))]))
+
+(defn run []
+  [(tagged 5)
+   (arity-checked 5)
+   (mixed-arm 5)
+   (add5 1)
+   (fn? add5)])
