@@ -68,3 +68,60 @@ func TestRegisterGoOverridesAppliesImmediatelyWhenNSExists(t *testing.T) {
 		t.Fatalf("nothing should be queued when applied immediately")
 	}
 }
+
+// Compiled code holds the Var it resolved at load time (a bundle's var
+// references are decoded before any override applies), so an override must
+// land on that Var, not on a replacement: through the queue and immediately.
+func TestGoOverridesKeepTheExistingVar(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		install func(ns string, defs map[string]vm.Value)
+	}{
+		{"queued", func(ns string, defs map[string]vm.Value) {
+			delete(pendingGoOverrides, ns)
+			pendingGoOverrides[ns] = defs
+			ApplyGoOverrides(LookupNS(ns))
+		}},
+		{"immediate", RegisterGoOverrides},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nsName := "test-gogen-keep-var-" + tc.name
+			ns := NS(nsName)
+			held := ns.Def("g", vm.Int(1))
+			fn := fnVal(t)
+
+			tc.install(nsName, map[string]vm.Value{"g": fn})
+
+			if held.Deref() != fn {
+				t.Fatalf("a reference to the existing #'%s/g still sees %v after the override", nsName, held.Deref())
+			}
+			if got := ns.LookupLocal(vm.Symbol("g")); got != held {
+				t.Fatalf("the override replaced #'%s/g with a new Var", nsName)
+			}
+		})
+	}
+}
+
+// The core bundle decodes every namespace it holds as stub Vars before any
+// lowered package registers, so an override lands on a stub and the
+// namespace's chunk replays later, setting each Var's root to the bytecode fn.
+// The resolver runs ApplyGoOverrides after that replay, which must put the
+// override back on the same Var.
+func TestGoOverridesSurviveTheNamespaceChunkReplay(t *testing.T) {
+	const nsName = "test-gogen-replay"
+	ns := NS(nsName)
+	stub := ns.Def("g", vm.NIL)
+	fn := fnVal(t)
+
+	RegisterGoOverrides(nsName, map[string]vm.Value{"g": fn})
+	stub.SetRoot(vm.Int(1)) // the chunk replay's def of g
+
+	ApplyGoOverrides(ns)
+
+	if stub.Deref() != fn {
+		t.Fatalf("#'%s/g is %v after the chunk replay, want the override", nsName, stub.Deref())
+	}
+	if got := ns.LookupLocal(vm.Symbol("g")); got != stub {
+		t.Fatalf("restoring the override replaced #'%s/g with a new Var", nsName)
+	}
+}

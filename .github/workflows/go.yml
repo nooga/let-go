@@ -358,7 +358,7 @@ jobs:
       - name: Jank direct-ABI generated Go gate
         run: make test SHORT=false PKG=./test/e2e RUN=TestJankSuiteDirectABIGeneratedGo COUNT=1
       - name: Engine parity and differential engine gate
-        run: make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff'
+        run: make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff|TestGogenLazyCoreNamespaceStaysLowered'
 
   # Single gate for every generated artifact (Policy: docs/contribution-policy.md §3):
   # the bundle is verified in lockstep with pkg/rt/core/**/*.lg (content-based, so

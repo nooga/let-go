@@ -41,7 +41,7 @@ func RegisterGoOverrides(nsName string, defs map[string]vm.Value) {
 	}
 	if ns := LookupNS(nsName); ns != nil {
 		for name, fn := range defs {
-			ns.Def(name, fn)
+			installGoOverride(ns, name, fn)
 		}
 		return
 	}
@@ -55,18 +55,55 @@ func RegisterGoOverrides(nsName string, defs map[string]vm.Value) {
 	}
 }
 
-// ApplyGoOverrides drains any pending overrides for ns and Defs them onto
-// the namespace, replacing whatever bytecode or source replay produced.
-// No-op if nothing is pending.
+// installedGoOverrides holds every override installed so far, by namespace,
+// so that ApplyGoOverrides can put them back after the namespace loads again.
+// The core bundle decodes every namespace it holds up front, as stub Vars, so
+// an override registered at init lands on a stub; the namespace's chunk
+// replays later, on demand, and its `def`s set each Var's root to the
+// bytecode fn. ApplyGoOverrides runs after that replay and restores these.
+var installedGoOverrides = map[string]map[string]vm.Value{}
+
+// installGoOverride makes fn the value of ns/name and records it in
+// installedGoOverrides. An existing Var keeps its identity and takes fn as
+// its root: code compiled before the override (a bundle decodes its var
+// references up front) holds that Var, and ns.Def would replace it with a new
+// one the compiled code never reads. A name with no Var yet is defined as
+// usual.
+func installGoOverride(ns *vm.Namespace, name string, fn vm.Value) {
+	installed := installedGoOverrides[ns.Name()]
+	if installed == nil {
+		installed = map[string]vm.Value{}
+		installedGoOverrides[ns.Name()] = installed
+	}
+	installed[name] = fn
+	v := ns.LookupLocal(vm.Symbol(name))
+	if v == nil {
+		ns.Def(name, fn)
+		return
+	}
+	if nf, ok := fn.(*vm.NativeFn); ok {
+		nf.SetName(name)
+	}
+	v.SetRoot(fn)
+}
+
+// ApplyGoOverrides installs any pending overrides for ns, then puts back every
+// override already installed on it, replacing whatever the bytecode or source
+// load that just finished produced. No-op for a namespace with no overrides.
 func ApplyGoOverrides(ns *vm.Namespace) {
 	if ns == nil {
 		return
 	}
 	if defs := pendingGoOverrides[ns.Name()]; defs != nil {
 		for name, fn := range defs {
-			ns.Def(name, fn)
+			installGoOverride(ns, name, fn)
 		}
 		delete(pendingGoOverrides, ns.Name())
+	}
+	for name, fn := range installedGoOverrides[ns.Name()] {
+		if v := ns.LookupLocal(vm.Symbol(name)); v == nil || v.Deref() != fn {
+			installGoOverride(ns, name, fn)
+		}
 	}
 	if names := pendingNativeMultiFns[ns.Name()]; names != nil {
 		freezeNativeMultiFns(ns, names)
