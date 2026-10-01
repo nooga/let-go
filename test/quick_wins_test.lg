@@ -487,15 +487,28 @@
       (is (= 7 (read-string "#?(:clj #foo [1] :default 7)"))))
     (binding [*data-readers* {'go 42}]
       (is (= 7 (read-string "#?(:clj #go [1] :default 7)")))))
-  (testing "nil entries are absent and fall through to legacy/default readers"
+  (testing "nil entries are absent and fall through to the default reader, else throw"
+    (binding [*data-readers* {'foo nil}
+              *default-data-reader-fn* (fn [tag value] [:default tag value])]
+      (is (= [:default 'foo 1] (read-string "#foo 1"))))
     (binding [*data-readers* {'foo nil}]
-      (is (= 1 (read-string "#foo 1")))
+      (is (thrown-with-msg? Exception #"No reader function for tag foo"
+                            (read-string "#foo 1")))
       (is (= 7 (read-string "#?(:clj #foo [1] :default 7)"))))
+    ;; #go is an ordinary *data-readers* entry, so a nil entry removes it.
     (binding [*data-readers* {'go nil}]
-      (is (= "return 1" (read-string "#go{return 1}")))
-      ;; In an unselected branch the built-in #go claims only a {-delimited
-      ;; payload; any other payload is skipped as an ordinary tagged form.
+      (is (thrown-with-msg? Exception #"No reader function for tag go"
+                            (read-string "#go{return 1}")))
       (is (= 7 (read-string "#?(:clj #go [1] :default 7)")))))
+  (testing "#go is a *data-readers* entry: a replaced map drops it, assoc keeps it"
+    (is (= "return 1" (read-string "#go{return 1}")))
+    (binding [*data-readers* (assoc *data-readers* 'app/x identity)]
+      (is (= "return 1" (read-string "#go{return 1}"))))
+    (binding [*data-readers* {'app/x identity}]
+      (is (thrown? Exception (read-string "#go{return 1}"))))
+    ;; In an unselected branch #go claims only a {-delimited payload; any
+    ;; other payload is skipped as an ordinary tagged form.
+    (is (= 7 (read-string "#?(:clj #go [1] :default 7)"))))
   (testing "an alter-var-root registration is visible and can be restored"
     (let [original *data-readers*]
       (try
