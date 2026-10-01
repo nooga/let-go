@@ -456,9 +456,13 @@ lint: lint-go lint-comments
 
 .PHONY: lint-go lint-comments
 
+# `run` drops formatter findings in paths the linters exclude, test files
+# included, so formatting is checked separately with `fmt --diff`, which honors
+# only the formatters' own exclusions.
 lint-go:
 	@mkdir -p $(GOLANGCI-LINT-CACHE)
 	GOLANGCI_LINT_CACHE=$(GOLANGCI-LINT-CACHE) go tool golangci-lint run
+	GOLANGCI_LINT_CACHE=$(GOLANGCI-LINT-CACHE) go tool golangci-lint fmt --diff
 
 # Report-only, deliberately. `--gate KIND` is the only way to make the linter
 # fail, and it accepts four kinds: commented-out-code, restatement,
