@@ -590,14 +590,6 @@ func prStr(v vm.Value) string {
 	}
 }
 
-// readEDN is set by the compiler package to provide EDN parsing.
-var readEDN func(string) (vm.Value, error)
-
-// SetReadEDN sets the EDN reader function (called by compiler package).
-func SetReadEDN(fn func(string) (vm.Value, error)) {
-	readEDN = fn
-}
-
 // evalInNS is set by the compiler package to evaluate code in a namespace.
 var evalInNS func(code string, ns *vm.Namespace) (vm.Value, error)
 
