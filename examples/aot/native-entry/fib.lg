@@ -6,9 +6,7 @@
 ;;   ./examples/aot/native-entry/out/fib.native           ; => 55 (fib 10)
 ;;   ./examples/aot/native-entry/out/fib.native x         ; => 5702887 (fib 34)
 ;;
-;; Any CLI arg forces n=34 (the spike input). Avoids read-string — that var is
-;; unbound after BootCore (compiler/reader surface, not the runtime-only core
-;; an AOT binary links).
+;; Any CLI arg forces n=34 (the spike input).
 
 (defn fib [n]
   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))

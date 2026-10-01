@@ -1,0 +1,12 @@
+{
+  "note": "#992 regression: an entry-frame binary evaluates code at run time as the VM does. eval, load-string, and a require of a lazily loaded namespace need the compiler; the frame used to boot without it, so eval was unbound and the lowered call panicked.",
+  "namespace": "runtimeeval",
+  "generatedFile": "runtimeeval/runtimeeval.go",
+  "entryFn": "Main",
+  "lispFn": "bump",
+  "goFn": "Bump",
+  "lowering": "direct",
+  "functionFragment": "func Bump(ec *vm.ExecContext, arg0 int64) int64 {\n\tvar v2 int64\n\tv2 = arg0 + 41\n\treturn v2\n}",
+  "callFragment": "Bump(ec, 1)",
+  "semanticWrap": "(__EXPR__) + 1"
+}

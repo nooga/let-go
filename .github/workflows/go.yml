@@ -120,7 +120,7 @@ jobs:
       # embed program.lgb, go build, run. Also covers --entry-frame opt-in.
       # Skipped under -short; fib remains an example under examples/aot/native-entry/.
       - name: AOT native-entry matrix (#425 / #628)
-        run: go test -v -timeout 300s ./test/e2e/ -run 'TestLgCompileEntryFrameOptIn|TestNativeEntryMatrix'
+        run: go test -v -timeout 300s ./test/e2e/ -run 'TestLgCompileEntryFrameOptIn|TestNativeEntryMatrix|TestEntryFrameRequireSearchesOnlyLGSourcePaths'
 
   # Race-detector pass over the packages that hold cross-goroutine state:
   # the VM's shared runtime structures and the rt layer. Motivated by #464 —
