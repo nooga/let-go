@@ -70,8 +70,10 @@ func TestCapturingClosureBoxedOncePerForm(t *testing.T) {
 			`(defn multi-arity [y] (fn ([a] (+ a y)) ([a b] (+ a (+ b y)))))`, 2},
 		{"nested literal, the inner created per outer call", "Nested",
 			`(defn nested [y] (fn [a] (fn [b] (+ a (+ b y)))))`, 1},
-		{"capture-free variadic literal stays inline", "FreeVariadic",
-			`(defn free-variadic [] (let [f (fn [& xs] xs)] (f 1)))`, 1},
+		// A literal that closes over nothing is one package-level var, built
+		// once, not constructed per call.
+		{"capture-free variadic literal is a shared var", "FreeVariadic",
+			`(defn free-variadic [] (let [f (fn [& xs] xs)] (f 1)))`, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,6 +94,9 @@ func TestCapturingClosureBoxedOncePerForm(t *testing.T) {
 			}
 			for _, ctor := range ctors {
 				assertClosureStruct(t, file, ctor, source)
+			}
+			if tc.sites == 0 && !strings.Contains(source, "var __fnlit_") {
+				t.Errorf("no shared __fnlit_ var for the capture-free literal\n%s", source)
 			}
 		})
 	}
