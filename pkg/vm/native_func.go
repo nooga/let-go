@@ -399,3 +399,47 @@ func (l *NativeFn) WithMeta(m Value) Value {
 	cp.meta = m
 	return &cp
 }
+
+// NewCheckedCtxNativeFn builds a context-aware native that checks a call's
+// argument count before running fn, and reports a mismatch as the bytecode VM
+// does for a fn of the same shape: fixed holds the exact arities fn accepts,
+// and restMin, when not negative, the minimum count of a rest arm. Lowered Go
+// uses it for a capture-free fn literal that is variadic or multi-arity, which
+// it builds once per literal and shares, as the VM shares the fn constant; fn
+// only dispatches on the count. A single arm declares its own arity, so
+// multi-arity dispatch over it sees what the VM's fn would show.
+func NewCheckedCtxNativeFn(name string, fixed []int, restMin int, fn func(ec *ExecContext, args []Value) (Value, error)) *NativeFn {
+	n := &NativeFn{name: name, arity: -1, isVariadric: true}
+	switch {
+	case len(fixed) == 1 && restMin < 0:
+		n.arity, n.isVariadric = fixed[0], false
+	case len(fixed) == 0 && restMin >= 0:
+		n.arity = restMin
+	}
+	accepts := func(got int) bool {
+		if restMin >= 0 && got >= restMin {
+			return true
+		}
+		for _, a := range fixed {
+			if a == got {
+				return true
+			}
+		}
+		return false
+	}
+	n.ctxProxy = func(ec *ExecContext, args []Value) (Value, error) {
+		if !accepts(len(args)) {
+			switch {
+			case len(fixed) == 1 && restMin < 0:
+				return NIL, WrongArgCount(n, len(args), fixed[0])
+			case len(fixed) == 0:
+				return NIL, TooFewArgs(n, len(args), restMin)
+			default:
+				return NIL, NoArityVariant(n, len(args))
+			}
+		}
+		return fn(ec, args)
+	}
+	n.proxy = func(args []Value) (Value, error) { return n.ctxProxy(RootExecContext, args) }
+	return n
+}
