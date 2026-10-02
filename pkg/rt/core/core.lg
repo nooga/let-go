@@ -306,11 +306,13 @@
 (defn simple-symbol? [x] (and (symbol? x) (nil? (namespace x))))
 (defn qualified-symbol? [x] (and (symbol? x) (some? (namespace x))))
 
-;; bleh
+;; A vector is an ArrayVector (every literal and small vector) or a
+;; PersistentVector (a large one built incrementally). Compared as type
+;; objects: printing the type name per call cost a string and its boxing.
 (defn vector? [x]
   (let [t (type x)]
-    (or (= t (type []))
-        (= "let-go.lang.PersistentVector" (str t)))))
+    (or (= t let-go.lang.ArrayVector)
+        (= t let-go.lang.PersistentVector))))
 ;; list?, map?, and set? are native builtins (handle seq/list distinctions and sorted variants)
 (defn symbol? [x] (= (type x) (type 'x)))
 (defn keyword? [x] (= (type x) (type :x)))
@@ -338,14 +340,11 @@
   (cond
     (map? coll)
     (reduce (fn [acc pair] (f acc (first pair) (second pair))) init coll)
-    (= "let-go.lang.TransientMap" (str (type coll)))
+    (= (type coll) let-go.lang.TransientMap)
     (reduce (fn [acc pair] (f acc (first pair) (second pair))) init coll)
-    ;; Vectors: both ArrayVector (literal []) and PersistentVector (large
-    ;; vectors built incrementally) need integer-keyed iteration. Test via
-    ;; counted+nth contract rather than exact type, since IR insts grow
-    ;; large enough to migrate from ArrayVector to PersistentVector.
-    (or (vector? coll)
-        (= "let-go.lang.PersistentVector" (str (type coll))))
+    ;; Vectors, ArrayVector and PersistentVector alike, need integer-keyed
+    ;; iteration.
+    (vector? coll)
     (let [n (count coll)]
       (loop [i 0 acc init]
         (if (>= i n)
