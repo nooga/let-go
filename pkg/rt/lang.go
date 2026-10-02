@@ -4811,6 +4811,12 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("clojure.lang.PersistentQueue", vm.QueueType)
 	ns.Def("clojure.lang.Keyword", vm.KeywordType)
 	ns.Def("clojure.lang.Symbol", vm.SymbolType)
+	// let-go's own concrete types, so core predicates compare (type x) to a
+	// type object instead of its printed name.
+	ns.Def("let-go.lang.ArrayVector", vm.ArrayVectorType)
+	ns.Def("let-go.lang.PersistentVector", vm.PersistentVectorType)
+	ns.Def("let-go.lang.TransientMap", vm.TransientMapType)
+	ns.Def("let-go.lang.Array", vm.TypedArrayType)
 	ns.Def("clojure.lang.IPersistentVector", vm.NewTypeUnion(
 		"clojure.lang.IPersistentVector",
 		vm.ArrayVectorType,
