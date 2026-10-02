@@ -408,7 +408,7 @@
 (def ^:private redact-array-threshold 8)
 
 (defn- array-like? [v]
-  (= "let-go.lang.Array" (str (type v))))
+  (= (type v) let-go.lang.Array))
 
 (defn- redact [v]
   (cond
