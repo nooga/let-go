@@ -2050,8 +2050,10 @@
   ;; so callers passing a proven-int arg emit `f(ec, intval)` with no boxing.
   ;; coerce-arg-to-type keeps it sound — a typed param is only direct-called
   ;; when the arg is proven that type, else the whole call falls back.
+  ;; A ^:dynamic or ^:redef fn is never recorded: callers reach it through
+  ;; its var, as Clojure's direct linking leaves both.
   (when-let [fn-name (:fn-name result)]
-    (when (:direct-callable? result)
+    (when (and (:direct-callable? result) (not (:var-called? result)))
       {(registry-key (internal-ns-sym (str ns-sym)) fn-name (:arity result))
        {:go-name (:go-name result) :arity (:arity result)
         :needs-error? (:needs-error? result)
@@ -4222,6 +4224,7 @@
        ;; which feeds the NativeFn override wrapper. A typed sibling (e.g.
        ;; func f(ec, x int) int) is direct-callable but NOT override-eligible.
        :direct-callable? (override-coercible? f)
+       :var-called? (boolean (:var-called? @f))
        :param-specs (function-param-specs f)
        :result-spec (function-return-spec f)
        ;; The closure structs of this fn's literals, emitted beside :decl.

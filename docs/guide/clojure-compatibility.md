@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-10-01
+last-verified: 2026-10-06
 human-verified: 2026-08-11
 ---
 
@@ -62,6 +62,7 @@ See [Custom data readers](custom-data-readers.md).
 - `Thread/currentThread` is the current scope: `.isInterrupted` reads scope cancellation and `.interrupt` cancels the scope (inside `with-scope` only; at the root scope it throws rather than cancel the whole program's tracked work). `Thread.` itself is not supported
 - `format` is Go `fmt` underneath; Java's `%n` is honored as `\n` and surplus arguments are ignored
 - A `fn` that closes over nothing is created once and shared on all three compile paths (the default compiler, `*ir-compile*` and lowered Go): `(defn mk [] (fn [x] x))` returns the same object every call, so `(identical? (mk) (mk))` is `true` where Clojure gives `false`. A `fn` that closes over locals is a new object per evaluation, as in Clojure
+- Code lowered to native Go (`-tags gogen_ir`) links a call from one lowered fn to another directly, as Clojure's direct linking does: `with-redefs`, `alter-var-root` or a re-`def` of a lowered fn reaches bytecode callers and anything that calls through the var, but not other lowered fns until they are recompiled. As in Clojure, a `^:redef` or `^:dynamic` fn is never linked directly. The default compiler and `*ir-compile*` always call through the var, as Clojure does without direct linking
 
 ## Compiler compatibility vars
 

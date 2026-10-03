@@ -510,16 +510,21 @@
     (second raw-name)
     raw-name))
 
-(defn- private-name?
-  "True when a defn NAME position carries `^:private` — i.e. it reads as the
-   literal form `(with-meta sym {:private true …})`. (`defn-` is detected
-   separately via the form head, since it doesn't wrap the name.) Used to carry
-   :private? onto the ir-fn so emission picks an unexported go-name."
-  [raw-name]
+(defn- name-meta?
+  "True when a defn NAME position carries metadata key k — i.e. it reads as the
+   literal form `(with-meta sym {k true …})`."
+  [raw-name k]
   (and (seq? raw-name) (= 'with-meta (first raw-name))
        (>= (count raw-name) 3)
        (let [m (nth raw-name 2)]
-         (boolean (and (map? m) (get m :private))))))
+         (boolean (and (map? m) (get m k))))))
+
+(defn- private-name?
+  "True when a defn NAME position carries `^:private`. (`defn-` is detected
+   separately via the form head, since it doesn't wrap the name.) Used to carry
+   :private? onto the ir-fn so emission picks an unexported go-name."
+  [raw-name]
+  (name-meta? raw-name :private))
 
 (defn- try-expand-all
   "expand-all, but returns nil instead of throwing — a form that won't expand
@@ -705,6 +710,14 @@
           ;; the name (raw forms reach here un-normalized, so both survive).
           private?    (or (= (first form) 'defn-)
                           (private-name? (nth form 1)))
+          ;; Lowered callers link a sibling directly, as Clojure's direct
+          ;; linking does, so they see a redefinition only once recompiled.
+          ;; Clojure never direct-links a ^:dynamic or ^:redef fn: `binding`
+          ;; rebinds the first per thread, and the second is declared for
+          ;; with-redefs. Carried onto the ir-fn so the direct-call registry
+          ;; leaves both to calls through the var.
+          var-called? (or (name-meta? (nth form 1) :dynamic)
+                          (name-meta? (nth form 1) :redef))
           maybe-doc   (nth form 2)
           has-doc?    (string? maybe-doc)
           first-form  (if has-doc? (nth form 3) maybe-doc)
@@ -726,6 +739,7 @@
               ;; (public → PascalCase, private → unexported) survives lambda-lift
               ;; + optimize into lower-go. merge-def-meta preserves it to :main.
               _          (swap! built assoc :private? private?)
+              _          (when var-called? (swap! built assoc :var-called? true))
               ;; Stash the built IR (pre-optimize) so later same-ns defns can
               ;; seed the inline registry from this one. Opt-in: only when
               ;; *enable-inline* is bound true. Retention is single-ns: the
@@ -822,6 +836,7 @@
                                              ;; (not a dynamic var) so it survives native lowering.
                                              _          (swap! ir-fn assoc :multi-arity? true
                                                           :private? private?)
+                                             _          (when var-called? (swap! ir-fn assoc :var-called? true))
                                              result     ((lowerings :go) ir-fn)]
                                          (if (= :lowered (:status result))
                                            ;; Keep :fn (the decl) for existing consumers

@@ -65,7 +65,9 @@ func (bytecodeNSLoader) Load(name string) *vm.Namespace {
 		MarkNSNeedsLoad(name)
 		return nil
 	}
-	return NS(name)
+	ns := NS(name)
+	ApplyGoOverrides(ns)
+	return ns
 }
 
 // UseBytecodeNSLoader installs the bytecode-only loader. A runtime-only entry

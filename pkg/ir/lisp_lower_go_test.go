@@ -2293,3 +2293,32 @@ func TestLowerGoUncheckedBoxedOperandRoutesToUncheckedHelper(t *testing.T) {
 		})
 	}
 }
+
+// Lowered code links a sibling directly, as Clojure's direct linking does: a
+// redefinition reaches its lowered callers only once they are recompiled. A
+// ^:redef or ^:dynamic fn is never linked directly; callers reach it through
+// its var, so with-redefs and binding apply.
+func TestLowerGoLinksSiblingsDirectlyExceptRedefAndDynamic(t *testing.T) {
+	ensureLoader()
+
+	v := runLispExpr(t, `(do (create-ns 'lgdl)
+	                        (doseq [s '[plain redefd dyn use]] (intern (the-ns 'lgdl) s))
+	                        (ir.passes.pipeline/lower-ns-to-go "lgdl" 'lgdl
+	                          '[(defn plain [x] x)
+	                            (defn ^:redef redefd [x] x)
+	                            (defn ^:dynamic dyn [x] x)
+	                            (defn use [a] [(plain a) (redefd a) (dyn a)])]))`)
+	src, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected lower-ns-to-go to return rendered Go source string, got %T (%v)", v, v)
+	}
+	rendered := string(src)
+	if !strings.Contains(rendered, "Plain(ec, arg0") {
+		t.Fatalf("expected `(plain a)` to lower to a direct `Plain(ec, arg0)` call\n--- go ---\n%s", rendered)
+	}
+	for _, name := range []string{"redefd", "dyn"} {
+		if !strings.Contains(rendered, "CachedVarFn(&__v_lgdl_"+name) {
+			t.Fatalf("expected `(%s a)` to go through its var\n--- go ---\n%s", name, rendered)
+		}
+	}
+}
