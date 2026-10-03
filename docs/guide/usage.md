@@ -90,6 +90,24 @@ service worker that supplies the COOP/COEP headers GitHub Pages needs for
 SharedArrayBuffer. Programs that use the `term` namespace get full terminal
 emulation via xterm.js: ANSI colors, cursor positioning, raw keyboard input.
 
+## Native binaries
+
+`lg compile` builds a program into a standalone native executable through the
+Go backend. It needs a Go toolchain on `PATH`.
+
+```bash
+lg compile app.lg                 # writes ./app
+lg compile -o bin/app app.lg      # choose the output path
+lg compile -work gen app.lg       # keep the generated Go module in gen/
+```
+
+One input must define `-main` or `main`, which the binary calls natively.
+Code that lowers runs as Go; what does not lower stays on the VM, and the build
+still succeeds. The generated module requires the let-go this `lg` came from: a
+release pins its own version, and a dev build uses `LETGO_SRC` or the checkout
+it finds, as `-w` does. Pass several files when the program's own namespaces
+should lower too; namespaces you don't pass run from bytecode.
+
 ## Compile-time vars
 
 `*compiling-aot*` is `true` during `-c`/`-b`/`-w` compilation and `false` during
@@ -103,7 +121,8 @@ ordinary runtime execution, useful for keeping side effects out of compile time:
   (-main))
 ```
 
-For an AOT native-entry binary, compile the embedded bytecode with
+`lg compile` does the following step for you. When driving the pipeline by
+hand, compile the embedded bytecode with
 `lg -c program.lgb -entry-frame-entry app/-main app.lg` (use `app/main` when
 that is the selected entry). This omits the selected top-level entry call
 from the bytecode because the native frame calls it. Other top-level forms,

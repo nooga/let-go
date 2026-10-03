@@ -68,6 +68,36 @@ func wasmLetgoSource(letgoSrcEnv string, info *runtimeDebug.BuildInfo) (*gomod.R
 	return letgoReplacementFrom(info)
 }
 
+// writeGoModule writes go.mod and go.sum for a generated module named
+// moduleName into dir, requiring the let-go this binary runs. A host built
+// through a `replace` for let-go has that directive reproduced verbatim;
+// anything else (including LETGO_SRC set, which overrides what the binary
+// remembers) takes the ordinary gomod.Generate path. -w and `lg compile` both
+// build through it, so a generated module links the runtime that emitted it.
+func writeGoModule(dir, moduleName string) error {
+	info, _ := runtimeDebug.ReadBuildInfo()
+	rep, err := wasmLetgoSource(os.Getenv("LETGO_SRC"), info)
+	if err != nil {
+		return err
+	}
+	var mod gomod.Files
+	if rep == nil {
+		mod, err = gomod.Generate(dir, moduleName, letgoModuleVersion())
+	} else {
+		mod, err = gomod.GenerateWithReplace(dir, moduleName, *rep)
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod.Mod), 0644); err != nil {
+		return err
+	}
+	if len(mod.Sum) > 0 {
+		return os.WriteFile(filepath.Join(dir, "go.sum"), mod.Sum, 0644)
+	}
+	return nil
+}
+
 // letgoReplacementFrom reads the host's `replace` directive for let-go out of
 // its build info, or nil when there is none. The directive is carried whole
 // — a directory, or a module path with its version — because gomod cannot
@@ -248,30 +278,9 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 	}
 
-	// 4. Write go.mod. A host built through a `replace` for let-go has that
-	// directive reproduced verbatim; anything else (including LETGO_SRC set,
-	// which overrides what the binary remembers) takes the ordinary path.
-	info, _ := runtimeDebug.ReadBuildInfo()
-	rep, err := wasmLetgoSource(os.Getenv("LETGO_SRC"), info)
-	if err != nil {
+	// 4. Write go.mod.
+	if err := writeGoModule(tmpDir, wasmModuleName); err != nil {
 		return err
-	}
-	var mod gomod.Files
-	if rep == nil {
-		mod, err = gomod.Generate(tmpDir, wasmModuleName, letgoModuleVersion())
-	} else {
-		mod, err = gomod.GenerateWithReplace(tmpDir, wasmModuleName, *rep)
-	}
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(mod.Mod), 0644); err != nil {
-		return err
-	}
-	if len(mod.Sum) > 0 {
-		if err := os.WriteFile(filepath.Join(tmpDir, "go.sum"), mod.Sum, 0644); err != nil {
-			return err
-		}
 	}
 
 	// 5. Build WASM binary to temp dir. We intentionally skip `go mod tidy`:

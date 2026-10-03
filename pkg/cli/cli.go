@@ -573,6 +573,10 @@ func runMain() int {
 		return 0
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == compileCommand {
+		return runCompile(os.Args[2:])
+	}
+
 	flag.Parse()
 	if entryFrameEntry != "" {
 		slash := strings.LastIndexByte(entryFrameEntry, '/')
@@ -734,8 +738,9 @@ func runMain() int {
 
 // Main is the whole lg command line: flag registration, argument handling, and
 // every mode the binary supports (eval, run, REPL, nREPL, -c compile, -b bundle,
-// -w wasm). It returns an exit code rather than calling os.Exit itself, so an
-// embedding main stays in control of shutdown.
+// -w wasm, and the `lg compile` native build). It returns an exit code rather
+// than calling os.Exit itself, so an embedding main stays in control of
+// shutdown.
 //
 // Two limits worth knowing. Flag parsing uses flag.CommandLine, which is
 // ExitOnError: -h and a malformed flag still terminate the process from inside

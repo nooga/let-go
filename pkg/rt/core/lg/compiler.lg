@@ -197,7 +197,8 @@
    `import-prefix`. When entry-frame? is true and a recognized program entry is
    present, also emit the #425 native-entry frame.
 
-   Returns {:emit-fails n :lowered-funcs n :entry <entry-or-nil> :error <msg>}
+   Returns {:emit-fails n :lowered-funcs n :entry <entry-or-nil>
+            :entry-path <path-or-nil> :error <msg>}
    instead of exiting, so a Go caller can decide what to do. Printing is kept
    for the scripts/lg-compile shim's stdout contract."
   [out-dir import-prefix files entry-frame?]
@@ -232,7 +233,8 @@
               (when entry-frame?
                 (emit-frame! out-dir specs results entry-spec entry))
               (println (ir.passes.entry-frame/entry-summary-line n-funcs entry))
-              {:emit-fails fails :lowered-funcs n-funcs :entry entry})))))))
+              {:emit-fails fails :lowered-funcs n-funcs :entry entry
+               :entry-path (:path entry-spec)})))))))
 
 (defn exit-code
   "The shim's exit policy, as a pure function of compile-program's result.
@@ -250,3 +252,47 @@
   (let [entry-frame? (boolean (some (fn [a] (= "--entry-frame" a)) argv0))
         argv         (vec (filter (fn [a] (not= "--entry-frame" a)) argv0))]
     (compile-program (nth argv 0) (nth argv 1) (vec (drop 2 argv)) entry-frame?)))
+
+(def program-module
+  "Go module name of the generated build. Lowered packages import each other
+   under it, so it is also the import prefix passed to compile-program."
+  "lgprogram")
+
+(defn build-program
+  "Compile `files` to a standalone native binary at `out` (nil names it after
+   the entry file, in the current directory): lower them with the
+   native-entry frame, bytecode-compile the entry file to program.lgb beside
+   the frame, scaffold a Go module, and go build it. Partial lowering is not an
+   error: an EMIT-FAIL package stays on the VM, as it does for lg-compile.
+
+   The Go toolchain steps come from `host`, a map of fns the CLI supplies:
+     :compile-lgb     (f src dst entry)  writes program.lgb; entry is ns/name
+     :scaffold-module (f dir module)     writes go.mod and go.sum into dir
+     :go-build        (f dir out)        builds the module in dir to out
+     :make-temp-dir   (f)                returns a fresh directory
+     :remove-dir      (f dir)            deletes it
+   program.lgb comes from a separate process, not this one: lowering loads the
+   compiler's own namespaces, and an in-process compile would bundle them.
+
+   `work-dir`, when given, holds the generated module and is kept; otherwise a
+   temporary directory is used and removed. Returns compile-program's result
+   plus :out, or a map with :error."
+  [files out work-dir host]
+  (let [work (or work-dir ((:make-temp-dir host)))]
+    (try
+      (let [res   (compile-program work program-module files true)
+            entry (:entry res)]
+        (cond
+          (:error res) res
+          (nil? entry)
+          (assoc res :error (str "lg compile: no program entry; define -main or main in one of: "
+                                 (clojure.string/join " " files)))
+          :else
+          (let [out (or out (basename-stem (:entry-path res)))]
+            ((:compile-lgb host) (:entry-path res) (str work "/program.lgb")
+                                 (str (:ns entry) "/" (:name entry)))
+            ((:scaffold-module host) work program-module)
+            ((:go-build host) work out)
+            (assoc res :out out))))
+      (finally
+        (when-not work-dir ((:remove-dir host) work))))))
