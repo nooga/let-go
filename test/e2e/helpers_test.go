@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -24,18 +23,20 @@ import (
 // until it finds go.mod. Stable regardless of the test's working directory.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	// go test runs a test in its package directory; the source path from
+	// runtime.Caller is not usable, since -trimpath rewrites it.
+	start, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	dir := filepath.Dir(file)
+	dir := start
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatal("repo root (go.mod) not found above " + filepath.Dir(file))
+			t.Fatal("repo root (go.mod) not found above " + start)
 		}
 		dir = parent
 	}

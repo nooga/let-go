@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -31,9 +30,11 @@ func TestLGBGenUsesSourceBootstrap(t *testing.T) {
 func repoRoot(t *testing.T) string {
 	t.Helper()
 
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	// go test runs a test in its package directory, cmd/lgbgen; the source
+	// path from runtime.Caller is not usable, since -trimpath rewrites it.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	return filepath.Clean(filepath.Join(wd, "..", ".."))
 }
