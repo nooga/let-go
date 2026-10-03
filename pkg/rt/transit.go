@@ -589,8 +589,8 @@ func JSONEncodeArgs(args []vm.Value) (string, error) {
 
 // JSONDecodeValue decodes a JSON string into a vm.Value.
 func JSONDecodeValue(s string) (vm.Value, error) {
-	var v any
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
+	v, err := decodeJSON(s)
+	if err != nil {
 		return vm.NIL, err
 	}
 	return toValue(true, v)
