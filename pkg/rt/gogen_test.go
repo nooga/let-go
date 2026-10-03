@@ -854,4 +854,3 @@ func TestCIdentNamesNilAndEmptyNode(t *testing.T) {
 		t.Fatalf("expected [myVar], got %#v", got)
 	}
 }
-
