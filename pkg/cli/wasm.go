@@ -198,7 +198,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string, moduleDir string) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	var chunk *vm.CodeChunk
@@ -248,7 +248,9 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		debugData, debugPath = companion, path
 	}
 
-	// 2. Create temp build directory
+	// 2. Create temp build directory. With a caller-supplied module (#998)
+	// the sources go into the directory let-go owns there instead, and the
+	// temp directory holds only the build's cache and scratch.
 	tmpDir, err := os.MkdirTemp("", "lg-wasm-*")
 	if err != nil {
 		return err
@@ -260,34 +262,49 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	goEnv := wasmBuildEnv(tmpDir)
 	goTool := gomod.GoToolPath()
 	buildTags := strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS"))
+	useTinyGo := os.Getenv("LETGO_USE_TINYGO") == "1"
+	srcDir := tmpDir
+	if moduleDir != "" {
+		// tinygo has no -mod flag, so nothing would hold it to the caller's
+		// go.mod as written.
+		if useTinyGo {
+			return fmt.Errorf("-w-module does not support LETGO_USE_TINYGO yet")
+		}
+		m, err := openCallerModule(moduleDir)
+		if err != nil {
+			return err
+		}
+		srcDir = m.GenDir()
+	}
 
 	// 3. Write generated source files
-	if err := os.WriteFile(filepath.Join(tmpDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval)), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval)), 0644); err != nil {
 		return err
 	}
 	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
-		srcDir, err := gomod.FindLetGoSourceDir()
+		letgoDir, err := gomod.FindLetGoSourceDir()
 		if err != nil {
 			return fmt.Errorf("gogen_ir wasm build requires local let-go source for wireup: %w", err)
 		}
-		if err := wasmassets.WriteGogenIRWireup(tmpDir, srcDir); err != nil {
+		if err := wasmassets.WriteGogenIRWireup(srcDir, letgoDir); err != nil {
 			return err
 		}
 	}
 
-	// 4. Write go.mod.
-	if err := writeGoModule(tmpDir, wasmModuleName); err != nil {
-		return err
+	// 4. Write go.mod, unless the caller supplied one.
+	if moduleDir == "" {
+		if err := writeGoModule(tmpDir, wasmModuleName); err != nil {
+			return err
+		}
 	}
 
 	// 5. Build WASM binary to temp dir. We intentionally skip `go mod tidy`:
 	// the generated app imports only runtime packages, while tidy also walks
 	// test-only deps from the replaced local module and can spuriously pull
 	// network-only packages that the wasm build itself does not need.
-	useTinyGo := os.Getenv("LETGO_USE_TINYGO") == "1"
 	wasmPath := filepath.Join(tmpDir, "app.wasm")
 	var build *exec.Cmd
 	if useTinyGo {
@@ -338,8 +355,13 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		build.Env = os.Environ()
 	} else {
 		fmt.Println("building wasm...")
-		build = exec.Command(goTool, wasmassets.GoBuildArgs(wasmPath, buildTags)...)
-		build.Dir = tmpDir
+		args := wasmassets.GoBuildArgs(wasmPath, buildTags)
+		if moduleDir != "" {
+			// Explicit, so GOFLAGS=-mod=mod cannot edit the caller's go.mod.
+			args = append([]string{args[0], "-mod=readonly"}, args[1:]...)
+		}
+		build = exec.Command(goTool, args...)
+		build.Dir = srcDir
 		build.Env = append(goEnv, "GOOS=js", "GOARCH=wasm")
 	}
 	build.Stderr = os.Stderr
