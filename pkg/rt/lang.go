@@ -2499,15 +2499,14 @@ func installLangNS() {
 		return vm.String(b.String()), nil
 	})
 
-	typef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		t := vs[0].Type()
+	// A fast shape: the hottest dynamic callee of lowered code ((type x) in
+	// every type predicate) is reached without an argument slice.
+	typef, _ := vm.NativeFnType.Box(func(v vm.Value) vm.Value {
+		t := v.Type()
 		if t == vm.NilType {
-			return vm.NIL, nil
+			return vm.NIL
 		}
-		return t, nil
+		return t
 	})
 
 	apply := vm.NewCtxNativeFn("apply*", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {

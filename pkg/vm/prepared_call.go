@@ -28,8 +28,8 @@ type PreparedCall struct {
 }
 
 // maxPreparedArity is the widest arity a CallN entry point can fully
-// populate — Call1 and Call2 today. Widen this as CallN methods land.
-const maxPreparedArity = 2
+// populate — Call1 through Call4. Widen this as CallN methods land.
+const maxPreparedArity = 4
 
 // PrepareCallInto resolves fn for repeated arity-n invocation into p, which
 // the caller owns — typically a stack variable in a native loop. It reports
@@ -106,6 +106,31 @@ func (p *PreparedCall) Call2(a, b Value) (Value, error) {
 	}
 	p.args[0] = a
 	p.args[1] = b
+	return p.call()
+}
+
+// Call3 invokes the prepared ternary callable. Calling it on a preparation
+// of any other arity is a contract violation and returns an error.
+func (p *PreparedCall) Call3(a, b, c Value) (Value, error) {
+	if len(p.args) != 3 {
+		return NIL, NewExecutionError("PreparedCall: Call3 on a preparation of arity " + strconv.Itoa(len(p.args)))
+	}
+	p.args[0] = a
+	p.args[1] = b
+	p.args[2] = c
+	return p.call()
+}
+
+// Call4 invokes the prepared four-argument callable. Calling it on a
+// preparation of any other arity is a contract violation and returns an error.
+func (p *PreparedCall) Call4(a, b, c, d Value) (Value, error) {
+	if len(p.args) != 4 {
+		return NIL, NewExecutionError("PreparedCall: Call4 on a preparation of arity " + strconv.Itoa(len(p.args)))
+	}
+	p.args[0] = a
+	p.args[1] = b
+	p.args[2] = c
+	p.args[3] = d
 	return p.call()
 }
 
