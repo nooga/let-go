@@ -8,6 +8,7 @@ package vm
 import (
 	"fmt"
 	"reflect"
+	"unsafe"
 )
 
 type theFuncType struct{}
@@ -29,6 +30,10 @@ type Func struct {
 	isVariadric bool
 	chunk       *CodeChunk
 	meta        Value // IMeta support; nil until (with-meta fn m) copies one in
+	// multi is the *MultiArityFn a capture-free multi-arity literal built
+	// with this Func as its first arm (see CodeChunk.multiArityAt); accessed
+	// atomically.
+	multi unsafe.Pointer
 }
 
 func MakeFunc(arity int, variadric bool, c *CodeChunk) *Func {
@@ -58,9 +63,9 @@ func (l *Func) Meta() Value {
 // than mutate — otherwise every evaluation of the fn literal would observe the
 // metadata. The chunk is immutable, so sharing it across the copy is safe.
 func (l *Func) WithMeta(m Value) Value {
-	cp := *l
-	cp.meta = m
-	return &cp
+	// Field by field: the copy is not a literal's arm, so it carries no
+	// multi-arity cache.
+	return &Func{name: l.name, arity: l.arity, isVariadric: l.isVariadric, chunk: l.chunk, meta: m}
 }
 
 type FuncInterface func(any)

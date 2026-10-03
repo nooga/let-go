@@ -271,15 +271,27 @@
 
 (defn hoisted-const-decls
   "Package-level decls for the hoisted constants, sorted by name so the
-   file is deterministic. Each is hashed in its initializer (vm.Prehash):
-   every goroutine shares the value, and a collection caches its hash on
-   first use without synchronization."
+   file is deterministic. A constant is hashed in its initializer
+   (vm.Prehash): every goroutine shares the value, and a collection caches
+   its hash on first use without synchronization. A shared fn literal is
+   assigned in an init() instead: its body may call a lowered fn that reads
+   this very var, which Go rejects as an initialization cycle, and nothing
+   reads the var before main runs."
   [consts]
-  (mapv (fn [[nm {:keys [expr]}]]
-          {:decl (gogen/top-var-decl nm (gogen/type "vm.Value")
-                                     (vm-call "Prehash" [expr]))
-           :imports [{:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}]})
-        (sort-by first consts)))
+  (let [vm-import [{:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}]]
+    (vec
+      (mapcat
+        (fn [[nm {:keys [expr late?]}]]
+          (if late?
+            [{:decl (gogen/top-var-decl nm (gogen/type "vm.Value") nil)
+              :imports vm-import}
+             {:decl (gogen/func-decl "init" [] []
+                                     [(gogen/assign "=" (gogen/ident nm) expr)])
+              :imports vm-import}]
+            [{:decl (gogen/top-var-decl nm (gogen/type "vm.Value")
+                                        (vm-call "Prehash" [expr]))
+              :imports vm-import}]))
+        (sort-by first consts)))))
 
 (defn- boxed-list-expr [xs]
   (if (zero? (count xs))
@@ -320,17 +332,17 @@
         (vm-call "NewPersistentMap"
                  [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
 
-;; A data-read collection constant (vector/map/set) can carry reader metadata
-;; (issue #801) — evaluating it must yield a value carrying that metadata,
-;; the same contract the bytecode compiler's compileForm now honours (a
-;; `with-meta` call wrapping the constructed collection). vm.ArrayVector,
-;; vm.PersistentMap and vm.PersistentSet all implement vm.IMeta (Meta/
-;; WithMeta) unconditionally — a value with no metadata just returns itself —
-;; so the wrap is safe to apply whenever `(meta v)` is non-nil, regardless of
-;; which of the three collection kinds `built` is. The meta value itself must
-;; also be boxable; if it isn't, this — like every other boxed-*-expr — falls
-;; back to nil (whole-function bridge fallback) rather than silently dropping
-;; the metadata.
+         ;; A data-read collection constant (vector/map/set) can carry reader metadata
+         ;; (issue #801) — evaluating it must yield a value carrying that metadata,
+         ;; the same contract the bytecode compiler's compileForm now honours (a
+         ;; `with-meta` call wrapping the constructed collection). vm.ArrayVector,
+         ;; vm.PersistentMap and vm.PersistentSet all implement vm.IMeta (Meta/
+         ;; WithMeta) unconditionally — a value with no metadata just returns itself —
+         ;; so the wrap is safe to apply whenever `(meta v)` is non-nil, regardless of
+         ;; which of the three collection kinds `built` is. The meta value itself must
+         ;; also be boxable; if it isn't, this — like every other boxed-*-expr — falls
+         ;; back to nil (whole-function bridge fallback) rather than silently dropping
+         ;; the metadata.
 (defn- boxed-with-meta [v built]
   (if (or (nil? built) (nil? (meta v)))
     built
@@ -500,15 +512,15 @@
          (str (go-name (canonical-name f sym)) "_" nid))
        (str "v" nid))))
 
-;; Munge Lisp-idiomatic identifier chars to a valid Go identifier.
-;; This is the canonical Clojure CHAR_MAP (clojure.lang.Compiler/CHAR_MAP),
-;; matched verbatim against glojure's runtime munge (pkg/runtime/rtcompat.go):
-;; each unsafe char maps to a distinct underscore-bracketed token so munged
-;; names don't collide with legitimately-named Go identifiers already in
-;; source. Any char NOT in this map is handled by the go-name fallback below
-;; (alphanumerics/underscore pass through; everything else becomes _U<hex>_),
-;; so an unmapped char can never leak through and produce an invalid Go
-;; identifier (the historic :gogen/bad-identifier failure class).
+         ;; Munge Lisp-idiomatic identifier chars to a valid Go identifier.
+         ;; This is the canonical Clojure CHAR_MAP (clojure.lang.Compiler/CHAR_MAP),
+         ;; matched verbatim against glojure's runtime munge (pkg/runtime/rtcompat.go):
+         ;; each unsafe char maps to a distinct underscore-bracketed token so munged
+         ;; names don't collide with legitimately-named Go identifiers already in
+         ;; source. Any char NOT in this map is handled by the go-name fallback below
+         ;; (alphanumerics/underscore pass through; everything else becomes _U<hex>_),
+         ;; so an unmapped char can never leak through and produce an invalid Go
+         ;; identifier (the historic :gogen/bad-identifier failure class).
 (def go-name-munge-map
   {\-  "_"
    \:  "_COLON_"
@@ -547,10 +559,10 @@
     ;; otherwise redeclare them in the same block.
     "ec" "callErr"})
 
-;; Munge one char to a Go-identifier-safe token using `m`, with a catch-all so
-;; nothing unmapped ever leaks through: explicit map entry wins; otherwise
-;; ASCII alphanumerics and '_' pass through; any other char becomes _U<hex>_
-;; (its Unicode code point). Mirrors glojure's codegen mungeID fallback.
+         ;; Munge one char to a Go-identifier-safe token using `m`, with a catch-all so
+         ;; nothing unmapped ever leaks through: explicit map entry wins; otherwise
+         ;; ASCII alphanumerics and '_' pass through; any other char becomes _U<hex>_
+         ;; (its Unicode code point). Mirrors glojure's codegen mungeID fallback.
 (defn- munge-char [m ch]
   (or (get m ch)
       (let [c (int ch)]
@@ -606,18 +618,18 @@
   ;; :bit-not :dot :def and the binary arith/cmp/bit ops incl :quot/:div).
   (ir/op-local-carrying? op))
 
-;; A :load-var is normally re-emitted inline as ec.Deref(rt.LookupVar(...)) at
-;; each use. That is unsafe for a var the same function set!s: a root mutated
-;; between the load and a later use would make a re-emitted deref read the NEW
-;; value, diverging from the bytecode VM (which snapshots the value when the
-;; load executes). For those vars only we materialise the load into a one-time
-;; snapshot local. Restricting to set!-TARGET vars (not every load in a set!-fn)
-;; matters: materialising a load whose value is never rendered-referenced — a
-;; loop head bound to an unrelated var, say — leaves a `declared and not used`
-;; local. A var the fn set!s is, by construction, read where it matters.
+         ;; A :load-var is normally re-emitted inline as ec.Deref(rt.LookupVar(...)) at
+         ;; each use. That is unsafe for a var the same function set!s: a root mutated
+         ;; between the load and a later use would make a re-emitted deref read the NEW
+         ;; value, diverging from the bytecode VM (which snapshots the value when the
+         ;; load executes). For those vars only we materialise the load into a one-time
+         ;; snapshot local. Restricting to set!-TARGET vars (not every load in a set!-fn)
+         ;; matters: materialising a load whose value is never rendered-referenced — a
+         ;; loop head bound to an unrelated var, say — leaves a `declared and not used`
+         ;; local. A var the fn set!s is, by construction, read where it matters.
 
-;; Canonical "ns/name" key for a var, from either a load-var aux symbol or the
-;; Var value held by a set!'s :const operand (which prints as "#'ns/name").
+         ;; Canonical "ns/name" key for a var, from either a load-var aux symbol or the
+         ;; Var value held by a set!'s :const operand (which prints as "#'ns/name").
 (defn- var-key-of-symbol [aux]
   (let [sym (symbol aux)]
     (str (or (namespace sym) "core") "/" (name sym))))
@@ -655,14 +667,14 @@
   (and (= :load-var (ir/op nid f))
        (contains? (set-var-target-keys f) (var-key-of-symbol (ir/aux nid f)))))
 
-;; The same-fn set! guard above is not the only mutator: a CALL can run a callee
-;; that set!s (or defs) the loaded var, so a re-emitted deref after the call
-;; reads the mutated root while the bytecode VM snapshots at the load. A load
-;; live across an effectful op is therefore materialised into the one-time
-;; snapshot local too. Mirrors lower.lg's load-var-crosses-effect?; callee loads
-;; sit adjacent to their invoke with only arithmetic between, so they keep the
-;; inline re-emit. (A shared home for this rule across both backends is a sound
-;; follow-up — kept per-backend here to close the divergence now.)
+         ;; The same-fn set! guard above is not the only mutator: a CALL can run a callee
+         ;; that set!s (or defs) the loaded var, so a re-emitted deref after the call
+         ;; reads the mutated root while the bytecode VM snapshots at the load. A load
+         ;; live across an effectful op is therefore materialised into the one-time
+         ;; snapshot local too. Mirrors lower.lg's load-var-crosses-effect?; callee loads
+         ;; sit adjacent to their invoke with only arithmetic between, so they keep the
+         ;; inline re-emit. (A shared home for this rule across both backends is a sound
+         ;; follow-up — kept per-backend here to close the divergence now.)
 (def ^:private ir-effectful-ops #{:call :tail-call :set-var :def})
 
 (defn- block-index-map [insts]
@@ -729,12 +741,12 @@
     (and (< nid (count uses))
          (not (ir/uses-empty? (nth uses nid))))))
 
-;; live? — is nid's VALUE actually read by emitted Go? Reads the backward
-;; read-set computed by liveness/reachable-nids and cached on f by lower-body. The IR `uses`
-;; table over-reports: build threads some argument subexpressions twice, leaving
-;; dead duplicate insts with non-empty (stale) use lists. live? is the truth for
-;; lowering decisions (declare/assign/route-to-_). Falls back to used? when the
-;; set is absent (non-lowering callers).
+         ;; live? — is nid's VALUE actually read by emitted Go? Reads the backward
+         ;; read-set computed by liveness/reachable-nids and cached on f by lower-body. The IR `uses`
+         ;; table over-reports: build threads some argument subexpressions twice, leaving
+         ;; dead duplicate insts with non-empty (stale) use lists. live? is the truth for
+         ;; lowering decisions (declare/assign/route-to-_). Falls back to used? when the
+         ;; set is absent (non-lowering callers).
 (defn- live? [f nid]
   (let [ls (:live (deref f))]
     (if ls
@@ -964,6 +976,91 @@
              {:names (conj (:names m) tname)
               :decls (into (:decls m) decls)}))))
 
+(defn- closure-struct-decls [tname ctor ncaps fixed variadic?]
+  ;; The closure struct type and its constructor, which allocates the struct
+  ;; once and returns its embedded NativeFn, set up by vm.InitNativeFn.
+  (let [self     (gogen/ident "self")
+        value-t  (gogen/type "vm.Value")
+        ec-t     (gogen/type "*vm.ExecContext")
+        field    (fn [i] (str "c" i))
+        fields   (into [(gogen/embed-field (gogen/type "vm.NativeFn"))
+                        (gogen/field-decl "ec" ec-t "")]
+                       (mapv (fn [i] (gogen/field-decl (field i) value-t "")) (range ncaps)))
+        params   (into [(gogen/param "ec" ec-t)]
+                       (mapv (fn [i] (gogen/param (field i) value-t)) (range ncaps)))
+        kvs      (into [(gogen/kv-expr (gogen/ident "ec") (gogen/ident "ec"))]
+                       (mapv (fn [i] (gogen/kv-expr (gogen/ident (field i)) (gogen/ident (field i))))
+                             (range ncaps)))
+        embedded (gogen/unary "&" (gogen/field-sel self "NativeFn"))]
+    [(gogen/type-decl tname (gogen/struct-type fields))
+     (gogen/func-decl
+       ctor params [(gogen/result value-t)]
+       [(gogen/assign ":=" self (gogen/unary "&" (gogen/composite-lit (gogen/type tname) kvs)))
+        (gogen/expr-stmt
+          (gogen/call (gogen/field-sel (gogen/ident "vm") "InitNativeFn")
+                      [embedded (gogen/int-lit fixed)
+                       (gogen/ident (if variadic? "true" "false")) self]))
+        (gogen/return-stmt [embedded])])]))
+
+(defn- closure-arity-check [fixed variadic?]
+  ;; CallNative's arity check: the bytecode VM's error for a fn of this shape,
+  ;; naming the closure (vm.WrongArgCount / vm.TooFewArgs), or nil when every
+  ;; count is accepted.
+  (let [argv     (gogen/ident "argv")
+        embedded (gogen/unary "&" (gogen/field-sel (gogen/ident "self") "NativeFn"))
+        len-argv (gogen/call (gogen/ident "len") [argv])
+        err      (fn [helper]
+                   (gogen/return-stmt
+                     [(gogen/field-sel (gogen/ident "vm") "NIL")
+                      (gogen/call (gogen/field-sel (gogen/ident "vm") helper)
+                                  [embedded len-argv (gogen/int-lit fixed)])]))]
+    (if variadic?
+      (when (pos? fixed)
+        (gogen/if-stmt nil (gogen/binary "<" len-argv (gogen/int-lit fixed)) [(err "TooFewArgs")] nil))
+      (gogen/if-stmt nil (gogen/binary "!=" len-argv (gogen/int-lit fixed)) [(err "WrongArgCount")] nil))))
+
+(defn- closure-apply-stmt [lit ncaps fixed variadic? typed? needs-error?]
+  ;; The return statement applying the literal's func-lit in place to the
+  ;; struct's ec and captures and the call's arguments: parameters a0 … when
+  ;; the method is typed (Invoke<N>), argv otherwise, with a variadic tail as
+  ;; argv[fixed:]….
+  (let [self  (gogen/ident "self")
+        argv  (gogen/ident "argv")
+        arg   (fn [i] (if typed? (gogen/ident (str "a" i)) (gogen/index argv (gogen/int-lit i))))
+        args  (-> [(gogen/field-sel self "ec")]
+                  (into (mapv (fn [i] (gogen/field-sel self (str "c" i))) (range ncaps)))
+                  (into (mapv arg (range fixed))))
+        call  (if variadic?
+                (gogen/call-variadic lit (conj args (gogen/slice-expr argv (gogen/int-lit fixed) nil)))
+                (gogen/call lit args))]
+    (if needs-error?
+      (gogen/return-stmt [call])
+      (gogen/return-stmt [call (gogen/ident "nil")]))))
+
+(defn- closure-methods [tname ret check fixed typed?]
+  ;; [CallNative Invoke<N>-or-nil]. A typed struct puts the application in
+  ;; Invoke<N> and CallNative delegates to it after the arity check.
+  (let [self    (gogen/ident "self")
+        argv    (gogen/ident "argv")
+        results [(gogen/result (gogen/type "vm.Value")) (gogen/result (gogen/type "error"))]
+        recv    [(gogen/field-decl "self" (gogen/type (str "*" tname)) "")]
+        invoke-n (when typed?
+                   (gogen/method-decl
+                     recv (str "Invoke" fixed)
+                     (into [(gogen/param "_" (gogen/type "*vm.ExecContext"))]
+                           (mapv (fn [i] (gogen/param (str "a" i) (gogen/type "vm.Value"))) (range fixed)))
+                     results
+                     [ret]))
+        body    (if typed?
+                  (gogen/return-stmt
+                    [(gogen/call (gogen/field-sel self (str "Invoke" fixed))
+                                 (into [(gogen/ident "nil")]
+                                       (mapv (fn [i] (gogen/index argv (gogen/int-lit i))) (range fixed))))])
+                  ret)]
+    [(gogen/method-decl recv "CallNative" [(gogen/param "argv" (gogen/type "[]vm.Value"))] results
+                        (if check [check body] [body]))
+     invoke-n]))
+
 (defn- lower-closure-struct
   "Lower one fn literal to its closure struct and register the three decls:
 
@@ -976,8 +1073,8 @@
    captures and the arguments as parameters, so it closes over nothing and a
    call allocates nothing. A fixed arity of one to four puts that application
    in Invoke<N> (vm.Invoker<N>), which ec.Invoke<N> reaches with no argument
-   slice; CallNative checks the arity exactly as a boxed Go func of that shape
-   does and delegates to it. The caller's ec is ignored in favor of the
+   slice; CallNative checks the arity, reporting a mismatch as the bytecode VM
+   does, and delegates to it. The caller's ec is ignored in favor of the
    lexically captured one. Returns the constructor's name, or nil
    when the literal cannot be lowered (the enclosing fn then falls back)."
   [f ncaps cid path]
@@ -997,78 +1094,82 @@
                                 (into [(gogen/param "ec" ec-t)]
                                       (mapv (fn [n] (gogen/param n value-t)) cap-names)))]
     (when lit
-      (let [self      (gogen/ident "self")
-            argv      (gogen/ident "argv")
-            field     (fn [i] (str "c" i))
-            fields    (into [(gogen/embed-field (gogen/type "vm.NativeFn"))
-                             (gogen/field-decl "ec" ec-t "")]
-                            (mapv (fn [i] (gogen/field-decl (field i) value-t "")) (range ncaps)))
-            type-decl (gogen/type-decl tname (gogen/struct-type fields))
-            ctor-params (into [(gogen/param "ec" ec-t)]
-                              (mapv (fn [i] (gogen/param (field i) value-t)) (range ncaps)))
-            lit-kvs   (into [(gogen/kv-expr (gogen/ident "ec") (gogen/ident "ec"))]
-                            (mapv (fn [i] (gogen/kv-expr (gogen/ident (field i)) (gogen/ident (field i))))
-                                  (range ncaps)))
-            embedded  (gogen/unary "&" (gogen/field-sel self "NativeFn"))
-            ctor-decl (gogen/func-decl
-                        ctor ctor-params [(gogen/result value-t)]
-                        [(gogen/assign ":=" self
-                                       (gogen/unary "&" (gogen/composite-lit (gogen/type tname) lit-kvs)))
-                         (gogen/expr-stmt
-                           (gogen/call (gogen/field-sel (gogen/ident "vm") "InitNativeFn")
-                                       [embedded (gogen/int-lit fixed)
-                                        (gogen/ident (if variadic? "true" "false")) self]))
-                         (gogen/return-stmt [embedded])])
-            nil-ret   (gogen/field-sel (gogen/ident "vm") "NIL")
-            len-argv  (gogen/call (gogen/ident "len") [argv])
-            arity-err (fn [helper]
-                        (gogen/return-stmt
-                          [nil-ret (gogen/call (gogen/field-sel (gogen/ident "vm") helper)
-                                               [embedded len-argv (gogen/int-lit fixed)])]))
-            check     (if variadic?
-                        (when (pos? fixed)
-                          (gogen/if-stmt nil (gogen/binary "<" len-argv (gogen/int-lit fixed))
-                                         [(arity-err "TooFewArgs")] nil))
-                        (gogen/if-stmt nil (gogen/binary "!=" len-argv (gogen/int-lit fixed))
-                                       [(arity-err "WrongArgCount")] nil))
+      (let [[type-decl ctor-decl] (closure-struct-decls tname ctor ncaps fixed variadic?)
             typed?    (and (not variadic?) (<= 1 fixed 4))
-            arg-name  (fn [i] (str "a" i))
-            arg-ref   (fn [i] (if typed?
-                                (gogen/ident (arg-name i))
-                                (gogen/index argv (gogen/int-lit i))))
-            call-args (-> [(gogen/field-sel self "ec")]
-                          (into (mapv (fn [i] (gogen/field-sel self (field i))) (range ncaps)))
-                          (into (mapv arg-ref (range fixed))))
-            call      (if variadic?
-                        (gogen/call-variadic lit (conj call-args (gogen/slice-expr argv (gogen/int-lit fixed) nil)))
-                        (gogen/call lit call-args))
-            ret       (if needs-error?
-                        (gogen/return-stmt [call])
-                        (gogen/return-stmt [call (gogen/ident "nil")]))
-            results   [(gogen/result value-t) (gogen/result (gogen/type "error"))]
-            recv      [(gogen/field-decl "self" (gogen/type (str "*" tname)) "")]
-            invoke-n  (when typed?
-                        (gogen/method-decl
-                          recv (str "Invoke" fixed)
-                          (into [(gogen/param "_" ec-t)]
-                                (mapv (fn [i] (gogen/param (arg-name i) value-t)) (range fixed)))
-                          results
-                          [ret]))
-            delegate  (when typed?
-                        (gogen/return-stmt
-                          [(gogen/call (gogen/field-sel self (str "Invoke" fixed))
-                                       (into [(gogen/ident "nil")]
-                                             (mapv (fn [i] (gogen/index argv (gogen/int-lit i))) (range fixed))))]))
-            method    (gogen/method-decl
-                        recv "CallNative"
-                        [(gogen/param "argv" (gogen/type "[]vm.Value"))]
-                        results
-                        (let [body (or delegate ret)]
-                          (if check [check body] [body])))]
+            ret       (closure-apply-stmt lit ncaps fixed variadic? typed? needs-error?)
+            [method invoke-n] (closure-methods tname ret (closure-arity-check fixed variadic?) fixed typed?)]
         (register-closure-decls! tname (if invoke-n
                                          [type-decl ctor-decl method invoke-n]
                                          [type-decl ctor-decl method]))
         ctor))))
+
+(defn- shared-fn-literal-arm [f argv path]
+  ;; One arm of a hoisted capture-free literal: its func-lit applied in place to
+  ;; ec and the arguments, returning (vm.Value, error). path names the arm, so
+  ;; a literal nested in its body gets a name of its own (cids repeat across
+  ;; fn templates).
+  (let [arity     (ir/fn-arity f)
+        variadic? (ir/fn-variadic? f)
+        fixed     (if variadic? (dec arity) arity)
+        needs-error? (binding [*force-needs-error* nil] (function-needs-error? f))
+        lit       (binding [*closure-type-path* path]
+                    (lower-fn-lit f [] 0 [(gogen/param "ec" (gogen/type "*vm.ExecContext"))]))]
+    (when lit
+      (let [args (into [(gogen/ident "ec")]
+                       (mapv (fn [i] (gogen/index argv (gogen/int-lit i))) (range fixed)))
+            call (if variadic?
+                   (gogen/call-variadic lit (conj args (gogen/slice-expr argv (gogen/int-lit fixed) nil)))
+                   (gogen/call lit args))]
+        {:fixed fixed
+         :variadic? variadic?
+         :ret (if needs-error?
+                (gogen/return-stmt [call])
+                (gogen/return-stmt [call (gogen/ident "nil")]))}))))
+
+(defn- shared-fn-literal [fns path]
+  ;; A capture-free fn literal is one object for the whole program, as the
+  ;; bytecode VM's fn constant is: a package-level var holding a context-aware
+  ;; native (vm.NewCheckedCtxNativeFn), which runs each call with the caller's
+  ;; ec and checks the argument count as the VM does. fns are the literal's
+  ;; arms; the body dispatches on the count, an exact fixed arity first, then
+  ;; the rest arm. Returns the var's identifier, or nil when an arm does not
+  ;; lower.
+  (let [argv (gogen/ident "argv")
+        arms (if (= 1 (count fns))
+               [(shared-fn-literal-arm (first fns) argv path)]
+               (vec (map-indexed (fn [i f] (shared-fn-literal-arm f argv (str path "a" i))) fns)))]
+    (when (every? identity arms)
+      (let [fixed-arms (filterv (complement :variadic?) arms)
+            rest-arm   (first (filter :variadic? arms))
+            body       (if (and (nil? rest-arm) (= 1 (count fixed-arms)))
+                         [(:ret (first fixed-arms))]
+                         (let [cases (mapv (fn [a] (gogen/case-clause [(gogen/int-lit (:fixed a))] [(:ret a)]))
+                                           fixed-arms)
+                               dflt  (gogen/case-clause nil [(if rest-arm
+                                                               (:ret rest-arm)
+                                                               (gogen/return-stmt [(vm-sel "NIL") (gogen/ident "nil")]))])]
+                           [(gogen/switch-stmt nil (gogen/call (gogen/ident "len") [argv]) (conj cases dflt))]))
+            dispatch   (gogen/func-lit
+                         [(gogen/param "ec" (gogen/type "*vm.ExecContext"))
+                          (gogen/param "argv" (gogen/type "[]vm.Value"))]
+                         [(gogen/result (gogen/type "vm.Value")) (gogen/result (gogen/type "error"))]
+                         body)
+            expr       (vm-call "NewCheckedCtxNativeFn"
+                                [(gogen/string-lit "")
+                                 (gogen/composite-lit (gogen/type "[]int")
+                                                      (mapv (fn [a] (gogen/int-lit (:fixed a))) fixed-arms))
+                                 (gogen/int-lit (if rest-arm (:fixed rest-arm) -1))
+                                 dispatch])
+            nm         (str "__fnlit_" *closure-owner* "__" path)]
+        (swap! *hoisted-consts* assoc nm {:src nil :expr expr :late? true})
+        (gogen/ident nm)))))
+
+(defn- template-arm-fns [template]
+  ;; The arms' Functions of a fn or multi-fn template, or nil for anything else.
+  (cond
+    (fn-template? template)       [(:fn template)]
+    (multi-fn-template? template) (mapv :fn (:fns template))
+    :else                         nil))
 
 (defn- boxed-closure-arm [f capture-exprs cid]
   ;; A literal arm as a Go func-lit boxed by rt.BoxNativeFn. A func-lit reads
@@ -1089,32 +1190,37 @@
                              [(gogen/call (gogen/field-sel (gogen/ident "rt") "BoxNativeFn") [inner*])])])
           capture-exprs)))))
 
+(defn- lower-closure-arm [f capture-exprs cid path]
+  ;; One literal arm: a closure struct when a top-level lowering is collecting
+  ;; decls and its signature is uniformly vm.Value; otherwise a Go func-lit
+  ;; boxed by rt.BoxNativeFn (boxed-closure-arm).
+  (binding [*closure-type-path* path]
+    (or (when (and *closure-decls* *closure-owner* (closure-uniform? f))
+          (when-let [ctor (lower-closure-struct f (count capture-exprs) cid path)]
+            (gogen/call (gogen/ident ctor) (into [(gogen/ident "ec")] capture-exprs))))
+        (boxed-closure-arm f capture-exprs cid))))
+
+(defn- lower-multi-closure [fns capture-exprs cid path]
+  ;; A capturing multi-arity literal: one closure per arm, combined at run time
+  ;; by rt.MakeNativeMultiArity.
+  (let [inners (vec (map-indexed (fn [i f] (lower-closure-arm f capture-exprs cid (str path "a" i)))
+                                 fns))]
+    (when (every? identity inners)
+      (gogen/call
+        (gogen/field-sel (gogen/ident "rt") "MakeNativeMultiArity")
+        [(gogen/composite-lit (gogen/type "[]vm.Value") inners)]))))
+
 (defn- lower-template-closure-expr [template capture-exprs cid]
-  ;; Each literal becomes a closure struct (lower-closure-struct) when a
-  ;; top-level lowering is collecting decls and its signature is uniformly
-  ;; vm.Value; otherwise a Go func-lit boxed by rt.BoxNativeFn
-  ;; (boxed-closure-arm). A multi-arity literal is one closure per arm,
-  ;; combined at run time by rt.MakeNativeMultiArity.
+  ;; A literal that closes over nothing is one shared object (shared-fn-literal)
+  ;; whenever a namespace lowering collects package-level vars; otherwise each
+  ;; arm lowers on its own (lower-closure-arm).
   (let [path (str *closure-type-path* (when *closure-type-path* "_") "c" cid)
-        one  (fn [f p]
-               (binding [*closure-type-path* p]
-                 (or (when (and *closure-decls* *closure-owner* (closure-uniform? f))
-                       (when-let [ctor (lower-closure-struct f (count capture-exprs) cid p)]
-                         (gogen/call (gogen/ident ctor) (into [(gogen/ident "ec")] capture-exprs))))
-                     (boxed-closure-arm f capture-exprs cid))))]
+        fns  (template-arm-fns template)]
     (cond
-      (fn-template? template)
-      (one (:fn template) path)
-
-      (multi-fn-template? template)
-      (let [inners (vec (map-indexed (fn [i entry] (one (:fn entry) (str path "a" i)))
-                                     (:fns template)))]
-        (when (every? identity inners)
-          (gogen/call
-            (gogen/field-sel (gogen/ident "rt") "MakeNativeMultiArity")
-            [(gogen/composite-lit (gogen/type "[]vm.Value") inners)])))
-
-      :else nil)))
+      (nil? fns) nil
+      (and (empty? capture-exprs) *hoisted-consts* *closure-owner*) (shared-fn-literal fns path)
+      (fn-template? template) (lower-closure-arm (first fns) capture-exprs cid path)
+      :else (lower-multi-closure fns capture-exprs cid path))))
 
 (defn- closure-value?
   "True when nid denotes a bare fn template: the template :const itself, or a
@@ -1446,13 +1552,13 @@
                       (recur (rest remaining)
                              (conj out (gogen/var-decl nm go-type nil))))))))))
 
-;; --- single-use computed edge-arg inlining ---------------------------------
-;; A recur/loop back-edge copies param<-arg. When the arg is a pure, single-use
-;; computed value (e.g. (inc i) / (+ s i)), its SSA temp is a pure indirection:
-;; `v15 = i + 1; i = v15`. We inline the expression into the copy (`i = i + 1`)
-;; and drop the temp's local + statement. The expression then READS its operand
-;; params, so the parallel-copy sequencer must order copies so an arg still
-;; reads the OLD value of any sibling target (`s = s + i` BEFORE `i = i + 1`).
+         ;; --- single-use computed edge-arg inlining ---------------------------------
+         ;; A recur/loop back-edge copies param<-arg. When the arg is a pure, single-use
+         ;; computed value (e.g. (inc i) / (+ s i)), its SSA temp is a pure indirection:
+         ;; `v15 = i + 1; i = v15`. We inline the expression into the copy (`i = i + 1`)
+         ;; and drop the temp's local + statement. The expression then READS its operand
+         ;; params, so the parallel-copy sequencer must order copies so an arg still
+         ;; reads the OLD value of any sibling target (`s = s + i` BEFORE `i = i + 1`).
 
 (declare arg-reads-target-names)
 
@@ -1561,15 +1667,15 @@
           #{}
           (ir/refs arg-nid f)))
 
-  ;; --- parallel-copy sequencing for block-arg edge transfers ------------------
-  ;; A branch-target's param<-arg copies execute simultaneously (parallel copy).
-  ;; A copy whose RHS is a bare param ref (loop swap `(recur b a)`) or an inlined
-  ;; computed expression (`s = s + i`) reads sibling targets; emitting it after
-  ;; one of those targets is written clobbers the read. We order copies so no
-  ;; destination is overwritten while a pending copy still reads it. Read/write
-  ;; cycles among BARE-IDENT copies break with a fresh `:=` temp; a cycle that
-  ;; would require redirecting a computed expression falls back (nil) to the goto
-  ;; emitter rather than risk a miscompile.
+         ;; --- parallel-copy sequencing for block-arg edge transfers ------------------
+         ;; A branch-target's param<-arg copies execute simultaneously (parallel copy).
+         ;; A copy whose RHS is a bare param ref (loop swap `(recur b a)`) or an inlined
+         ;; computed expression (`s = s + i`) reads sibling targets; emitting it after
+         ;; one of those targets is written clobbers the read. We order copies so no
+         ;; destination is overwritten while a pending copy still reads it. Read/write
+         ;; cycles among BARE-IDENT copies break with a fresh `:=` temp; a cycle that
+         ;; would require redirecting a computed expression falls back (nil) to the goto
+         ;; emitter rather than risk a miscompile.
 
 (defn- oos-next-tmp! [f]
   (let [n (or (:pc-tmp (deref f)) 0)]
@@ -2092,24 +2198,24 @@
     (= result-type "float64") (gogen/call (gogen/field-sel (gogen/ident "vm") "Float")   [result-expr])
     :else nil))
 
-;; Set to an atom per-fn by lower-body; the call lowerings that emit a `callErr`
-;; reference flip it true, so lower-body declares `var callErr error` ONLY when
-;; the body actually uses it. (function-needs-error? still drives the fn's error
-;; RESULT/return shape — a fn can return (vm.Value, error) yet reference no
-;; callErr, e.g. when its only call lowers to an error-free constructor,
-;; devirtualized method, or single-return lowered sibling.)
+         ;; Set to an atom per-fn by lower-body; the call lowerings that emit a `callErr`
+         ;; reference flip it true, so lower-body declares `var callErr error` ONLY when
+         ;; the body actually uses it. (function-needs-error? still drives the fn's error
+         ;; RESULT/return shape — a fn can return (vm.Value, error) yet reference no
+         ;; callErr, e.g. when its only call lowers to an error-free constructor,
+         ;; devirtualized method, or single-return lowered sibling.)
 (def ^:dynamic *call-err-used* nil)
 
 (defn- mark-call-err-used! []
   (when *call-err-used* (reset! *call-err-used* true)))
 
-;; Typed direct-call result/error temps (tr<nid>/te<nid>) must be FUNCTION-scoped
-;; `var` decls, not inline `:=`. The body is a goto-CFG; a `goto` that jumps over
-;; an in-scope `:=` declaration is illegal Go ("goto jumps over declaration").
-;; All other temps are pre-declared `var` at the top and assigned with `=`, so
-;; gotos over them are legal — the typed-call temps must do the same. emit-typed-
-;; direct-call registers each [name go-type] here; the prologue emits the decls.
-;; (Same pattern as *call-err-used*: collect during body build, emit in prologue.)
+         ;; Typed direct-call result/error temps (tr<nid>/te<nid>) must be FUNCTION-scoped
+         ;; `var` decls, not inline `:=`. The body is a goto-CFG; a `goto` that jumps over
+         ;; an in-scope `:=` declaration is illegal Go ("goto jumps over declaration").
+         ;; All other temps are pre-declared `var` at the top and assigned with `=`, so
+         ;; gotos over them are legal — the typed-call temps must do the same. emit-typed-
+         ;; direct-call registers each [name go-type] here; the prologue emits the decls.
+         ;; (Same pattern as *call-err-used*: collect during body build, emit in prologue.)
 (def ^:dynamic *typed-call-temps* nil)
 
 (defn- register-typed-call-temp! [name go-type]
@@ -2366,13 +2472,13 @@
         (swap! *native-imports-used* conj (:go-pkg entry)))
       stmts)))
 
-;; Bound true while lowering a fn body whose dynamic extent can rebind var
-;; roots (see ir.passes.mutability/rebinds-var-roots?). with-redefs /
-;; alter-var-root / intern mutate the root of an ordinary var at runtime, and
-;; the override is observed through the var — so a baked direct call
-;; (corefns.Count, a lowered sibling's Go func) would ignore it. Under this
-;; flag lookup-direct-candidate returns nil so every call falls back to the
-;; cached-var / InvokeValue trampoline, which re-reads the root each call.
+         ;; Bound true while lowering a fn body whose dynamic extent can rebind var
+         ;; roots (see ir.passes.mutability/rebinds-var-roots?). with-redefs /
+         ;; alter-var-root / intern mutate the root of an ordinary var at runtime, and
+         ;; the override is observed through the var — so a baked direct call
+         ;; (corefns.Count, a lowered sibling's Go func) would ignore it. Under this
+         ;; flag lookup-direct-candidate returns nil so every call falls back to the
+         ;; cached-var / InvokeValue trampoline, which re-reads the root each call.
 (def ^:dynamic *direct-calls-disabled?* false)
 
 (defn- lookup-direct-candidate
@@ -2412,10 +2518,10 @@
              (supported-coercion-type? (:result-spec entry)))
     entry))
 
-;; Deftype constructor registry: map {constructor-name -> exported struct name},
-;; e.g. {"->Square" "Square"}. Bound during the :go pass so a call (->Square 3)
-;; lowers to the native constructor _Square(...) (returning *Square) instead of
-;; rt.InvokeValue. Unbound => off.
+         ;; Deftype constructor registry: map {constructor-name -> exported struct name},
+         ;; e.g. {"->Square" "Square"}. Bound during the :go pass so a call (->Square 3)
+         ;; lowers to the native constructor _Square(...) (returning *Square) instead of
+         ;; rt.InvokeValue. Unbound => off.
 (def ^:dynamic *deftype-ctors* nil)
 
 (defn- ctor-call-stmts [f closed-exprs nid]
@@ -2441,10 +2547,10 @@
                                      (gogen/call (gogen/ident (str "_" sname)) arg-exprs))]
                       [])))))))))))
 
-;; Protocol-method registry: a set of method names (let-go names, e.g.
-;; #{"area"}) bound during the :go pass. A call (area recv) whose receiver is a
-;; known-concrete [:dtype T] devirtualizes to a direct Go method call
-;; recv.Area(), bypassing rt.InvokeValue / interface dispatch. Unbound => off.
+         ;; Protocol-method registry: a set of method names (let-go names, e.g.
+         ;; #{"area"}) bound during the :go pass. A call (area recv) whose receiver is a
+         ;; known-concrete [:dtype T] devirtualizes to a direct Go method call
+         ;; recv.Area(), bypassing rt.InvokeValue / interface dispatch. Unbound => off.
 (def ^:dynamic *protocol-methods* nil)
 
 ;; Per-protocol-method unified signature, computed once per namespace in
@@ -2503,6 +2609,18 @@
          (keyword? (ir/aux callee f))
          (or (= 1 arg-count) (= 2 arg-count)))))
 
+(defn- invoke-by-arity [recv method lead arg-exprs]
+  ;; recv.method(lead…, args). One to four arguments go as parameters
+  ;; (recv.method<N>, e.g. ec.Invoke2, rt.InvokeValueEC2): no slice is built
+  ;; at the site, matching the bytecode VM, which lends a callee a window of
+  ;; its operand stack. Zero arguments keep the empty slice literal, which Go
+  ;; does not allocate; wider calls keep the slice.
+  (let [n (count arg-exprs)]
+    (if (<= 1 n 4)
+      (gogen/call (gogen/field-sel recv (str method n)) (into lead arg-exprs))
+      (gogen/call (gogen/field-sel recv method)
+                  (conj lead (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs))))))
+
 (defn- trampoline-call-stmts
   "Emit the runtime-dispatch trampoline for a :call, assigning the result to
    `target`. This is the always-correct fallback path: a cross-ns cached-var
@@ -2525,15 +2643,7 @@
          ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
          base       (when nn (record-cross-ns-var! (first nn) (second nn)))
          arg-exprs  (or prepared-args
-                        (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))
-         args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)
-         ;; One to four arguments go as parameters (ec.InvokeN,
-         ;; rt.InvokeValueECN): no slice is built at the site, matching the
-         ;; bytecode VM, which lends a callee a window of its operand stack.
-         ;; Zero arguments keep the empty slice literal, which Go does not
-         ;; allocate; wider calls keep the slice.
-         n-args     (count arg-exprs)
-         typed?     (<= 1 n-args 4)]
+                        (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))]
      (when (every? identity arg-exprs)
        (if base
          ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
@@ -2551,22 +2661,13 @@
                ;; Dispatch through ec so the callee (and any dynamic vars it
                ;; reads, or goroutines it spawns) sees the running context:
                ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
-               invoke    (if typed?
-                           (gogen/call
-                             (gogen/field-sel (gogen/ident "ec") (str "Invoke" n-args))
-                             (into [cached-fn] arg-exprs))
-                           (gogen/call
-                             (gogen/field-sel (gogen/ident "ec") "Invoke")
-                             [cached-fn args-slice]))]
+               invoke    (invoke-by-arity (gogen/ident "ec") "Invoke" [cached-fn] arg-exprs)]
            (emit-call-stmts f target invoke))
          ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
          ;; which threads ec into the dynamic invocation path.
          (let [callee (box-as-value f closed-exprs (first refs))
-               invoke (if typed?
-                        (gogen/call (gogen/field-sel (gogen/ident "rt") (str "InvokeValueEC" n-args))
-                                    (into [(gogen/ident "ec") callee] arg-exprs))
-                        (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
-                                    [(gogen/ident "ec") callee args-slice]))]
+               invoke (invoke-by-arity (gogen/ident "rt") "InvokeValueEC"
+                                       [(gogen/ident "ec") callee] arg-exprs)]
            (when callee
              (if (keyword-callee-total? f refs)
                ;; Total keyword lookup: the error is always nil at arity
@@ -2574,16 +2675,16 @@
                [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
                (emit-call-stmts f target invoke)))))))))
 
-;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
-;; Shape: {multifn-name-str {:dispatch-type :type
-;;                           :dispatch-arg-index N
-;;                           :arms [{:go-case-type "vm.ArrayVector"
-;;                                   :go-fn-name "_mm_<gomulti>_0"
-;;                                   :param-count K} ...]}}
-;; Only entries whose dispatch fn is a recognized (fn [x] (type x)) shape AND
-;; that have >=1 method whose dispatch-val maps confidently to a Go type are
-;; present (as :type). Everything else stays on the runtime vm.MultiFn path —
-;; defmulti-call-stmts returns nil for it. Unbound => off.
+         ;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
+         ;; Shape: {multifn-name-str {:dispatch-type :type
+         ;;                           :dispatch-arg-index N
+         ;;                           :arms [{:go-case-type "vm.ArrayVector"
+         ;;                                   :go-fn-name "_mm_<gomulti>_0"
+         ;;                                   :param-count K} ...]}}
+         ;; Only entries whose dispatch fn is a recognized (fn [x] (type x)) shape AND
+         ;; that have >=1 method whose dispatch-val maps confidently to a Go type are
+         ;; present (as :type). Everything else stays on the runtime vm.MultiFn path —
+         ;; defmulti-call-stmts returns nil for it. Unbound => off.
 (def ^:dynamic *defmulti-dispatchers* nil)
 
 (defn- defmulti-call-stmts [f closed-exprs nid]
@@ -2830,10 +2931,10 @@
                (gogen/assign "=" target bodyV)])]
         [(gogen/block-stmt stmts)]))))
 
-;; Register :try's lower facet with the op catalog machinery. The body
-;; (try-assign-stmts) needs this namespace's emission helpers, so it stays
-;; here; ir.ops/TryOp delegates through this registration. The catalog's
-;; lower? column (pkg/ir/ir_ops.lg) routes :try to ops/lower-op.
+         ;; Register :try's lower facet with the op catalog machinery. The body
+         ;; (try-assign-stmts) needs this namespace's emission helpers, so it stays
+         ;; here; ir.ops/TryOp delegates through this registration. The catalog's
+         ;; lower? column (pkg/ir/ir_ops.lg) routes :try to ops/lower-op.
 (ops/register-lower-impl! :try try-assign-stmts)
 
 (defn- def-assign-stmts [f closed-exprs nid]
@@ -2998,21 +3099,21 @@
                   (let [sig (get *protocol-method-sigs* (go-export-name vname))]
                     (and sig (not (:needs-error? sig))))))))))
 
-;; Strictness gate: when true, a function whose CFG the structurizer cannot
-;; fully recover (structurize reports fallbacks > 0) is REFUSED rather than
-;; emitted through the goto+label path. The goto-CFG emitter is the accidental
-;; SSA-style drift away from the Indexed-RPN model — its out-of-form coalescing
-;; can alias two distinct, simultaneously-live opaque (vm.Value) locals onto one
-;; Go variable (see coalesce-map). Under strict mode we surface that drift loudly
-;; (throw, caller falls the whole fn back to bytecode) instead of silently
-;; emitting a mis-lowered goto body. Bound from the LG_STRICT_STRUCTURED env at
-;; the driver, or directly in tests. Default off: the non-strict path stays
-;; correct via the coalesce-map interference fix, this just forbids the path.
+         ;; Strictness gate: when true, a function whose CFG the structurizer cannot
+         ;; fully recover (structurize reports fallbacks > 0) is REFUSED rather than
+         ;; emitted through the goto+label path. The goto-CFG emitter is the accidental
+         ;; SSA-style drift away from the Indexed-RPN model — its out-of-form coalescing
+         ;; can alias two distinct, simultaneously-live opaque (vm.Value) locals onto one
+         ;; Go variable (see coalesce-map). Under strict mode we surface that drift loudly
+         ;; (throw, caller falls the whole fn back to bytecode) instead of silently
+         ;; emitting a mis-lowered goto body. Bound from the LG_STRICT_STRUCTURED env at
+         ;; the driver, or directly in tests. Default off: the non-strict path stays
+         ;; correct via the coalesce-map interference fix, this just forbids the path.
 (def ^:dynamic *strict-structured?*
   (boolean (System/getenv "LG_STRICT_STRUCTURED")))
 
-;; Public (was defn-): ir.passes.pipeline/protocol-method-sigs calls this to
-;; derive each impl body shape (force-needs-error? unbound) when joining sigs.
+         ;; Public (was defn-): ir.passes.pipeline/protocol-method-sigs calls this to
+         ;; derive each impl body shape (force-needs-error? unbound) when joining sigs.
 (defn function-needs-error? [f]
   (if *force-needs-error*
     true
@@ -3025,9 +3126,9 @@
               (ir/block-insts (first blocks) f)) true
         :else (recur (rest blocks))))))
 
-;; Public for AC-3 test gates: per-op verification of conditional cases.
-;; Tests call this directly on single instructions to verify var-conditional and
-;; function-template distinctions are preserved.
+         ;; Public for AC-3 test gates: per-op verification of conditional cases.
+         ;; Tests call this directly on single instructions to verify var-conditional and
+         ;; function-template distinctions are preserved.
 (defn op-contributes-rt? [nid f]
   "Whether an op at nid contributes to function-needs-rt?."
   (let [op   (ir/op nid f)
@@ -3051,7 +3152,7 @@
         (and (or (= op :inc) (= op :dec) (= op :bit-not))
              (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))))))
 
-;; Refactored to fold per-op contributions instead of scattered conditionals.
+         ;; Refactored to fold per-op contributions instead of scattered conditionals.
 (defn- function-needs-rt? [f]
   (let [local? (loop [blocks (ir/blocks f)]
                  (cond
@@ -3133,15 +3234,15 @@
                  (conj assigns
                        (gogen/assign "=" (gogen/ident sym) (gogen/ident arg-sym)))))))))
 
-  ;; --- out-of-SSA coalescing (block-oriented; phi-free) -----------------------
-  ;; The IR is block-parameter SSA, and the build pass propagates each source
-  ;; variable's name onto its block params. A variable's SSA versions are
-  ;; sequential (each def kills the prior), so they can share ONE mutable Go
-  ;; local: name every nid carrying source name S as `S`. The only unsafe case
-  ;; is shadowing — two distinct same-named bindings live at once — detected
-  ;; conservatively: a name is unsafe if a single inst references two DIFFERENT
-  ;; nids carrying it. Unsafe names stay versioned. No union-find, no dominance,
-  ;; no liveness engine.
+         ;; --- out-of-SSA coalescing (block-oriented; phi-free) -----------------------
+         ;; The IR is block-parameter SSA, and the build pass propagates each source
+         ;; variable's name onto its block params. A variable's SSA versions are
+         ;; sequential (each def kills the prior), so they can share ONE mutable Go
+         ;; local: name every nid carrying source name S as `S`. The only unsafe case
+         ;; is shadowing — two distinct same-named bindings live at once — detected
+         ;; conservatively: a name is unsafe if a single inst references two DIFFERENT
+         ;; nids carrying it. Unsafe names stay versioned. No union-find, no dominance,
+         ;; no liveness engine.
 
 (defn- oos-all-nids [f]
   (let [acc (atom [])
@@ -3349,9 +3450,9 @@
       (when (not (any-fn-template? aux))
         [aux]))))
 
-  ;; Lattice for constant-param analysis: :top (no info yet) ⊐ [const-value] ⊐ :bot
-  ;; (provably not a single constant). meet moves DOWN only, so the fixpoint is
-  ;; monotone and terminates.
+         ;; Lattice for constant-param analysis: :top (no info yet) ⊐ [const-value] ⊐ :bot
+         ;; (provably not a single constant). meet moves DOWN only, so the fixpoint is
+         ;; monotone and terminates.
 (defn- cp-const=
   ;; NaN-tolerant equality for lattice values (:top, :bot, or [const-value]).
   ;; Identical to = EXCEPT that two singleton [float-NaN] values are treated as
@@ -3434,14 +3535,14 @@
   (when-let [cp (:const-params (deref f))]
     (get cp nid)))
 
-  ;; ---------------------------------------------------------------------------
-  ;; Structured Go emission (ir.structurize tree-walk).
-  ;;
-  ;; build.lg emits only reducible CFGs, so lower-body can walk a recovered
-  ;; control tree and emit if / for / break / continue instead of goto+labels.
-  ;; These helpers feed lower-tree; lower-body tries the structured path first
-  ;; and falls back to the goto emitter when structurize reports any fallback.
-  ;; ---------------------------------------------------------------------------
+         ;; ---------------------------------------------------------------------------
+         ;; Structured Go emission (ir.structurize tree-walk).
+         ;;
+         ;; build.lg emits only reducible CFGs, so lower-body can walk a recovered
+         ;; control tree and emit if / for / break / continue instead of goto+labels.
+         ;; These helpers feed lower-tree; lower-body tries the structured path first
+         ;; and falls back to the goto emitter when structurize reports any fallback.
+         ;; ---------------------------------------------------------------------------
 
 (defn- return-stmts [f closed-exprs bid]
   "Lower the return terminator of a block to statement(s).
@@ -4048,19 +4149,19 @@
                  (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] params)
                  results body)})))
 
-;; Every top-level lowering collects the closure structs of its fn literals
-;; in a fresh *closure-decls*; lower-fn** attaches them to its result.
+         ;; Every top-level lowering collects the closure structs of its fn literals
+         ;; in a fresh *closure-decls*; lower-fn** attaches them to its result.
 (defn- lower-fn* [f mode]
   (binding [*closure-decls* (atom {:names #{} :decls []})
             *closure-type-path* nil]
     (lower-fn** f mode)))
 
-;; PascalCase munge tokens for the chars that aren't valid in a Go identifier,
-;; so a predicate/bang/etc. name exports as clean PascalCase (vector? ->
-;; VectorQmark, conj! -> ConjBang, map* -> MapStar) instead of an invalid Go
-;; identifier. Capitalized (no surrounding underscores) so they read as
-;; PascalCase word-parts. Distinct from go-name-munge-map (the _QMARK_-style
-;; unexported scheme) — this one is only for EXPORTED names.
+         ;; PascalCase munge tokens for the chars that aren't valid in a Go identifier,
+         ;; so a predicate/bang/etc. name exports as clean PascalCase (vector? ->
+         ;; VectorQmark, conj! -> ConjBang, map* -> MapStar) instead of an invalid Go
+         ;; identifier. Capitalized (no surrounding underscores) so they read as
+         ;; PascalCase word-parts. Distinct from go-name-munge-map (the _QMARK_-style
+         ;; unexported scheme) — this one is only for EXPORTED names.
 (def ^:private go-export-munge-map
   {\? "Qmark" \! "Bang" \* "Star" \+ "Plus" \> "Gt" \< "Lt" \= "Eq"
    \% "Pct" \& "Amp" \| "Bar" \: "Colon" \~ "Tilde" \^ "Caret"

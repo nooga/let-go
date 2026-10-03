@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 )
 
 // Opcodes
@@ -187,6 +189,58 @@ type CodeChunk struct {
 	length    int
 	sourceMap *SourceMap
 	localVars []LocalVar
+}
+
+// multiArityAt returns the multi-arity fn for a literal built from fns. When
+// every arm is a constant *Func the literal closes over nothing, so every
+// evaluation of it would build the same fn: it is built once and kept on its
+// first arm, and the literal is one object, as a capture-free single-arity
+// literal is one constant. Keeping it on the arm costs no allocation, so a
+// literal evaluated once (a top-level defn) pays nothing for the sharing. A
+// literal whose arms capture is made per evaluation.
+func (c *CodeChunk) multiArityAt(fns []Value) (*MultiArityFn, error) {
+	first, ok := fns[0].(*Func)
+	if !ok {
+		return MakeMultiArity(fns)
+	}
+	for _, f := range fns[1:] {
+		if _, ok := f.(*Func); !ok {
+			return MakeMultiArity(fns)
+		}
+	}
+	if p := atomic.LoadPointer(&first.multi); p != nil {
+		if ma := (*MultiArityFn)(p); ma.builtFrom(fns) {
+			return ma, nil
+		}
+	}
+	ma, err := MakeMultiArity(fns)
+	if err != nil {
+		return nil, err
+	}
+	atomic.StorePointer(&first.multi, unsafe.Pointer(ma))
+	return ma, nil
+}
+
+// builtFrom reports whether l holds exactly the arms fns.
+func (l *MultiArityFn) builtFrom(fns []Value) bool {
+	n := len(l.fns)
+	if l.rest != nil {
+		n++
+	}
+	if n != len(fns) {
+		return false
+	}
+	for _, v := range fns {
+		f := v.(*Func)
+		if f.isVariadric {
+			if l.rest != Fn(f) {
+				return false
+			}
+		} else if l.fns[f.arity] != Fn(f) {
+			return false
+		}
+	}
+	return true
 }
 
 func NewCodeChunk(consts *Consts) *CodeChunk {
@@ -1391,7 +1445,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			}
 			f.sp -= n
 
-			fn, err := MakeMultiArity(fns)
+			fn, err := f.code.multiArityAt(fns)
 			if err != nil {
 				return NIL, execWrap("MAKE_MULTI_ARITY failed", err)
 			}
