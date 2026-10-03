@@ -208,6 +208,18 @@ jobs:
             echo "net/http linked into an lg_no_http build" >&2
             exit 1
           fi
+      # Same guard for lg_no_json, which drops the json and transit
+      # namespaces so encoding/json's reflection codec is not linked.
+      - name: Build runtime-only without encoding/json
+        run: go build -tags lg_no_json -o /tmp/lg-ro-nojson ./cmd/lg-runtime
+      - name: Boot it
+        run: /tmp/lg-ro-nojson -v
+      - name: Assert encoding/json did not link
+        run: |
+          if go tool nm /tmp/lg-ro-nojson | grep -q 'encoding/json'; then
+            echo "encoding/json linked into an lg_no_json build" >&2
+            exit 1
+          fi
 
   # Cross-build-and-run guard for the TinyGo WASI target. TinyGo does not
   # implement reflect.Type.Method / reflect.Value.Call, so let-go's boxing path
