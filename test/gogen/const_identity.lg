@@ -1,0 +1,75 @@
+;; Native-lowering trampoline fixture: a constant collection literal is one
+;; shared value, as Clojure compiles it.
+;;
+;; A vector, map or set literal whose elements are all constants evaluates to
+;; the same object every time, on the bytecode VM and in lowered Go alike; a
+;; literal with a non-constant element, or carrying metadata, is a fresh
+;; collection each time. Sharing must be unobservable otherwise: conj, assoc,
+;; with-meta and transients on the shared value leave it intact, a map
+;; literal keeps its insertion order, and metadata still arrives. The
+;; trampoline compares (run) under the lowered Go against the bytecode VM.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.const-identity)
+
+(defn mk-vec [] [1 2 3])
+(defn mk-map [] {:b 1 :a 2 :c 3})
+(defn mk-set [] #{:a :b})
+(defn mk-nested [] [1 {:k [2 #{3}]}])
+(defn mk-empty [] [])
+(defn mk-fresh [x] [x 1])
+(defn mk-nested-fresh [x] [1 {:k x}])
+(defn mk-meta [] ^{:t 1} [1 2])
+(defn mk-quoted [] '(1 2))
+(defn mk-scalars [] [\a 1N 1/2 1.5M #uuid "00000000-0000-0000-0000-000000000001"])
+(defn mk-regex [] [#"x"])
+(defn mk-regex-other [] [#"x"])
+(defn mk-big-map [] {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9 :j 10})
+(defn mk-big-vec [] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
+                     20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39])
+(defn ab [] {:a 1 :b 2})
+(defn ba [] {:b 2 :a 1})
+(defn two-sites [] (identical? [1 2] [1 2]))
+(defn mk-quoted-regex [] '(#"x"))
+(defn mk-quoted-regex-other [] '(#"x"))
+
+(defn run []
+  [(identical? (mk-vec) (mk-vec))
+   (identical? (mk-map) (mk-map))
+   (identical? (mk-set) (mk-set))
+   (identical? (mk-nested) (mk-nested))
+   (identical? (mk-empty) (mk-empty))
+   (identical? (mk-fresh 1) (mk-fresh 1))
+   (identical? (mk-nested-fresh 1) (mk-nested-fresh 1))
+   (identical? (mk-meta) (mk-meta))
+   (identical? (mk-quoted) (mk-quoted))
+   (meta (mk-meta))
+   (do (conj (mk-vec) 4) (assoc (mk-vec) 0 9) (with-meta (mk-vec) {:x 1})
+       (persistent! (conj! (transient (mk-vec)) 5))
+       (mk-vec))
+   (do (assoc (mk-map) :z 9) (dissoc (mk-map) :a)
+       (persistent! (assoc! (transient (mk-map)) :q 1))
+       (seq (mk-map)))
+   (do (conj (mk-set) :c) (disj (mk-set) :a) (mk-set))
+   (do (conj (mk-empty) 1) (mk-empty))
+   (meta (mk-vec))
+   (= (mk-vec) [1 2 3])
+   (type (mk-vec))
+   (type (mk-map))
+   (type (mk-set))
+   (type (mk-empty))
+   (identical? (mk-scalars) (mk-scalars))
+   (identical? (mk-regex) (mk-regex))
+   (= (mk-regex) (mk-regex-other))
+   (= (mk-quoted-regex) (mk-quoted-regex-other))
+   (identical? (first (mk-quoted-regex)) (first (mk-quoted-regex-other)))
+   (identical? (mk-big-map) (mk-big-map))
+   (seq (mk-big-map))
+   (identical? (mk-big-vec) (mk-big-vec))
+   (count (conj (mk-big-vec) 40))
+   (count (mk-big-vec))
+   (keys (ab))
+   (keys (ba))
+   (two-sites)])

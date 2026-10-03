@@ -1,0 +1,21 @@
+;; Each collection literal is its own constant on the bytecode paths: a map
+;; literal keeps its own key order even beside an equal literal written in
+;; another order, two literal sites are two values, and one site stays one
+;; value. Checked with the default compiler and with *ir-compile*.
+(ns test.constant-literal-order-test
+  (:require
+   [test :refer :all]))
+
+(def ^:private program
+  '(do
+     (defn ab [] {:a 1 :b 2})
+     (defn ba [] {:b 2 :a 1})
+     [(vec (keys (ab))) (vec (keys (ba))) (identical? [1 2] [1 2]) (identical? (ab) (ab))]))
+
+(deftest map-literals-keep-their-own-key-order
+  (is (= [[:a :b] [:b :a] false true] (eval program))))
+
+(deftest map-literals-keep-their-own-key-order-under-ir-compile
+  (require 'ir.passes.pipeline)
+  (is (= [[:a :b] [:b :a] false true]
+         (binding [*ir-compile* true] (eval program)))))

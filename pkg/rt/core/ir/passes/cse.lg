@@ -53,7 +53,13 @@
   ;; is safe even if the call is speculative (it will execute iff before).
   ;; Trapping calls (nth/quot) are CSE-eligible per pure-ops membership,
   ;; matching the existing behavior.
-  (or (contains? purity/pure-ops op)
+  ;;
+  ;; A :const holding a collection is not merged: each collection literal is
+  ;; its own value, as the bytecode constant pool keeps it (by identity), so
+  ;; two equal literals stay two objects, and merging two references to
+  ;; constants saves nothing.
+  (or (and (contains? purity/pure-ops op)
+           (not (and (= op :const) (coll? (ir/aux nid f)))))
       (and (= op :load-var)
            (mut/stable-load-var? var-facts (ir/aux nid f)))
       (and (= op :call)
