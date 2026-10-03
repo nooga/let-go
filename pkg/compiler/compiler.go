@@ -565,6 +565,24 @@ func (c *Context) compileError(msg string) *CompileError {
 	return NewCompileError(msg)
 }
 
+// maxFormSeqLen bounds how many elements compileForm realizes from a non-list
+// seq. Lazy sequences have no cheap finiteness test, so this is the backstop
+// for the ones isUnboundedSeq cannot recognize, such as a cycle.
+const maxFormSeqLen = 1 << 20
+
+// isUnboundedSeq reports whether o is a seq known to never end: iterate, a
+// zero-argument range, or a one-argument repeat. Realizing one of these in
+// compileForm would never return.
+func isUnboundedSeq(o vm.Value) bool {
+	switch v := o.(type) {
+	case *vm.Iterate, *vm.InfiniteRange:
+		return true
+	case *vm.Repeat:
+		return v.RawCount() < 0
+	}
+	return false
+}
+
 func (c *Context) compileForm(o vm.Value) error {
 	// Track current form for error reporting
 	prevForm := c.currentForm
@@ -576,7 +594,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.chunk.AddSourceInfo(*info)
 	}
 	switch o.Type() {
-	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType:
+	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType, vm.TypeType:
 		n := c.constant(o)
 		c.emitWithArg(vm.OP_LOAD_CONST, n)
 		c.incSP(1)
@@ -654,13 +672,20 @@ func (c *Context) compileForm(o vm.Value) error {
 			return err
 		}
 		c.tailPosition = tp
-	case vm.MapType:
+	case vm.MapType, vm.SortedMapType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
+		ctor := "array-map"
+		if sm, ok := o.(*vm.SortedMap); ok {
+			if !sm.UsesDefaultComparator() {
+				return c.compileError("can't compile a sorted map with a custom comparator as a form: no literal can carry the comparator")
+			}
+			ctor = "sorted-map"
+		}
 		err := c.compileAggregateWithMeta(o, func() error {
-			arrayMap := c.constant(rt.CoreNS.Lookup("array-map"))
-			c.emitWithArg(vm.OP_LOAD_CONST, arrayMap)
+			mapCtor := c.constant(rt.CoreNS.Lookup(vm.Symbol(ctor)))
+			c.emitWithArg(vm.OP_LOAD_CONST, mapCtor)
 			c.incSP(1)
 
 			// Get entries via Seq for both Map and PersistentMap
@@ -694,13 +719,20 @@ func (c *Context) compileForm(o vm.Value) error {
 			return err
 		}
 		c.tailPosition = tp
-	case vm.SetType:
+	case vm.SetType, vm.SortedSetType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
+		ctor := "hash-set"
+		if ss, ok := o.(*vm.SortedSet); ok {
+			if !ss.UsesDefaultComparator() {
+				return c.compileError("can't compile a sorted set with a custom comparator as a form: no literal can carry the comparator")
+			}
+			ctor = "sorted-set"
+		}
 		err := c.compileAggregateWithMeta(o, func() error {
-			hashSet := c.constant(rt.CoreNS.Lookup("hash-set"))
-			c.emitWithArg(vm.OP_LOAD_CONST, hashSet)
+			setCtor := c.constant(rt.CoreNS.Lookup(vm.Symbol(ctor)))
+			c.emitWithArg(vm.OP_LOAD_CONST, setCtor)
 			c.incSP(1)
 
 			count := 0
@@ -721,7 +753,7 @@ func (c *Context) compileForm(o vm.Value) error {
 			return err
 		}
 		c.tailPosition = tp
-	case vm.ListType:
+	case vm.ListType, vm.SequenceType, vm.RangeType, vm.RepeatType, vm.IterateType:
 		prevList := c.currentList
 		c.currentList = o
 		defer func() { c.currentList = prevList }()
@@ -733,8 +765,14 @@ func (c *Context) compileForm(o vm.Value) error {
 		lst, isList := o.(*vm.List)
 		if !isList {
 			if seq, ok := o.(vm.Seq); ok {
+				if isUnboundedSeq(o) {
+					return c.compileError("can't compile an unbounded sequence as a form")
+				}
 				var vals []vm.Value
 				for s := seq; s != nil; s = s.Next() {
+					if len(vals) >= maxFormSeqLen {
+						return c.compileError(fmt.Sprintf("can't compile a sequence of more than %d elements as a form; is it unbounded?", maxFormSeqLen))
+					}
 					vals = append(vals, s.First())
 				}
 				realized, _ := vm.ListType.Box(vals)
