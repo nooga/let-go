@@ -12,6 +12,8 @@
   (testing "files, -o and -work"
     (is (= {:files ["a.lg" "b.lg"] :out "bin/a" :work-dir "w"}
            (cmd/parse-args ["-o" "bin/a" "a.lg" "-work" "w" "b.lg"]))))
+  (testing "-module"
+    (is (= {:files ["a.lg"] :module-dir "m"} (cmd/parse-args ["-module" "m" "a.lg"]))))
   (testing "-- ends flag parsing"
     (is (= {:files ["-odd.lg"]} (cmd/parse-args ["--" "-odd.lg"]))))
   (testing "help"
@@ -20,7 +22,8 @@
   (testing "usage errors"
     (is (:error (cmd/parse-args [])))
     (is (:error (cmd/parse-args ["-o"])))
-    (is (:error (cmd/parse-args ["-x" "a.lg"])))))
+    (is (:error (cmd/parse-args ["-x" "a.lg"])))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"]))))))
 
 (defn- scratch-dir [tag]
   (let [d (str (os/temp-dir) "/lg-compile-test-" tag "-" (rand-int 1000000000))]
@@ -33,6 +36,10 @@
   {:compile-lgb     (fn [src dst entry] (swap! calls conj [:compile-lgb entry]))
    :scaffold-module (fn [dir module] (swap! calls conj [:scaffold-module module]))
    :go-build        (fn [dir out] (swap! calls conj [:go-build out]))
+   :go-build-readonly (fn [dir out] (swap! calls conj [:go-build-readonly out]))
+   :open-module     (fn [module-dir]
+                      (swap! calls conj [:open-module module-dir])
+                      {:dir (scratch-dir "gen") :import-path "example.com/host/lgprogram"})
    :make-temp-dir   (fn [] (swap! calls conj [:make-temp-dir]) (scratch-dir "tmp"))
    :remove-dir      (fn [dir] (swap! calls conj [:remove-dir]) (syscall/rm-rf dir))})
 
@@ -77,4 +84,16 @@
     (testing "a caller-supplied work dir is neither created nor removed"
       (is (not-any? (fn [c] (contains? #{:make-temp-dir :remove-dir} (first c))) @calls)))
     (syscall/rm-rf work)
+    (remove-fixture path)))
+
+(deftest build-program-in-caller-module
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.mod)\n(defn -main [] (println 1))\n")
+        res   (lg.compiler/build-program [path] "out" nil "host-mod" (recording-host calls))]
+    (testing "builds read-only in the opened module, with no scaffold or temp dir"
+      (is (nil? (:error res)))
+      (is (= [[:open-module "host-mod"]
+              [:compile-lgb "lgc.mod/-main"]
+              [:go-build-readonly "out"]]
+             @calls)))
     (remove-fixture path)))

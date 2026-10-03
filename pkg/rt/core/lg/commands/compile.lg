@@ -14,29 +14,37 @@
    [lg.compiler]))
 
 (def usage
-  (str "usage: lg compile [-o <out>] [-work <dir>] <file.lg>...\n"
+  (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir>] <file.lg>...\n"
        "\n"
        "Compiles a let-go program to a standalone native binary through the Go\n"
        "backend. One input must define -main or main. Needs a Go toolchain.\n"
        "\n"
        "  -o <out>      output path (default: the entry file's name, no .lg)\n"
-       "  -work <dir>   build the generated Go module in <dir> and keep it\n"))
+       "  -work <dir>   build the generated Go module in <dir> and keep it\n"
+       "  -module <dir> build inside the Go module at <dir>, whose go.mod and\n"
+       "                go.sum are used as they are; lg writes only <dir>/lgprogram\n"))
+
+(def ^:private flag-keys
+  {"-o" :out "-work" :work-dir "-module" :module-dir})
 
 (defn parse-args
-  "argv → {:files [..] :out s :work-dir s}, {:help true}, or {:error msg}."
+  "argv → {:files [..] :out s :work-dir s :module-dir s}, {:help true}, or
+   {:error msg}."
   [argv]
   (loop [args (seq argv) opts {:files []}]
     (if-not args
-      (if (empty? (:files opts))
-        {:error "lg compile: no input files"}
-        opts)
+      (cond
+        (empty? (:files opts)) {:error "lg compile: no input files"}
+        (and (:work-dir opts) (:module-dir opts))
+        {:error "lg compile: -work and -module are exclusive"}
+        :else opts)
       (let [a (first args)]
         (cond
           (contains? #{"-h" "-help" "--help"} a) {:help true}
           (= "--" a) (assoc opts :files (into (:files opts) (rest args)))
-          (contains? #{"-o" "-work"} a)
+          (contains? flag-keys a)
           (if-let [v (second args)]
-            (recur (nnext args) (assoc opts (if (= "-o" a) :out :work-dir) v))
+            (recur (nnext args) (assoc opts (get flag-keys a) v))
             {:error (str "lg compile: " a " needs a value")})
           (clojure.string/starts-with? a "-")
           {:error (str "lg compile: unknown flag " a)}
@@ -58,7 +66,8 @@
                         2)
       :else
       (let [res (try
-                  (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts) host)
+                  (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
+                                             (:module-dir opts) host)
                   (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
         (if (:error res)
           (do (err-println (:error res)) 1)

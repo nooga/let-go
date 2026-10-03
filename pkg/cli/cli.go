@@ -389,6 +389,7 @@ var wasmOutput string
 var wasmShell string
 var wasmPayload string
 var wasmHostEval bool
+var wasmModule string
 var storageID string
 var stripDebug bool
 var debugOutput string
@@ -426,6 +427,7 @@ func registerFlags() {
 	flag.StringVar(&wasmShell, "w-shell", "xterm", "shell for -w: 'xterm' (default), 'none' (emit core only; client supplies its own shell via window.LetGoHost), or a path to a custom HTML template containing __LG_HOST_JS_BODY_PLACEHOLDER__")
 	flag.StringVar(&wasmPayload, "w-wasm", "inline", "wasm delivery for -w: 'inline' (default; gzip-base64 baked into index.html) or 'external' (emit a separate main.wasm the loader fetches + streams)")
 	flag.BoolVar(&wasmHostEval, "w-host-eval", false, "for -w: expose LetGoHost.eval(code) to call into the loaded image and keep it live (park after the program's main returns); works in both boot modes. Pair with -w-shell none")
+	flag.StringVar(&wasmModule, "w-module", "", "for -w: build inside the Go module at this directory, whose go.mod and go.sum are used as they are (built -mod=readonly); lg writes only <dir>/lgprogram, and refuses that directory unless it carries lg's marker")
 	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script name, or current directory for main.lg)")
 	flag.StringVar(&sourcePaths, "source-paths", "",
 		"namespace search paths separated by the OS path-list separator "+
@@ -679,7 +681,7 @@ func runMain() int {
 			fmt.Fprintf(os.Stderr, "error: -w-wasm must be 'inline' or 'external', got %q\n", wasmPayload)
 			return 1
 		}
-		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, storageIDForScript(files[0]), customShellTemplate); err != nil {
+		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, storageIDForScript(files[0]), customShellTemplate, wasmModule); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
