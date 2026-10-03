@@ -123,6 +123,9 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 	if err := runChunk(unit.MainChunk); err != nil {
 		return nil, fmt.Errorf("run core chunk: %w", err)
 	}
+	// Every replayed namespace takes back the Go overrides its lowered
+	// package registered, which the replay's defs just replaced.
+	ApplyGoOverrides(LookupNS(NameCoreNS))
 	if opts.OnPhase != nil {
 		opts.OnPhase("run-core-chunk", tCore)
 	}
@@ -139,6 +142,7 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 			if err := runChunk(ch); err != nil {
 				return nil, fmt.Errorf("run baseline %s: %w", name, err)
 			}
+			ApplyGoOverrides(LookupNS(name))
 		}
 	}
 
@@ -166,6 +170,7 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 			}
 			ClearNSNeedsLoad(name)
 			ReapplyGeneratedPrimitives(name)
+			ApplyGoOverrides(LookupNS(name))
 		}
 	}
 

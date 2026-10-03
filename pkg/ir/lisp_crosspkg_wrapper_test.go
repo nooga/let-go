@@ -63,7 +63,7 @@ func TestCrossPackageDirectCallEmitted(t *testing.T) {
 	if !strings.Contains(src, "aaa.Pick(ec,") {
 		t.Fatalf("expected cross-package direct call `aaa.Pick(ec, …)` using public fn's own name\n--- go ---\n%s", src)
 	}
-	if strings.Contains(src, "CachedVarFn(&__v_aaa_pick") {
+	if strings.Contains(src, "CachedVarFnEC(ec, &__v_aaa_pick") {
 		t.Fatalf("cross-package call must NOT trampoline\n--- go ---\n%s", src)
 	}
 }

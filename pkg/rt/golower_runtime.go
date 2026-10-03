@@ -134,26 +134,34 @@ func LookupVar(nsName, symName string) *vm.Var {
 	return out
 }
 
-// CachedVarFn lazily resolves a cross-namespace Var ONCE — memoizing it through
-// the caller-supplied package-level pointer — then returns that var's CURRENT
-// fn root for invocation. The lowered Go calls it as
+// CachedVarFn is CachedVarFnEC in the root execution context, for callers
+// that hold no ExecContext.
+func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
+	return CachedVarFnEC(nil, ptr, nsName, symName)
+}
+
+// CachedVarFnEC lazily resolves a cross-namespace Var ONCE — memoizing it
+// through the caller-supplied package-level pointer — then returns the var's
+// CURRENT fn as ec sees it. The lowered Go calls it as
 //
-//	rt.CachedVarFn(&__v_ns_name, "ns", "name").Invoke(args)
+//	ec.Invoke(rt.CachedVarFnEC(ec, &__v_ns_name, "ns", "name"), args)
 //
-// The *Var (not the fn) is what's cached, and its root is re-read on every call,
-// so the var stays the override seam (^:dynamic / ^:redef / alter-var-root still
-// work). Resolution is lazy (first call), not at package init(): blank-imported
+// The *Var (not the fn) is what's cached, and it is dereferenced through ec on
+// every call, so the var stays the override seam: alter-var-root and ^:redef
+// replace its root, and a ^:dynamic binding in ec — including one made on
+// another goroutine's context, as inside a future — selects the callee.
+// Resolution is lazy (first call), not at package init(): blank-imported
 // lowered packages run init() before the bundle replay loads namespaces, where
 // LookupVar would return nil. The .(vm.Fn) assertion matches the trampoline's
 // contract — every callable vm value implements vm.Fn.
-func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
+func CachedVarFnEC(ec *vm.ExecContext, ptr **vm.Var, nsName, symName string) vm.Fn {
 	if *ptr == nil {
 		*ptr = LookupVar(nsName, symName)
 		if *ptr == nil {
 			return failingFn(vm.NewExecutionError(fmt.Sprintf("Unable to resolve var: %s/%s", nsName, symName)))
 		}
 	}
-	val := (*ptr).Deref()
+	val := ec.Deref(*ptr)
 	if f, ok := val.(vm.Fn); ok {
 		return f
 	}

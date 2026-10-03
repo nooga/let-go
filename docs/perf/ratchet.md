@@ -69,7 +69,7 @@ mutate shared runtime state and are too noisy for a blocking timing bar.
 > natively-lowered IR passes (the dispatch is guarded by
 > `TestIRBenchDispatchesNativeUnderTag`). The lowered Go reaches a
 > cross-namespace or `clojure.core` callee through a cached var
-> (`rt.CachedVarFn`) and passes one to four arguments as parameters, so a
+> (`rt.CachedVarFnEC`) and passes one to four arguments as parameters, so a
 > call builds no argument slice. A call of five or more arguments still
 > builds one, and is the remaining per-call allocation in lowered calls.
 

@@ -168,7 +168,7 @@ func TestWithRedefsNativeDirectStaysGuarded(t *testing.T) {
 	}
 	// And the call must still happen — through the var-mediated cached-var
 	// trampoline, which re-reads count's root each call so the redef is seen.
-	if !strings.Contains(rendered, `rt.CachedVarFn(&__v_clojure_core_count, "clojure.core", "count")`) {
+	if !strings.Contains(rendered, `rt.CachedVarFnEC(ec, &__v_clojure_core_count, "clojure.core", "count")`) {
 		t.Fatalf("expected count to fall back to the cached-var trampoline:\n--- go ---\n%s", rendered)
 	}
 }
@@ -190,7 +190,7 @@ func TestWithRedefsDisablesListIntrinsic(t *testing.T) {
 	if strings.Contains(rendered, "vm.EmptyList.Cons(") {
 		t.Fatalf("with-redefs over list must disable the list intrinsic; found baked vm.EmptyList.Cons(...):\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, `rt.CachedVarFn(&__v_clojure_core_list, "clojure.core", "list")`) {
+	if !strings.Contains(rendered, `rt.CachedVarFnEC(ec, &__v_clojure_core_list, "clojure.core", "list")`) {
 		t.Fatalf("expected list to fall back to the cached-var trampoline:\n--- go ---\n%s", rendered)
 	}
 }

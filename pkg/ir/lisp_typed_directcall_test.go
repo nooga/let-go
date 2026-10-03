@@ -60,7 +60,7 @@ func TestLowerNsInlinesTypedSibling(t *testing.T) {
 	if strings.Contains(callerBody, "Callee(") {
 		t.Fatalf("Caller still calls Callee — it did not inline:\n%s", callerBody)
 	}
-	if regexp.MustCompile(`InvokeValue\([^\n]*"callee"|CachedVarFn\([^\n]*"callee"`).MatchString(src) {
+	if regexp.MustCompile(`InvokeValue\([^\n]*"callee"|CachedVarFn(EC)?\([^\n]*"callee"`).MatchString(src) {
 		t.Fatalf("caller must NOT trampoline to callee after inlining:\n%s", src)
 	}
 	// Both fns return bool, so both register a boxed override (#554). Before
