@@ -7,6 +7,8 @@ package compiler
 
 import (
 	"testing"
+
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 // unfinishedSources each end inside an open form after zero or more
@@ -54,9 +56,34 @@ func TestCompileMultipleAcceptsCleanEOF(t *testing.T) {
 		"(+ 1 2) ;; done",
 		"#!/usr/bin/env lg\n(+ 1 2)",
 		"#!/usr/bin/env lg",
+		"+",
+		"-",
 	} {
 		if _, err := Eval(src); err != nil {
 			t.Errorf("Eval(%q): %v", src, err)
+		}
+	}
+}
+
+// The reader looks past a leading + or - for a digit. At end of input the
+// sign is a complete symbol, not an unfinished form.
+func TestSignSymbolAtEOF(t *testing.T) {
+	for _, src := range []string{"42 #_ +", "42 #_ -"} {
+		v, err := Eval(src)
+		if err != nil {
+			t.Fatalf("Eval(%q): %v", src, err)
+		}
+		if n, ok := v.(vm.Int); !ok || int(n) != 42 {
+			t.Fatalf("Eval(%q) = %v, want 42", src, v)
+		}
+	}
+	for _, src := range []string{"+", "-"} {
+		v, err := ReadDataString(src)
+		if err != nil {
+			t.Fatalf("ReadDataString(%q): %v", src, err)
+		}
+		if v != vm.Symbol(src) {
+			t.Fatalf("ReadDataString(%q) = %v, want the symbol %s", src, v, src)
 		}
 	}
 }
@@ -68,11 +95,19 @@ func TestSplitTopLevelFormsRejectsUnfinishedForm(t *testing.T) {
 			t.Errorf("SplitTopLevelForms(%q) = %d forms, want a syntax error", src, len(forms))
 		}
 	}
-	forms, err := SplitTopLevelForms("(+ 1 2) ;; done\n[3]  ", "<test>")
-	if err != nil {
-		t.Fatalf("SplitTopLevelForms: %v", err)
-	}
-	if len(forms) != 2 {
-		t.Fatalf("SplitTopLevelForms = %d forms, want 2", len(forms))
+	for src, want := range map[string]int{
+		"(+ 1 2) ;; done\n[3]  ": 2,
+		"42 #_ +":                1,
+		"42 #_ -":                1,
+		"42 +":                   2,
+	} {
+		forms, err := SplitTopLevelForms(src, "<test>")
+		if err != nil {
+			t.Errorf("SplitTopLevelForms(%q): %v", src, err)
+			continue
+		}
+		if len(forms) != want {
+			t.Errorf("SplitTopLevelForms(%q) = %d forms, want %d", src, len(forms), want)
+		}
 	}
 }

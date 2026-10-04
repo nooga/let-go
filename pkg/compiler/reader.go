@@ -273,6 +273,10 @@ func (r *LispReader) Read() (vm.Value, error) {
 	}
 	if ch == '+' || ch == '-' {
 		ch2, err := r.next()
+		if err == io.EOF {
+			// A sign at end of input is the complete symbol + or -.
+			return interpretToken(r, vm.Symbol(string(ch)))
+		}
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
