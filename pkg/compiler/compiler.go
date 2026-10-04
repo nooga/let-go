@@ -297,11 +297,20 @@ func (c *Context) compileMultiple(reader io.Reader, entry *entryFrameCall) (comp
 	}
 	sawVoid := false
 	for {
-		o, err := r.Read()
-		if err != nil {
+		// EOF while skipping whitespace is the clean end of input. Read wraps
+		// an EOF inside an unfinished form in a syntax error that also
+		// satisfies isErrorEOF, so only this check may end the loop.
+		if _, err := r.eatWhitespace(); err != nil {
 			if isErrorEOF(err) {
 				break
 			}
+			return nil, result, err
+		}
+		if err := r.unread(); err != nil {
+			return nil, result, err
+		}
+		o, err := r.Read()
+		if err != nil {
 			return nil, result, err
 		}
 		// Comments, #_ discards, and empty reader conditionals read as the
