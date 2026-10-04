@@ -27,6 +27,15 @@ lg scripts/lint.lg --gate K1[,K2...]    # exit non-zero if a named rule fires
 lg scripts/lint.lg --churn HEAD~5..HEAD # added comments vs added code, for a range
 ```
 
+Before opening a PR, run it over only the files the branch changes. The default
+paths already carry findings, and a whole-tree run buries the ones the branch
+added among them:
+
+```sh
+lg scripts/lint.lg --churn origin/main..HEAD \
+  $(git diff --name-only --diff-filter=d origin/main...HEAD -- '*.go' '*.lg')
+```
+
 Report-only by default: findings do not affect the exit status, so a run that
 finds things still exits 0. `make lint` runs it alongside golangci-lint, and
 `make lint-comments` runs it alone; it is in neither CI nor the git hooks, so
