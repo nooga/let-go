@@ -248,7 +248,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		debugData, debugPath = companion, path
 	}
 
-	// 2. Create temp build directory. With a caller-supplied module (#998)
+	// 2. Create temp build directory. With a caller-supplied module
 	// the sources go into the directory let-go owns there instead, and the
 	// temp directory holds only the build's cache and scratch.
 	tmpDir, err := os.MkdirTemp("", "lg-wasm-*")

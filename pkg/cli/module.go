@@ -16,7 +16,7 @@ import (
 	"github.com/nooga/let-go/pkg/gomod"
 )
 
-// A caller-supplied module (#998) lets -w and `lg compile` build inside a Go
+// A caller-supplied module lets -w and `lg compile` build inside a Go
 // module whose go.mod the caller controls, so it can require packages beyond
 // let-go. let-go owns one directory inside it and never edits go.mod or go.sum.
 

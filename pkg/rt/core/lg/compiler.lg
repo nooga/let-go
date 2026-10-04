@@ -195,7 +195,7 @@
 (defn compile-program
   "Lower `files` to Go packages under `out-dir` with Go import prefix
    `import-prefix`. When entry-frame? is true and a recognized program entry is
-   present, also emit the #425 native-entry frame.
+   present, also emit the native-entry frame.
 
    Returns {:emit-fails n :lowered-funcs n :entry <entry-or-nil>
             :entry-path <path-or-nil> :error <msg>}
@@ -303,7 +303,7 @@
 
    `work-dir`, when given, holds the generated module and is kept; otherwise a
    temporary directory is used and removed. `module-dir`, when given, names a
-   Go module the caller prepared (#998) and replaces work-dir: the program is
+   Go module the caller prepared and replaces work-dir: the program is
    generated into the directory :open-module hands back, lowered packages
    import each other under its import path, and the caller's go.mod and go.sum
    are used as they are. Returns compile-program's result plus :out, or a map

@@ -17,14 +17,14 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// compileCommand is the argv[1] that selects `lg compile` (#596). Only an
+// compileCommand is the argv[1] that selects `lg compile`. Only an
 // exact first argument dispatches, so every existing invocation — a script
 // path, -e, flags, bare lg for the REPL — reaches the flag parser unchanged.
 // A script literally named "compile" now needs a path prefix: lg ./compile.
 const compileCommand = "compile"
 
 // runCompile runs `lg compile`. Argument parsing, orchestration, and
-// diagnostics are let-go code (lg.commands.compile over lg.compiler, #786);
+// diagnostics are let-go code (lg.commands.compile over lg.compiler);
 // this side boots the runtime and supplies the steps that need this binary or
 // the Go toolchain, as the host map lg.compiler/build-program documents.
 func runCompile(args []string) int {

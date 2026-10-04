@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// TestCallerModule drives -w-module and `lg compile -module` (#998): both
+// TestCallerModule drives -w-module and `lg compile -module`: both
 // commands build inside a Go module the caller prepared, write only the
 // directory let-go owns there, and leave the caller's go.mod and go.sum as
 // they were. The module reaches let-go through a directory replace, and the
