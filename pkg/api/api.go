@@ -200,12 +200,15 @@ func (l *LetGo) CompilerContext() *compiler.Context {
 	return l.c
 }
 
+// Def boxes value and binds it to name in the current namespace. Redefining
+// a name updates its existing Var, so functions compiled before the
+// redefinition see the new value, as they would after (def name value).
 func (l *LetGo) Def(name string, value any) error {
 	val, err := vm.BoxValue(reflect.ValueOf(value))
 	if err != nil {
 		return err
 	}
-	l.c.CurrentNS().Def(name, val)
+	l.c.CurrentNS().Intern(name, val)
 
 	return nil
 }

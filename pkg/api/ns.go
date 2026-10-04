@@ -28,13 +28,14 @@ func (l *LetGo) NS(name string) *NS {
 // Def boxes value exactly as LetGo.Def does and defines it in this
 // namespace. Defining a name that is referred in from clojure.core works
 // (the local var wins) but emits the Clojure-parity shadow warning; use
-// DefShadowing when the collision is intentional.
+// DefShadowing when the collision is intentional. Like LetGo.Def, a
+// redefinition updates the existing Var.
 func (n *NS) Def(name string, value any) error {
 	val, err := vm.BoxValue(reflect.ValueOf(value))
 	if err != nil {
 		return err
 	}
-	n.ns.Def(name, val)
+	n.ns.Intern(name, val)
 	return nil
 }
 
@@ -54,6 +55,6 @@ func (n *NS) DefShadowing(name string, value any) error {
 		return err
 	}
 	n.ns.Exclude(name)
-	n.ns.Def(name, val)
+	n.ns.Intern(name, val)
 	return nil
 }
