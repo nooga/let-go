@@ -23,7 +23,10 @@
     (is (:error (cmd/parse-args [])))
     (is (:error (cmd/parse-args ["-o"])))
     (is (:error (cmd/parse-args ["-x" "a.lg"])))
-    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"]))))))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"])))))
+  (testing "-- does not skip the checks"
+    (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
 
 (defn- scratch-dir [tag]
   (let [d (str (os/temp-dir) "/lg-compile-test-" tag "-" (rand-int 1000000000))]
