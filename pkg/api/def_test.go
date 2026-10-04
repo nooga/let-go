@@ -55,3 +55,24 @@ func TestNSDefRedefinitionReachesRetainedFn(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `"new"`, got.String())
 }
+
+// TestNSDefShadowingRedefinitionReachesRetainedFn covers the shadowing path:
+// a caller compiled against the host's shadowing var sees the redefinition,
+// and clojure.core's var is left alone.
+func TestNSDefShadowingRedefinitionReachesRetainedFn(t *testing.T) {
+	lg, err := api.NewLetGo("nsshadow-redef-test")
+	require.NoError(t, err)
+	ns := lg.NS("nsshadow-redef-test")
+	require.NoError(t, ns.DefShadowing("filter", func() string { return "old" }))
+	retained, err := lg.Run("(fn [] (filter))")
+	require.NoError(t, err)
+
+	require.NoError(t, ns.DefShadowing("filter", func() string { return "new" }))
+
+	got, err := retained.(vm.Fn).Invoke(nil)
+	require.NoError(t, err)
+	assert.Equal(t, `"new"`, got.String())
+	v, err := lg.Run("(clojure.core/filter odd? [1 2 3])")
+	require.NoError(t, err)
+	assert.Equal(t, "(1 3)", v.String())
+}

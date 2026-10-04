@@ -338,15 +338,14 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	return va
 }
 
-// Intern sets the root of name's local Var to val, creating the Var via Def
-// when the namespace has none. Unlike Def it keeps an existing Var, so code
-// already compiled against that Var sees the new root, as with Clojure's
-// intern and a source-level (def name val).
+// Intern sets the root of name's local Var to val, interning the Var when the
+// namespace has none. Unlike Def it keeps an existing Var, so code already
+// compiled against that Var sees the new root, as with Clojure's intern and a
+// source-level (def name val). The Var's flags and metadata are left as they
+// are. LookupOrAdd rechecks the registry under the write lock, so concurrent
+// first-time calls for one name all get the same Var.
 func (n *Namespace) Intern(name string, val Value) *Var {
-	va := n.localVar(Symbol(name))
-	if va == nil {
-		return n.Def(name, val)
-	}
+	va := n.LookupOrAdd(Symbol(name)).(*Var)
 	nameDefValue(name, val)
 	return va.SetRoot(val)
 }
