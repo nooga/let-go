@@ -36,6 +36,9 @@ lg scripts/lint.lg --churn origin/main..HEAD \
   $(git diff --name-only --diff-filter=d origin/main...HEAD -- '*.go' '*.lg')
 ```
 
+Skip it when the branch changes no `.go` or `.lg` files: given no paths, the
+script falls back to the default paths and scans the whole tree.
+
 Report-only by default: findings do not affect the exit status, so a run that
 finds things still exits 0. `make lint` runs it alongside golangci-lint, and
 `make lint-comments` runs it alone; it is in neither CI nor the git hooks, so

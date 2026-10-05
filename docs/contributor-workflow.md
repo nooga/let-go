@@ -117,10 +117,10 @@ manual dispatch; see [`perf/ratchet.md`](perf/ratchet.md).
   project-owner sign-off in the PR thread, not just green CI.
 - Run `make generate` and commit the regenerated files with the `.lg` edit that
   caused them, in the same commit.
-- Run the comment report over the files the branch changes and re-read every
-  block it flags on lines you added or changed. The command and how to act on a
-  finding are in [`comment-lint.md`](comment-lint.md); a whole-tree
-  `make lint-comments` already reports findings elsewhere, so scope it to the
-  branch.
+- If the branch changes `.go` or `.lg` files, run the comment report over them
+  and re-read every block it flags on lines you added or changed. The command
+  and how to act on a finding are in [`comment-lint.md`](comment-lint.md); a
+  whole-tree `make lint-comments` already reports findings elsewhere, so scope
+  it to the branch.
 - The PR body states why before what, describes the net change, and says how
   it was verified. Titles become squash-commit subjects.
