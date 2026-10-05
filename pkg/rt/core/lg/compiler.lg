@@ -195,7 +195,7 @@
 (defn compile-program
   "Lower `files` to Go packages under `out-dir` with Go import prefix
    `import-prefix`. When entry-frame? is true and a recognized program entry is
-   present, also emit the #425 native-entry frame.
+   present, also emit the native-entry frame.
 
    Returns {:emit-fails n :lowered-funcs n :entry <entry-or-nil>
             :entry-path <path-or-nil> :error <msg>}
@@ -258,6 +258,29 @@
    under it, so it is also the import prefix passed to compile-program."
   "lgprogram")
 
+(defn- build-in
+  "build-program's steps once the directory to generate into is chosen. dir
+   holds main.go and program.lgb; lowered packages import each other under
+   import-path. A caller-supplied module (module? true) keeps its own go.mod and
+   go.sum and is built read-only; otherwise dir gets a scaffolded module."
+  [files out dir import-path module? host]
+  (let [res   (compile-program dir import-path files true)
+        entry (:entry res)]
+    (cond
+      (:error res) res
+      (nil? entry)
+      (assoc res :error (str "lg compile: no program entry; define -main or main in one of: "
+                             (clojure.string/join " " files)))
+      :else
+      (let [out (or out (basename-stem (:entry-path res)))]
+        ((:compile-lgb host) (:entry-path res) (str dir "/program.lgb")
+                             (str (:ns entry) "/" (:name entry)))
+        (if module?
+          ((:go-build-readonly host) dir out)
+          (do ((:scaffold-module host) dir program-module)
+              ((:go-build host) dir out)))
+        (assoc res :out out)))))
+
 (defn build-program
   "Compile `files` to a standalone native binary at `out` (nil names it after
    the entry file, in the current directory): lower them with the
@@ -266,33 +289,32 @@
    error: an EMIT-FAIL package stays on the VM, as it does for lg-compile.
 
    The Go toolchain steps come from `host`, a map of fns the CLI supplies:
-     :compile-lgb     (f src dst entry)  writes program.lgb; entry is ns/name
-     :scaffold-module (f dir module)     writes go.mod and go.sum into dir
-     :go-build        (f dir out)        builds the module in dir to out
-     :make-temp-dir   (f)                returns a fresh directory
-     :remove-dir      (f dir)            deletes it
+     :compile-lgb       (f src dst entry)  writes program.lgb; entry is ns/name
+     :scaffold-module   (f dir module)     writes go.mod and go.sum into dir
+     :go-build          (f dir out)        builds the module in dir to out
+     :make-temp-dir     (f)                returns a fresh directory
+     :remove-dir        (f dir)            deletes it
+     :open-module       (f module-dir)     prepares the directory let-go owns
+                                           in a caller's module; returns
+                                           {:dir d :import-path p}
+     :go-build-readonly (f dir out)        builds dir to out, -mod=readonly
    program.lgb comes from a separate process, not this one: lowering loads the
    compiler's own namespaces, and an in-process compile would bundle them.
 
    `work-dir`, when given, holds the generated module and is kept; otherwise a
-   temporary directory is used and removed. Returns compile-program's result
-   plus :out, or a map with :error."
-  [files out work-dir host]
-  (let [work (or work-dir ((:make-temp-dir host)))]
-    (try
-      (let [res   (compile-program work program-module files true)
-            entry (:entry res)]
-        (cond
-          (:error res) res
-          (nil? entry)
-          (assoc res :error (str "lg compile: no program entry; define -main or main in one of: "
-                                 (clojure.string/join " " files)))
-          :else
-          (let [out (or out (basename-stem (:entry-path res)))]
-            ((:compile-lgb host) (:entry-path res) (str work "/program.lgb")
-                                 (str (:ns entry) "/" (:name entry)))
-            ((:scaffold-module host) work program-module)
-            ((:go-build host) work out)
-            (assoc res :out out))))
-      (finally
-        (when-not work-dir ((:remove-dir host) work))))))
+   temporary directory is used and removed. `module-dir`, when given, names a
+   Go module the caller prepared and replaces work-dir: the program is
+   generated into the directory :open-module hands back, lowered packages
+   import each other under its import path, and the caller's go.mod and go.sum
+   are used as they are. Returns compile-program's result plus :out, or a map
+   with :error."
+  ([files out work-dir host] (build-program files out work-dir nil host))
+  ([files out work-dir module-dir host]
+   (if module-dir
+     (let [m ((:open-module host) module-dir)]
+       (build-in files out (:dir m) (:import-path m) true host))
+     (let [work (or work-dir ((:make-temp-dir host)))]
+       (try
+         (build-in files out work program-module false host)
+         (finally
+           (when-not work-dir ((:remove-dir host) work))))))))
