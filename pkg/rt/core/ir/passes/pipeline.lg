@@ -469,6 +469,15 @@
                            (forms/map-form-entries form)))
                    (meta form))
         :else form)
+      ;; A sorted collection is a runtime value, never source text, so it has no
+      ;; separate child slots for MapForm/SetForm to preserve. Rebuilding it that
+      ;; way would hand back a hash collection with the ordering gone; (empty
+      ;; form) keeps the receiver's comparator, sorted-map-by included.
+      (and (map? form) (sorted? form))
+      (into (empty form)
+            (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
+      (and (set? form) (sorted? form))
+      (into (empty form) (doall (map expand-all form)))
       ;; Host map/set values cannot represent cardinality after non-injective
       ;; macroexpansion. Move child slots into vector-backed compiler forms
       ;; before recursively expanding them; the source's metadata moves with
