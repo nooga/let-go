@@ -1,0 +1,77 @@
+;; lg.commands.compile — the `lg compile` subcommand (#596).
+;;
+;; CLI adaptation only: parse argv, call lg.compiler/build-program, turn the
+;; result into diagnostics and an exit status. The compilation itself lives in
+;; lg.compiler (#786). The Go side of the CLI (pkg/cli/compile.go) dispatches
+;; here and supplies the toolchain steps as the `host` map build-program takes.
+;;
+;; scripts/lg-compile is a separate entry point with its own argv and stdout
+;; contract; nothing here changes it.
+
+(ns lg.commands.compile
+  (:require
+   [clojure.string]
+   [lg.compiler]))
+
+(def usage
+  (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir>] <file.lg>...\n"
+       "\n"
+       "Compiles a let-go program to a standalone native binary through the Go\n"
+       "backend. One input must define -main or main. Needs a Go toolchain.\n"
+       "\n"
+       "  -o <out>      output path (default: the entry file's name, no .lg)\n"
+       "  -work <dir>   build the generated Go module in <dir> and keep it\n"
+       "  -module <dir> build inside the Go module at <dir>, whose go.mod and\n"
+       "                go.sum are used as they are; lg writes only <dir>/lgprogram\n"))
+
+(def ^:private flag-keys
+  {"-o" :out "-work" :work-dir "-module" :module-dir})
+
+(defn- check-opts [opts]
+  (cond
+    (empty? (:files opts)) {:error "lg compile: no input files"}
+    (and (:work-dir opts) (:module-dir opts))
+    {:error "lg compile: -work and -module are exclusive"}
+    :else opts))
+
+(defn parse-args
+  "argv → {:files [..] :out s :work-dir s :module-dir s}, {:help true}, or
+   {:error msg}."
+  [argv]
+  (loop [args (seq argv) opts {:files []}]
+    (if-not args
+      (check-opts opts)
+      (let [a (first args)]
+        (cond
+          (contains? #{"-h" "-help" "--help"} a) {:help true}
+          (= "--" a) (check-opts (update opts :files into (rest args)))
+          (contains? flag-keys a)
+          (if-let [v (second args)]
+            (recur (nnext args) (assoc opts (get flag-keys a) v))
+            {:error (str "lg compile: " a " needs a value")})
+          (clojure.string/starts-with? a "-")
+          {:error (str "lg compile: unknown flag " a)}
+          :else (recur (next args) (update opts :files conj a)))))))
+
+(defn- err-println [& xs]
+  (binding [*out* *err*] (apply println xs)))
+
+(defn main
+  "Runs `lg compile` with argv (the args after `compile`) and the host's
+   toolchain fns. Returns the process exit code: 0 on success, 1 when the
+   build fails, 2 for a usage error, matching lg's own flag errors."
+  [argv host]
+  (let [opts (parse-args argv)]
+    (cond
+      (:help opts)  (do (print usage) 0)
+      (:error opts) (do (err-println (:error opts))
+                        (binding [*out* *err*] (print usage))
+                        2)
+      :else
+      (let [res (try
+                  (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
+                                             (:module-dir opts) host)
+                  (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
+        (if (:error res)
+          (do (err-println (:error res)) 1)
+          (do (println (str "built " (:out res))) 0))))))

@@ -13,9 +13,9 @@
 package rt
 
 import (
-	"encoding/json"
 	"fmt"
 
+	"github.com/nooga/let-go/pkg/rt/internal/jsonenc"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -34,7 +34,7 @@ func prepareEmit(vs []vm.Value) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	buf, err := json.Marshal(data)
+	buf, err := jsonenc.Marshal(data)
 	if err != nil {
 		return "", "", fmt.Errorf("js/emit: %w", err)
 	}

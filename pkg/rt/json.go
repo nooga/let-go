@@ -1,3 +1,5 @@
+//go:build !lg_no_json
+
 /*
  * Copyright (c) 2021-2026 Marcin Gasperowicz <xnooga@gmail.com>
  * SPDX-License-Identifier: MIT
@@ -8,9 +10,62 @@ package rt
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
+	"strings"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// decodeJSON parses one JSON value with UseNumber, so numbers reach toValue as
+// their literal text. json.Unmarshal into any yields float64 for every number,
+// which has already rounded integers above 2^53 before anything can convert
+// them. Trailing non-whitespace is rejected, as json.Unmarshal does.
+func decodeJSON(s string) (any, error) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		if err == io.EOF {
+			return nil, fmt.Errorf("unexpected end of JSON input")
+		}
+		return nil, err
+	}
+	if rest := strings.TrimLeft(s[dec.InputOffset():], " \t\r\n"); rest != "" {
+		return nil, fmt.Errorf("invalid character %q after top-level value", rest[0])
+	}
+	return v, nil
+}
+
+// numberToValue keeps integer literals exact: int64 when they fit, BigInt past
+// that, matching the reader. Decimal and exponent forms go through float64,
+// and a whole float still becomes an Int when it is in int64 range.
+func numberToValue(n json.Number) (vm.Value, error) {
+	s := string(n)
+	if !strings.ContainsAny(s, ".eE") {
+		if i, err := n.Int64(); err == nil {
+			return vm.Int(i), nil
+		}
+		if b, ok := vm.NewBigIntFromString(s); ok {
+			return b, nil
+		}
+	}
+	f, err := n.Float64()
+	if err != nil {
+		return vm.NIL, fmt.Errorf("json: number %s out of range", s)
+	}
+	return floatToValue(f), nil
+}
+
+// floatToValue converts a whole float to Int only inside int64 range:
+// float64(int64(f)) is platform-defined past it (arm64 saturates, amd64 wraps),
+// so the unguarded round-trip check misreads 2^63 as an Int on arm64.
+func floatToValue(f float64) vm.Value {
+	if f == math.Trunc(f) && f >= -(1<<63) && f < 1<<63 {
+		return vm.Int(int64(f))
+	}
+	return vm.Float(f)
+}
 
 func toValue(keywordize bool, i any) (vm.Value, error) {
 	switch i := i.(type) {
@@ -18,11 +73,10 @@ func toValue(keywordize bool, i any) (vm.Value, error) {
 		return vm.String(i), nil
 	case bool:
 		return vm.Boolean(i), nil
+	case json.Number:
+		return numberToValue(i)
 	case float64:
-		if i == float64(int64(i)) {
-			return vm.Int(int64(i)), nil
-		}
-		return vm.Float(i), nil
+		return floatToValue(i), nil
 	case nil:
 		return vm.NIL, nil
 	case []any:
@@ -52,91 +106,6 @@ func toValue(keywordize bool, i any) (vm.Value, error) {
 		return newmap, nil
 	default:
 		return vm.NIL, vm.NewExecutionError("invalid JSON value")
-	}
-}
-
-func fromMapValue(v vm.Value) (any, error) {
-	r := map[string]any{}
-	if sq, ok := v.(vm.Sequable); ok {
-		for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-			entry := s.First()
-			// Get key and value from the entry using Seq interface
-			eSeq, ok := entry.(vm.Sequable)
-			if !ok {
-				return vm.NIL, vm.NewExecutionError("invalid map entry")
-			}
-			es := eSeq.Seq()
-			k := es.First()
-			ov := es.Next().First()
-			vv, e := fromValue(ov)
-			if e != nil {
-				return vm.NIL, vm.NewExecutionError("invalid VM value")
-			}
-			var nk string
-			switch k := k.(type) {
-			case vm.String:
-				nk = string(k)
-			case vm.Keyword:
-				nk = string(k)
-			default:
-				nk = k.String()
-			}
-			r[nk] = vv
-		}
-	}
-	return r, nil
-}
-
-func fromSeqValue(s vm.Seq) (any, error) {
-	r := []any{}
-	for s != nil && s != vm.EmptyList {
-		uv, e := fromValue(s.First())
-		if e != nil {
-			return vm.NIL, e
-		}
-		r = append(r, uv)
-		s = s.Next()
-	}
-	return r, nil
-}
-
-func fromValue(v vm.Value) (any, error) {
-	switch v.Type() {
-	case vm.StringType:
-		return string(v.(vm.String)), nil
-	case vm.IntType:
-		return int(v.(vm.Int)), nil
-	case vm.FloatType:
-		// Float and Float32 both report FloatType; assert via Unbox so a Float32
-		// (e.g. from `(float x)`) doesn't panic the float64 type assertion.
-		return v.Unbox().(float64), nil
-	case vm.BooleanType:
-		return bool(v.(vm.Boolean)), nil
-	case vm.MapType, vm.PersistentMapType:
-		return fromMapValue(v)
-	case vm.KeywordType:
-		kw := string(v.(vm.Keyword))
-		return kw, nil
-	case vm.NilType:
-		return nil, nil
-	case vm.ArrayVectorType, vm.PersistentVectorType:
-		if sq, ok := v.(vm.Sequable); ok {
-			return fromSeqValue(sq.Seq())
-		}
-		return v.String(), nil
-	default:
-		// Records and other map-like types
-		if _, ok := v.(*vm.Record); ok {
-			return fromMapValue(v)
-		}
-		s, ok := v.(vm.Seq)
-		if !ok {
-			if sq, ok := v.(vm.Sequable); ok {
-				return fromSeqValue(sq.Seq())
-			}
-			return v.String(), nil
-		}
-		return fromSeqValue(s)
 	}
 }
 
@@ -171,8 +140,7 @@ func installJSONNS() {
 			}
 		}
 
-		var v any
-		err = json.Unmarshal([]byte(s), &v)
+		v, err := decodeJSON(string(s))
 		if err != nil {
 			return vm.NIL, err
 		}
