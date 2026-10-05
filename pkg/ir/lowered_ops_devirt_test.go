@@ -9,7 +9,6 @@ package ir
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -33,11 +32,13 @@ import (
 // caught in CI by the -tags gogen_ir wire build (undefined symbols) and by
 // check-generated.
 func TestLoweredOpsDevirtualized(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	// go test runs a test in its package directory, pkg/ir; the source path
+	// from runtime.Caller is not usable, since -trimpath rewrites it.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+	repoRoot := filepath.Dir(filepath.Dir(wd))
 	loweredOps := filepath.Join(repoRoot, "pkg", "rt", "core_go_lowered", "ir", "ops", "ops.go")
 	b, err := os.ReadFile(loweredOps)
 	if err != nil {
