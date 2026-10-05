@@ -1,3 +1,5 @@
+//go:build !lg_no_json
+
 /*
  * Copyright (c) 2026 Marcin Gasperowicz <xnooga@gmail.com>
  * SPDX-License-Identifier: MIT
@@ -9,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"strings"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -572,40 +573,6 @@ func TransitDecodeValue(s string) (vm.Value, error) {
 	return dec.Decode(s)
 }
 
-// prStr formats a value as EDN (used for EDN payload encoding).
-func prStr(v vm.Value) string {
-	switch v.Type() {
-	case vm.StringType:
-		bs, _ := json.Marshal(string(v.(vm.String)))
-		return string(bs)
-	case vm.NilType:
-		return "nil"
-	case vm.BooleanType:
-		if bool(v.(vm.Boolean)) {
-			return "true"
-		}
-		return "false"
-	default:
-		return v.String()
-	}
-}
-
-// readEDN is set by the compiler package to provide EDN parsing.
-var readEDN func(string) (vm.Value, error)
-
-// SetReadEDN sets the EDN reader function (called by compiler package).
-func SetReadEDN(fn func(string) (vm.Value, error)) {
-	readEDN = fn
-}
-
-// evalInNS is set by the compiler package to evaluate code in a namespace.
-var evalInNS func(code string, ns *vm.Namespace) (vm.Value, error)
-
-// SetEvalInNS sets the namespace-aware eval function.
-func SetEvalInNS(fn func(string, *vm.Namespace) (vm.Value, error)) {
-	evalInNS = fn
-}
-
 // JSONEncodeArgs encodes args as a plain JSON array string.
 func JSONEncodeArgs(args []vm.Value) (string, error) {
 	goArgs := make([]any, len(args))
@@ -622,18 +589,9 @@ func JSONEncodeArgs(args []vm.Value) (string, error) {
 
 // JSONDecodeValue decodes a JSON string into a vm.Value.
 func JSONDecodeValue(s string) (vm.Value, error) {
-	var v any
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
+	v, err := decodeJSON(s)
+	if err != nil {
 		return vm.NIL, err
 	}
 	return toValue(true, v)
-}
-
-// EDNEncodeArgs encodes args as an EDN vector string.
-func EDNEncodeArgs(args []vm.Value) (string, error) {
-	parts := make([]string, len(args))
-	for i, a := range args {
-		parts[i] = prStr(a)
-	}
-	return "[" + strings.Join(parts, " ") + "]", nil
 }

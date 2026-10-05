@@ -1809,8 +1809,7 @@
     (when (seq extra-in-handlers)
       (throw (ex-info (str "ir.form-heads coherence check FAILED: "
                            "unexpected form heads in handler map (not in catalog): " extra-in-handlers)
-                      {:extra extra-in-handlers :catalogued catalogued}))))
-  (println "ir.form-heads catalog loaded (bidirectional coherence check passed)"))
+                      {:extra extra-in-handlers :catalogued catalogued})))))
 
 ;; Call at load time to catch steady-state errors
 (assert-form-head-coherence!)

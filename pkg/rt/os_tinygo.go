@@ -52,10 +52,24 @@ func installOsNS() {
 		return vm.String(os.Getenv(string(name))), nil
 	})
 
+	// TinyGo's wasm target emulates Getwd as ("", nil) rather than failing, so
+	// callers that only record or display the directory keep working.
+	cwdFn := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		d, err := os.Getwd()
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(d), nil
+	})
+
 	ns := vm.NewNamespace("os")
 	ns.Def("exit", exitFn)
 	ns.Def("getenv", getenvFn)
 	ns.Def("args", vm.NewPersistentVector(nil))
+	ns.Def("cwd", cwdFn)
+	ns.Def("file-separator", vm.String(string(os.PathSeparator)))
+	ns.Def("path-separator", vm.String(string(os.PathListSeparator)))
+	ns.Def("line-separator", vm.String(lineSeparator()))
 	RegisterNS(ns)
 }
 
