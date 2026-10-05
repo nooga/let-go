@@ -1002,14 +1002,28 @@
    as the bytecode compiler does for a literal: insertion-ordered up to the
    array-map size limit. Raw map values remain supported for callers that
    bypass expand-all. Literal-only entries fold to a Const. Metadata is kept as
-   build-coll-const and with-meta-call describe."
+   build-coll-const and with-meta-call describe.
+
+   A sorted map with a non-literal entry is declined rather than rebuilt: the
+   array-map call would keep the entries and drop the ordering, and there is no
+   form that can carry a sorted-map-by comparator. Declining hands the fn to the
+   bytecode compiler, which rebuilds sorted maps as sorted maps and refuses a
+   custom comparator outright. All-literal sorted maps take the Const arm and
+   carry the real collection, comparator included."
   (let [entries    (map-entries form)
         all-const? (every? (fn [[k v]]
                              (and (is-literal? k) (is-literal? v)))
                            entries)
         pairs      (vec (mapcat identity entries))]
-    (if all-const?
-      (build-coll-const form (apply array-map pairs) ctx)
+    (cond
+      all-const?
+      (build-coll-const form (if (sorted? form) form (apply array-map pairs)) ctx)
+
+      (sorted? form)
+      (throw (ex-info (str "build-map: can't rebuild a sorted map with non-literal entries " (pr-str form))
+                      {:fn :build-map :type (type form) :value form}))
+
+      :else
       (with-meta-call form ctx
         (fn [form ctx]
           (let [fn-id (add-inst! ctx (ctx-block ctx)
