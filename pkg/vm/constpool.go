@@ -122,6 +122,39 @@ func (c *Consts) Append(v Value) int {
 	return idx
 }
 
+// AppendDeferred takes the next index for a value that is not decoded yet and
+// leaves the slot nil. The slot is not entered into the dedup table — Intern
+// cannot hand its index to new code — so nothing can observe it before
+// SetDeferred fills it. Used by the bundle decoder for the function constants
+// of a namespace whose chunks decode on first require.
+func (c *Consts) AppendDeferred() int {
+	idx := c.base + len(c.consts)
+	c.consts = append(c.consts, nil)
+	return idx
+}
+
+// SetDeferred fills a slot taken by AppendDeferred. It reports whether the
+// slot was still empty; a slot that was already filled is left untouched so a
+// second materialization cannot replace a value code may already hold. The
+// value stays out of the dedup table (see AppendDeferred): a decoded function
+// is a fresh pointer no compilation can intern.
+func (c *Consts) SetDeferred(i int, v Value) bool {
+	if i < c.base {
+		return c.parent.SetDeferred(i, v)
+	}
+	if c.consts[i-c.base] != nil {
+		return false
+	}
+	c.consts[i-c.base] = v
+	return true
+}
+
+// IsDeferred reports whether index i is a slot taken by AppendDeferred that
+// SetDeferred has not filled yet.
+func (c *Consts) IsDeferred(i int) bool {
+	return c.get(i) == nil
+}
+
 func (c *Consts) get(i int) Value {
 	if i >= c.base {
 		return c.consts[i-c.base]
