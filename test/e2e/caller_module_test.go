@@ -204,4 +204,13 @@ func TestCallerModule(t *testing.T) {
 			t.Errorf("err=%v, want exit 2\n%s", err, out)
 		}
 	})
+
+	t.Run("-w-module requires -w", func(t *testing.T) {
+		cmd := exec.CommandContext(ctx, bin, "-w-module", t.TempDir(), app)
+		cmd.Dir = fix
+		out, err := cmd.CombinedOutput()
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 2 || !strings.Contains(string(out), "-w-module requires -w") {
+			t.Errorf("err=%v, want exit 2 naming -w\n%s", err, out)
+		}
+	})
 }

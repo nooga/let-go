@@ -596,6 +596,10 @@ func runMain() int {
 		fmt.Fprintln(os.Stderr, "error: -strip requires -c, -b or -w")
 		return 2
 	}
+	if wasmModule != "" && wasmOutput == "" {
+		fmt.Fprintln(os.Stderr, "error: -w-module requires -w")
+		return 2
+	}
 	if debugOutput != "" && !stripDebug {
 		fmt.Fprintln(os.Stderr, "error: -debug-output requires -strip")
 		return 2
