@@ -18,6 +18,9 @@ var lgBin string
 var repoRoot string
 
 func TestMain(m *testing.M) {
+	if os.Getenv(fakePodHelperEnv) == "1" {
+		runFakePod()
+	}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
 		if strings.HasPrefix(name, "GIT_") {

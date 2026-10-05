@@ -1,0 +1,62 @@
+;; Driven by TestPodEDNReplies (pods_edn_test.go), which points
+;; LG_TEST_FAKE_POD at an EDN pod whose describe reply declares
+;; {"readers" {"my/tag" "pod.test/read-tag"}} with read-tag defined in the
+;; pod's own client-side code. The fixture pins babashka's pods contract for
+;; EDN replies: the pod's readers apply, an unknown tag is an error that is
+;; also reported on *err* as `Cannot read EDN: <payload>`, and a payload that
+;; fails to read is never dropped on the ex-data or the handler path.
+(ns test.pods-edn-readers
+  (:require
+   [test :refer :all]))
+
+(def pod-id (pods/load-pod (os/getenv "LG_TEST_FAKE_POD")))
+
+(defn call [sym]
+  ((resolve sym)))
+
+(defn call-message [sym]
+  (try (str "no throw: " (pr-str (call sym)))
+       (catch Throwable e (str (ex-message e)))))
+
+(defn wait-for [pred]
+  (loop [n 200]
+    (cond (pred) true
+          (zero? n) false
+          :else (do (sleep 10) (recur (dec n))))))
+
+(deftest reply-reads-with-the-pod-readers
+  (is (= [:tagged 42] (call 'pod.test/tagged)))
+  (is (= [:tagged 42] (pods/invoke pod-id 'pod.test/tagged []))))
+
+(deftest unknown-tag-is-an-error-reported-on-err
+  (let [captured (io/buffer)
+        msg (binding [*err* captured] (call-message 'pod.test/unknown))]
+    (is (re-find #"No reader function for tag nope/x" msg))
+    (is (= "Cannot read EDN:  \"#nope/x 1\"\n" (io/buffer-str captured)))))
+
+(deftest unreadable-ex-data-is-not-dropped
+  (is (re-find #"No reader function for tag nope/x" (call-message 'pod.test/bad-ex-data))))
+
+(deftest handlers-see-tagged-values
+  (let [events (atom [])
+        done (promise)]
+    (pods/invoke pod-id 'pod.test/stream []
+                 {:handlers {:success #(swap! events conj [:ok %])
+                             :error #(swap! events conj [:error %])
+                             :done #(deliver done :done)}})
+    (is (= :done (deref done 2000 :timeout)))
+    (is (= [[:ok 1] [:ok [:tagged 2]]] @events))))
+
+(deftest handlers-see-an-unreadable-value-as-an-error
+  (let [events (atom [])
+        done (promise)]
+    (pods/invoke pod-id 'pod.test/stream-bad []
+                 {:handlers {:success #(swap! events conj [:ok %])
+                             :error #(swap! events conj [:error (:error %)])
+                             :done #(deliver done :done)}})
+    (is (wait-for #(= 2 (count @events))))
+    (is (= [:ok 1] (first @events)))
+    (is (= :error (first (second @events))))
+    (is (re-find #"No reader function for tag nope/x" (str (second (second @events)))))
+    ;; babashka runs no :done handler for a reply that ended in an error.
+    (is (= :timeout (deref done 200 :timeout)))))
