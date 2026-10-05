@@ -94,3 +94,33 @@ untouched — file and resource `slurp`, `io/reader` on a path, and the rest of
 TinyGo has never had a working `http` namespace (its `net/http` does not
 compile), so that lane already builds this way and gains nothing new from the
 tag. Both lanes now share one stub, `pkg/rt/http_stub.go`.
+
+## Dropping `encoding/json` with `lg_no_json`
+
+The `json` and `transit` namespaces also register from an `init()`, and
+`encoding/json` links its reflection-based codec for any `json.Marshal(any)`
+call, so it ships in every binary even though the runtime only ever hands it
+strings, numbers, booleans, nil, vectors and maps.
+
+Build with `-tags lg_no_json` to leave both namespaces out:
+
+```sh
+go build -tags lg_no_json ./cmd/lg-runtime
+```
+
+Measured on darwin/arm64 against `cmd/lg-runtime` (2026-09-27):
+
+| build | bytes | |
+|---|---|---|
+| default | 20,363,234 | |
+| `lg_no_json` | 19,278,738 | −1,084,496 (−5.3%) |
+| default, `-s -w` | 14,242,242 | |
+| `lg_no_json`, `-s -w` | 13,520,338 | −721,904 (−5.1%) |
+
+What changes in the tagged build: `json/read-json`, `json/write-json` and the
+`transit` namespace do not resolve, and pods can only use the EDN payload
+format. `js/emit` still works and produces the same bytes; it encodes through
+a small closed-set encoder instead of `encoding/json`.
+
+For a WASM bundle, pass the tag through `LG_WASM_BUILD_TAGS=lg_no_json` when
+running `lg -w`. The tags combine with `lg_no_http`.

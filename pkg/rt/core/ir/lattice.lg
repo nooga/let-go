@@ -182,16 +182,19 @@
 ;; bit-or/bit-and (VM builtins) — no bs-* dependency. Proven ≡ type-join over
 ;; all 26244 non-const pairs by scripts/ti-bitset-proptest.lg.
 (def ^:private kind-bit {:nil 0 :true 1 :false 2 :bool 3 :int 4 :float 5 :string 6 :char 7})
+(def ^:private mask-bottom 0)
 (def ^:private mask-any (bit-shift-left 1 8))
 (def ^:private mask-unknown (bit-shift-left 1 9))
-(def ^:private mask-number (bit-or (bit-shift-left 1 4) (bit-shift-left 1 5)))
+(def ^:private mask-number
+  (bit-or (bit-shift-left 1 (get kind-bit :int))
+          (bit-shift-left 1 (get kind-bit :float))))
 
 (defn- mask-bit? [m b] (not (zero? (bit-and m (bit-shift-left 1 b)))))
 
 (defn type->mask [t]
   (cond
     (dtype-type? t)  nil
-    (= t :bottom)  0
+    (= t :bottom)  mask-bottom
     (= t :any)     mask-any
     (= t :unknown) mask-unknown
     (= t :number)  mask-number
@@ -213,30 +216,36 @@
 ;; read back by mask->type's precedence. Monotone (bits only set, never cleared).
 (defn mask-join [a b] (bit-or a b))
 
+(def ^:private scalar-mask-types
+  (reduce-kv (fn [types kind bit]
+               (assoc types (bit-shift-left 1 bit) kind))
+             {mask-bottom :bottom mask-number :number}
+             kind-bit))
+
 (defn mask->type [m]
-  (cond
-    (mask-bit? m 8) :any
-    (mask-bit? m 9) :unknown
-    (zero? m) :bottom
-    :else
-    (let [set? (fn [b] (mask-bit? m b))
-          members (vec (concat
-                         (if (set? 0) [:nil] [])
-                         (if (set? 3)
-                           [:bool]
-                           (concat (if (set? 1) [:true] [])
-                                   (if (set? 2) [:false] [])))
-                         (cond
-                           (and (set? 4) (set? 5)) [:number]
-                           (set? 4) [:int]
-                           (set? 5) [:float]
-                           :else [])
-                         (if (set? 6) [:string] [])
-                         (if (set? 7) [:char] [])))]
+  (or (get scalar-mask-types m)
       (cond
-        (empty? members) :bottom
-        (= 1 (count members)) (first members)
-        :else (into [:union] (sort-members members))))))
+        (mask-bit? m 8) :any
+        (mask-bit? m 9) :unknown
+        :else
+        (let [set? (fn [b] (mask-bit? m b))
+              members (vec (concat
+                             (if (set? 0) [:nil] [])
+                             (if (set? 3)
+                               [:bool]
+                               (concat (if (set? 1) [:true] [])
+                                       (if (set? 2) [:false] [])))
+                             (cond
+                               (and (set? 4) (set? 5)) [:number]
+                               (set? 4) [:int]
+                               (set? 5) [:float]
+                               :else [])
+                             (if (set? 6) [:string] [])
+                             (if (set? 7) [:char] [])))]
+          (cond
+            (empty? members) :bottom
+            (= 1 (count members)) (first members)
+            :else (into [:union] (sort-members members)))))))
 
 ;; --- keyword/vector canonicalization + join ---------------------------------
 

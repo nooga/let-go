@@ -1,0 +1,102 @@
+;; lg compile (#596): argv parsing in lg.commands.compile, and the order and
+;; cleanup of lg.compiler/build-program's host steps. The host fns are stubs,
+;; so this needs no Go toolchain; test/e2e/lg_compile_command_test.go runs the
+;; real steps.
+(ns test.lg-commands-compile-test
+  (:require
+   [test :refer :all]
+   [lg.compiler]
+   [lg.commands.compile :as cmd]))
+
+(deftest parse-args
+  (testing "files, -o and -work"
+    (is (= {:files ["a.lg" "b.lg"] :out "bin/a" :work-dir "w"}
+           (cmd/parse-args ["-o" "bin/a" "a.lg" "-work" "w" "b.lg"]))))
+  (testing "-module"
+    (is (= {:files ["a.lg"] :module-dir "m"} (cmd/parse-args ["-module" "m" "a.lg"]))))
+  (testing "-- ends flag parsing"
+    (is (= {:files ["-odd.lg"]} (cmd/parse-args ["--" "-odd.lg"]))))
+  (testing "help"
+    (is (:help (cmd/parse-args ["-h"])))
+    (is (:help (cmd/parse-args ["a.lg" "--help"]))))
+  (testing "usage errors"
+    (is (:error (cmd/parse-args [])))
+    (is (:error (cmd/parse-args ["-o"])))
+    (is (:error (cmd/parse-args ["-x" "a.lg"])))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"])))))
+  (testing "-- does not skip the checks"
+    (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
+
+(defn- scratch-dir [tag]
+  (let [d (str (os/temp-dir) "/lg-compile-test-" tag "-" (rand-int 1000000000))]
+    (mkdir d)
+    d))
+
+;; A host whose steps only record their calls. make-temp-dir hands out a real
+;; directory because compile-program writes the lowered packages into it.
+(defn- recording-host [calls]
+  {:compile-lgb     (fn [src dst entry] (swap! calls conj [:compile-lgb entry]))
+   :scaffold-module (fn [dir module] (swap! calls conj [:scaffold-module module]))
+   :go-build        (fn [dir out] (swap! calls conj [:go-build out]))
+   :go-build-readonly (fn [dir out] (swap! calls conj [:go-build-readonly out]))
+   :open-module     (fn [module-dir]
+                      (swap! calls conj [:open-module module-dir])
+                      {:dir (scratch-dir "gen") :import-path "example.com/host/lgprogram"})
+   :make-temp-dir   (fn [] (swap! calls conj [:make-temp-dir]) (scratch-dir "tmp"))
+   :remove-dir      (fn [dir] (swap! calls conj [:remove-dir]) (syscall/rm-rf dir))})
+
+(defn- write-fixture [src]
+  (let [path (str (scratch-dir "src") "/prog.lg")]
+    (spit path src)
+    path))
+
+(defn- remove-fixture [path]
+  (syscall/rm-rf (subs path 0 (- (count path) (count "/prog.lg")))))
+
+(deftest build-program-steps
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.prog)\n(defn -main [] (println 1))\n")
+        res   (lg.compiler/build-program [path] nil nil (recording-host calls))]
+    (testing "runs the host steps in order and removes its temp dir"
+      (is (nil? (:error res)))
+      (is (= [[:make-temp-dir]
+              [:compile-lgb "lgc.prog/-main"]
+              [:scaffold-module lg.compiler/program-module]
+              [:go-build "prog"]
+              [:remove-dir]]
+             @calls)))
+    (testing "the output defaults to the entry file's name"
+      (is (= "prog" (:out res))))
+    (remove-fixture path)))
+
+(deftest build-program-without-entry
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.noentry)\n(defn f [x] (inc x))\n")
+        res   (lg.compiler/build-program [path] nil nil (recording-host calls))]
+    (testing "is an error, and the temp dir is still removed"
+      (is (re-find #"no program entry" (:error res)))
+      (is (= [[:make-temp-dir] [:remove-dir]] @calls)))
+    (remove-fixture path)))
+
+(deftest build-program-keeps-work-dir
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.kept)\n(defn -main [] (println 1))\n")
+        work  (scratch-dir "work")]
+    (lg.compiler/build-program [path] "out" work (recording-host calls))
+    (testing "a caller-supplied work dir is neither created nor removed"
+      (is (not-any? (fn [c] (contains? #{:make-temp-dir :remove-dir} (first c))) @calls)))
+    (syscall/rm-rf work)
+    (remove-fixture path)))
+
+(deftest build-program-in-caller-module
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.mod)\n(defn -main [] (println 1))\n")
+        res   (lg.compiler/build-program [path] "out" nil "host-mod" (recording-host calls))]
+    (testing "builds read-only in the opened module, with no scaffold or temp dir"
+      (is (nil? (:error res)))
+      (is (= [[:open-module "host-mod"]
+              [:compile-lgb "lgc.mod/-main"]
+              [:go-build-readonly "out"]]
+             @calls)))
+    (remove-fixture path)))

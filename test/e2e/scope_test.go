@@ -16,11 +16,19 @@ import (
 // TestWithScopeTeardownReleasesParkedTake: a go-block parked on (<! ch) inside
 // with-scope is released when the block exits (scope cancel), runs to its end,
 // and the program returns promptly — proving the take was cancelled, not fed.
+//
+// Post-#920, a cancelled <! raises the Cancelled condition instead of quietly
+// returning nil (that silent-nil behavior was the bug #920 fixed — it made a
+// cancelled take indistinguishable from one that legitimately read nil). The
+// (catch Cancelled e nil) below is what makes this test's proof explicit
+// rather than incidental: reaching (reset! d :ran) now demonstrates the take
+// was cancelled BECAUSE the catch fired, not merely because <! returned
+// something falsy.
 func TestWithScopeTeardownReleasesParkedTake(t *testing.T) {
 	bin := buildLG(t)
 	src := `(def ch (chan)) ` +
 		`(def d (atom :parked)) ` +
-		`(with-scope [s] (go (<! ch) (reset! d :ran))) ` +
+		`(with-scope [s] (go (try (<! ch) (catch Cancelled e nil)) (reset! d :ran))) ` +
 		`(println @d)`
 	start := time.Now()
 	out, err := exec.Command(bin, "-e", src).CombinedOutput()

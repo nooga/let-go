@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 
@@ -352,4 +353,52 @@ func TestWasmLetgoSource(t *testing.T) {
 			t.Errorf("wasmLetgoSource() = (%+v, %v), want the directory replacement", rep, err)
 		}
 	})
+}
+
+// TestTinyGoBuildArgs pins the tinygo argv, and in particular that
+// LG_WASM_BUILD_TAGS reaches it. The tinygo arm assembled its own argv and
+// dropped the tags, so `LETGO_USE_TINYGO=1 LG_WASM_BUILD_TAGS=gogen_ir`
+// produced a bundle byte-identical to the tags-free build: an AOT request that
+// silently returned a bytecode build.
+func TestTinyGoBuildArgs(t *testing.T) {
+	const wasmPath = "/tmp/out/app.wasm"
+	tests := []struct {
+		name      string
+		gc        string
+		buildTags string
+		want      []string
+	}{
+		{
+			name: "defaults carry no -gc and no -tags",
+			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
+				"-stack-size=1MB", "-o", wasmPath, "."},
+		},
+		{
+			name:      "build tags are forwarded",
+			buildTags: "gogen_ir",
+			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
+				"-stack-size=1MB", "-tags", "gogen_ir", "-o", wasmPath, "."},
+		},
+		{
+			name:      "several tags pass through as one comma-joined value",
+			buildTags: "gogen_ir,lg_profile",
+			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
+				"-stack-size=1MB", "-tags", "gogen_ir,lg_profile", "-o", wasmPath, "."},
+		},
+		{
+			name:      "-gc and -tags coexist",
+			gc:        "precise",
+			buildTags: "gogen_ir",
+			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
+				"-stack-size=1MB", "-gc=precise", "-tags", "gogen_ir", "-o", wasmPath, "."},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tinyGoBuildArgs(wasmPath, "z", "trap", "1MB", tt.gc, tt.buildTags)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("tinyGoBuildArgs() =\n  %q\nwant\n  %q", got, tt.want)
+			}
+		})
+	}
 }

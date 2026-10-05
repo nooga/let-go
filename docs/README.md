@@ -45,6 +45,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Real-world Clojure compat findings | `xsofy-portability-gaps.md` |
 | Clojure-test-suite (jank) workflow | `clojure-test-suite.md` |
 | Testing strategy, conformance | `testing-and-conformance.md` |
+| `clojure.test` / `clojure.test.tap` API, stack-trace primitives, Go harness bridge | `specs/clojure-test-conformance.md` |
 | Docs frontmatter convention + maintenance hook | `frontmatter-hook.md` |
 | Docs judgement-layer report (stale/supersession/index) | `docs-status.md` |
 | Comment report (devlog/restatement/density) + how to act on it | `comment-lint.md` |
@@ -59,7 +60,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Babashka pods (usage) | `guide/pods.md` |
 | Babashka pods (host protocol / design) | `design/pods.md` |
 | Portable `.cljc` / `:lg` reader conditionals | `guide/portability.md` |
-| Custom `*data-readers*` | `guide/custom-data-readers.md` |
+| Custom `*data-readers*` and raw `#go{...}` fragments | `guide/custom-data-readers.md` |
 | Version requirements, range matching (`let-go.semver`) | `guide/semver.md` |
 | `io/resource`, `-resource-paths` / `-source-paths` resolution | `guide/resources-and-source-paths.md` |
 | Embedding let-go in a Go program | `guide/embedding-in-go.md` |
@@ -69,6 +70,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Running as a WASI (`GOOS=wasip1`) module | `guide/wasi.md` |
 | let-go under TinyGo (status: not currently supported) | `guide/tinygo.md` |
 | nREPL server + editor setup | `guide/nrepl.md` |
+| Scopes: cancelling and draining spawned work (`with-scope`) | `guide/structured-concurrency.md` |
 | HTTP server (serve, start/stop/wait) and client (`http`) | `guide/http.md` |
 | TCP client + bencode framing (`net`, `bencode`) | `guide/net.md` |
 | Processes, environment, filesystem and paths (`os`) | `guide/os.md` |

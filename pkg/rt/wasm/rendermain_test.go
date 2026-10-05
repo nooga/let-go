@@ -57,3 +57,19 @@ func TestRenderMainIsValidGo(t *testing.T) {
 		}
 	}
 }
+
+// The generated main must decode the program through rt.DecodeExecUnit. That
+// is the decode that marks the embedded core namespaces a program references
+// for loading; an inline resolver skips it, and a web build that requires zip
+// gets every zip var nil (#954).
+func TestRenderMainDecodesThroughRuntime(t *testing.T) {
+	for _, hostEval := range []bool{false, true} {
+		got := RenderMain("s", hostEval)
+		if !strings.Contains(got, "rt.DecodeExecUnit(lgbData)") {
+			t.Fatalf("hostEval=%v: generated main does not decode through rt.DecodeExecUnit", hostEval)
+		}
+		if strings.Contains(got, "bytecode.DecodeToExecUnit") {
+			t.Fatalf("hostEval=%v: generated main decodes with its own resolver", hostEval)
+		}
+	}
+}

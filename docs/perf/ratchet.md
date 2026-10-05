@@ -44,10 +44,10 @@ capture-then-aggregate-then-(compare|write|print).
 | `docs/perf/baseline.json` | The current committed baseline. |
 | `docs/perf/historical/*.json` | Frozen historical snapshots (e.g. `v1.8.0.json`). Captured against the same anchor so any current run can `-baseline docs/perf/historical/v1.8.0.json check` and see "how much have we drifted since release N." |
 | `docs/perf/timeline/*.json` | Append-only full perf snapshots captured on pushes to `main`. These drive trend charts and record actual runs over time. |
-| `docs/perf/index.html` | Static "Are we fast yet?" page generated from the committed baseline, historical snapshots, and timeline snapshots. |
+| `docs/perf/index.html` | Static "Are we fast yet?" page, generated on demand by `make perf-page` from the committed baseline and historical snapshots. Gitignored: the deployed page is built fresh by `pages.yml`, which also pulls timeline snapshots from the `perf-data` branch. |
 | `cmd/perf-page/main.go` | Static page generator. It renders HTML only; it never runs benchmarks. |
 | `docs/perf/.runs/*.jsonl` | Raw capture output. Gitignored; recreated on each run. |
-| `.github/workflows/perf-timeline.yml` | Main-only CI job that records timeline snapshots and commits the regenerated static page. |
+| `.github/workflows/perf-timeline.yml` | Main-only CI job that records timeline snapshots and pushes them to the `perf-data` branch. It does not touch the static page. |
 | `Makefile` targets | `bench-ratchet`, `bench-ratchet-update`, `bench-ratchet-show`, `perf-snapshot`, `perf-page`. |
 
 ## Scope
@@ -85,6 +85,82 @@ sample budget.
 
 Override via `-packages "github.com/nooga/let-go/pkg/X github.com/.../Y"`.
 
+### When the pre-push gate runs
+
+The ratchet is a blocking `pre-push` hook, but it does not run on every push.
+It runs when the pushed range can change what it measures:
+
+- any file the toolchain says is **compiled into or embedded by** a package in
+  the benchmark binaries — the IR and the VM **and everything they transitively
+  depend on**;
+- `pkg/rt/generated.sums` and `pkg/rt/generated.manifest`, which belong to no
+  package but whose change means the generated artifacts were rebuilt;
+- `go.mod`, `go.sum`, `mise.toml`, which change generated code beneath every
+  package (a Go version bump can move allocation counts by itself);
+- `test/compat/` and the `test/clojure-test-suite` submodule, which
+  `BenchmarkClojureTestSuite` reads from disk at run time: its namespace loader
+  is rooted there and it compiles `test/compat/clojure/core-test/portability.lg`
+  directly. A submodule bump appears as the bare gitlink path, so that spelling
+  is matched as well as the directory prefix;
+- a **deleted** file anywhere beneath a directory that still holds measured
+  files. The closure is computed from the tree after the push, so a removed
+  benchmark or embedded asset is never in it; treating deletions under the
+  closure as affected over-approximates rather than miss one.
+
+The closure is **computed**, not approximated by a path list: `cmd/ratchet-scope`
+expands the benchmarked packages with `go list -deps -test` under each build-tag
+configuration the ratchet captures, and reads each package's real file list —
+`GoFiles`, `EmbedFiles`, the test variants, and `IgnoredGoFiles` for files a
+build constraint excludes here but includes elsewhere.
+
+Matching on the file list rather than the directory tree cuts both ways, and
+both matter:
+
+- `pkg/rt` **embeds** every `core/**/*.lg` file and `core_compiled.lgb`, so
+  those are in scope automatically. They are deliberately *not* in the trigger
+  list — a hand-kept copy of what is embedded is the copy that goes stale.
+- `test/*.lg` sits in the `test` package's directory but is part of no build,
+  and `BenchmarkClojureTestSuite` reads only the vendored corpus and
+  `test/compat/`. Tree matching made every contributor
+  touching a `.lg` test pay a full benchmark run for a file that cannot affect
+  a benchmark.
+
+So `pkg/rt/lang.go` requires a run though it is not a benchmark root, while
+`docs/`, `cmd/bench-ratchet`, the baseline file and `scripts/` do not.
+
+This preserves the original reason the hook ran unconditionally — a Go runtime
+change or a regenerated bundle can regress the numbers with no benchmark file
+in the diff — while removing its worst consequence: because the gate compares
+against a committed bar, a bar that has gone stale used to fail **every** push
+from that machine regardless of content, so unrelated work could only proceed
+by first rebaselining. See #912 and #913 for the instance that prompted this.
+
+The range is the pushed tip (`PRE_COMMIT_TO_REF` under prek, else the
+checkout) against its fork point with upstream main, because the bar describes
+main. The decision reads the checked-out tree — `go list` for the closure, the
+filesystem for deletions — so it is only made when that tree **is** the pushed
+tip. Pushing a different ref, or pushing with uncommitted changes, runs the
+ratchet.
+
+It fails toward running. An undeterminable range, a pushed tip that is not the
+checkout, an empty change set, a build failure, or an unrecognised decision all
+run the ratchet: a false run costs one benchmark, a false skip defeats the gate.
+
+To check what a change set would do, without pushing:
+
+```bash
+jj diff --summary --from 'fork_point(@ | main@upstream)' --to @ \
+  | go run ./cmd/ratchet-scope -v -summary
+```
+
+`--summary` rather than `--name-only`: a rename prints as one new path under
+`--name-only`, so moving a measured file out of the closure would read as an
+unrelated addition. `-summary` reports both sides, and the old side reaches
+the deletion rule.
+
+Note that the `ir-stress-gate` hook still runs unconditionally; scoping it the
+same way is a separate change.
+
 ## Build tags
 
 Default: `-tags gogen_ir`. This compiles the lowered-to-Go VM
@@ -104,7 +180,7 @@ One-shot (Makefile):
 make bench-ratchet           # check current vs baseline (CI mode)
 make bench-ratchet-update    # overwrite baseline with current numbers
 make bench-ratchet-show      # capture & print, write nothing
-make perf-page               # refresh docs/perf/index.html from committed JSON
+make perf-page               # render docs/perf/index.html locally from committed JSON
 make perf-snapshot           # full capture into docs/perf/timeline/<ts>-<sha>.json
 ```
 
@@ -290,6 +366,31 @@ into a second `.jsonl` and aggregating both.
   reference per metric by these stamps, falling back to the profile's capture
   identity only for a row that was never ratcheted (see that section for the two
   cases).
+
+### Where the recorded SHA comes from
+
+Every stamp above, and the `<sha>-<ts>.jsonl` capture filename, names the commit
+whose tree was benchmarked. It is resolved from the version control state of the
+directory the run started in:
+
+- **In a jj repository**, from this workspace's own commit — `@` when the working
+  copy differs from its parent, the parent when it does not (a clean checkout's
+  `@` is an empty commit that describes nothing). jj keeps its commits in the git
+  object store, so the result is an ordinary git sha that `git cat-file` resolves;
+  the tool verifies that before recording it, exporting first if jj has not yet.
+- **Otherwise**, from `git rev-parse HEAD`.
+
+`git rev-parse HEAD` is deliberately *not* used in a jj repository. A colocated
+jj repo keeps one git HEAD for the whole repository, tracking whatever the
+default workspace last exported, so every workspace reports the same value no
+matter which commit it is on — a capture taken in a workspace sitting on `main`
+can be stamped with an unrelated local commit. The failure is silent and the
+recorded sha looks plausible.
+
+A run whose commit is not reachable from any remote-tracking ref prints a
+warning. Such a baseline is still valid evidence locally, but nobody who has not
+fetched that commit can reproduce it, so publish the commit or pass `-sha
+<published commit>` when the run represents one.
 
 ## How the check works
 
@@ -499,6 +600,14 @@ own — and prints what it declined:
   NOT ACCEPTED (deterministic regression; stored bar kept — re-run with -accept-deterministic to record it):
     ! pkg/ir.BenchmarkIRCompile [bytecode]   bytes/op  kept 4941030 (since 477a5d36e25f), measured 5232922
 ```
+
+A forced update is gated on **both** bars, not just this machine's. A value can
+be an improvement over a stale local row and still be a regression against the
+newest row any profile carries; since the gate selects by newest provenance,
+adopting it would stamp it as the newest evidence and raise the bar everyone is
+measured against, so the regression it represents would stop being reported.
+Either violation keeps the stored value and its date, and the rejection names
+whichever bar was exceeded.
 
 An improvement needs no ceremony: it is lower, so it ratchets and takes this
 run's stamp. So does a value measured **equal** to the stored one: a timing

@@ -171,9 +171,13 @@ func installOsNS() {
 	// a caller that redirects or captures those vars actually sees the child's
 	// output. (Previously the child was pinned to the raw os.Stdout/os.Stderr,
 	// which escaped every rebinding: a build harness capturing only *out* lost
-	// the child's stderr entirely.) Falls back to the process streams when the
-	// vars aren't installed (early boot). Stdin stays os.Stdin so the child can
-	// stay interactive (e.g. launching a REPL). Returns the exit code.
+	// the child's stderr entirely.) File-backed bindings (the std streams by
+	// default, or a handle from `open`) are passed to the child as descriptors
+	// via IOHandle.ProcessWriter rather than piped, so an interactive child
+	// (a nested REPL, a TUI) still sees the terminal; other writers get a pipe.
+	// Falls back to the process streams when the vars aren't installed (early
+	// boot). Stdin stays os.Stdin so the child can stay interactive. Returns
+	// the exit code.
 	execStar := vm.NewCtxNativeFn("exec*", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("os/exec* expects at least 1 arg")
@@ -192,17 +196,19 @@ func installOsNS() {
 		}
 		cmd := exec.Command(string(cmdName), cmdArgs...)
 		cmd.Stdin = os.Stdin
-		// Wire child stdout/stderr to the current *out*/*err* writers, mirroring
+		// Wire child stdout/stderr to the current *out*/*err* handles, mirroring
 		// how println resolves *out* (resolveIOHandleVar respects binding).
+		// ProcessWriter hands over the *os.File when the handle has one so
+		// os/exec passes the descriptor instead of piping.
 		outH := resolveIOHandleVar(ec, "*out*")
 		errH := resolveIOHandleVar(ec, "*err*")
-		if outH != nil && outH.Writer() != nil {
-			cmd.Stdout = outH.Writer()
+		if outH != nil && outH.ProcessWriter() != nil {
+			cmd.Stdout = outH.ProcessWriter()
 		} else {
 			cmd.Stdout = os.Stdout
 		}
-		if errH != nil && errH.Writer() != nil {
-			cmd.Stderr = errH.Writer()
+		if errH != nil && errH.ProcessWriter() != nil {
+			cmd.Stderr = errH.ProcessWriter()
 		} else {
 			cmd.Stderr = os.Stderr
 		}

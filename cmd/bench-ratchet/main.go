@@ -65,6 +65,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nooga/let-go/pkg/perfdata"
@@ -109,12 +110,16 @@ const (
 	irCompilePackage = "github.com/nooga/let-go/pkg/ir"
 	irCompileFilter  = "^BenchmarkIRCompile$"
 
-	// Startup cost: decoding the precompiled core bundle and running its
-	// main chunk — exactly what `lg -e nil` does minus process spawn. This
-	// is the guard for startup regressions (the per-instruction source-map /
-	// local-var realloc churn that doubled cold-start). Its B/op and
-	// allocs/op are deterministic and machine-independent, so the ratchet
-	// catches a reintroduction even when ns/op is noisy.
+	// Startup cost: the compiler's bundle-boot path — decode the precompiled
+	// core bundle, run clojure.core, the lg baseline and the hybrid
+	// namespaces, and mark the rest needs-load — exactly what `lg -e nil`
+	// does minus process spawn. Decode covers every bundled chunk, so growth
+	// in a lazily loaded namespace still moves B/op: a real process pays that
+	// decode too. This is the guard for startup regressions (the
+	// per-instruction source-map / local-var realloc churn that doubled
+	// cold-start). Its B/op and allocs/op are deterministic and
+	// machine-independent, so the ratchet catches a reintroduction even when
+	// ns/op is noisy.
 	initPackage = "github.com/nooga/let-go/pkg/compiler"
 	initFilter  = "^BenchmarkInitFromLGB$"
 )
@@ -501,6 +506,13 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 func forceRebaseline(existing *Baseline, key string, current MachineBaseline, acceptDeterministic bool) []deterministicRejection {
 	stampAll(&current)
 	var rejected []deterministicRejection
+	// The bar every profile is gated against, resolved BEFORE this write. A
+	// value can be an improvement over THIS machine's stale row and still be a
+	// regression against the newest row any profile carries; since selection
+	// is by newest provenance, adopting and stamping it would make the worse
+	// value the bar and the regression would stop being reported. So a forced
+	// timing update is gated on both: the local row (below) and this.
+	globalBar := machineIndependentBar(*existing)
 	if previous, ok := existing.Machines[key]; ok {
 		for name, entry := range previous.Benchmarks {
 			cur, measured := current.Benchmarks[name]
@@ -520,11 +532,28 @@ func forceRebaseline(existing *Baseline, key string, current MachineBaseline, ac
 			// rule ratchetMerge applies.
 			keptAllocsSHA, keptAllocsAt := allocsProvenance(previous, entry)
 			keptBytesSHA, keptBytesAt := bytesProvenance(previous, entry)
+			bar, barred := globalBar[name]
+			// A metric better than this machine's stale row can still be worse
+			// than the bar every profile is gated against. Adopting it would
+			// stamp it as the newest provenance and RAISE that bar, so the
+			// regression it represents would stop being reported. Either
+			// violation keeps the stored value and its date; the rejection
+			// names whichever bar was actually exceeded.
+			overGlobalAllocs := barred && bar.AllocsPerOp > 0 && cur.AllocsPerOp > bar.AllocsPerOp
+			overGlobalBytes := barred && bar.BytesPerOp > 0 && cur.BytesPerOp > bar.BytesPerOp
 			if cur.AllocsPerOp > entry.AllocsPerOp {
 				rejected = append(rejected, deterministicRejection{
 					Name: name, Metric: "allocs/op",
 					Kept: entry.AllocsPerOp, Measured: cur.AllocsPerOp,
 					SinceSHA: keptAllocsSHA,
+				})
+				cur.AllocsPerOp = entry.AllocsPerOp
+				cur.AllocsSinceSHA, cur.AllocsSinceAt = keptAllocsSHA, keptAllocsAt
+			} else if overGlobalAllocs {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "allocs/op",
+					Kept: bar.AllocsPerOp, Measured: cur.AllocsPerOp,
+					SinceSHA: bar.AllocsSinceSHA,
 				})
 				cur.AllocsPerOp = entry.AllocsPerOp
 				cur.AllocsSinceSHA, cur.AllocsSinceAt = keptAllocsSHA, keptAllocsAt
@@ -537,6 +566,49 @@ func forceRebaseline(existing *Baseline, key string, current MachineBaseline, ac
 				})
 				cur.BytesPerOp = entry.BytesPerOp
 				cur.BytesSinceSHA, cur.BytesSinceAt = keptBytesSHA, keptBytesAt
+			} else if overGlobalBytes {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "bytes/op",
+					Kept: bar.BytesPerOp, Measured: cur.BytesPerOp,
+					SinceSHA: bar.BytesSinceSHA,
+				})
+				cur.BytesPerOp = entry.BytesPerOp
+				cur.BytesSinceSHA, cur.BytesSinceAt = keptBytesSHA, keptBytesAt
+			}
+			current.Benchmarks[name] = cur
+		}
+	}
+	if !acceptDeterministic {
+		// A benchmark this machine has no prior row for is never visited by
+		// the loop above, so stampAll would publish it as the newest
+		// provenance unchecked. There is no local value to fall back to here,
+		// so a metric over the bar keeps the bar's own value and date.
+		previous := existing.Machines[key]
+		for name, cur := range current.Benchmarks {
+			if _, hadLocal := previous.Benchmarks[name]; hadLocal {
+				continue
+			}
+			bar, ok := globalBar[name]
+			if !ok {
+				continue
+			}
+			if bar.AllocsPerOp > 0 && cur.AllocsPerOp > bar.AllocsPerOp {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "allocs/op",
+					Kept: bar.AllocsPerOp, Measured: cur.AllocsPerOp,
+					SinceSHA: bar.AllocsSinceSHA,
+				})
+				cur.AllocsPerOp = bar.AllocsPerOp
+				cur.AllocsSinceSHA, cur.AllocsSinceAt = bar.AllocsSinceSHA, bar.AllocsSinceAt
+			}
+			if bar.BytesPerOp > 0 && cur.BytesPerOp > bar.BytesPerOp {
+				rejected = append(rejected, deterministicRejection{
+					Name: name, Metric: "bytes/op",
+					Kept: bar.BytesPerOp, Measured: cur.BytesPerOp,
+					SinceSHA: bar.BytesSinceSHA,
+				})
+				cur.BytesPerOp = bar.BytesPerOp
+				cur.BytesSinceSHA, cur.BytesSinceAt = bar.BytesSinceSHA, bar.BytesSinceAt
 			}
 			current.Benchmarks[name] = cur
 		}
@@ -1358,12 +1430,163 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// gitShortSHA reports the commit whose tree these benchmarks measured, as the
+// 12-character id recorded in a capture filename and in a profile's
+// CapturedAtSHA — which is provenance: machineIndependentBar selects a bar by
+// it, so a wrong value silently attributes a measurement to code that did not
+// produce it.
+//
+// `git rev-parse HEAD` cannot answer that in a jj repository. jj keeps ONE git
+// HEAD for the whole colocated repo, tracking whatever the default workspace
+// last exported, so every `jj workspace` shares it no matter which commit the
+// workspace is actually on. Observed here: a workspace sitting on main
+// (6cdeb6d0) with a clean working copy reported efcd30925663 — a bookmarkless
+// local commit that is not an ancestor of main@upstream and never will be. The
+// failure is silent and the recorded SHA looks plausible, so it survives
+// review; baselines on this machine carried an unreachable stamp for days.
+//
+// So ask jj for the commit this workspace is on, and fall back to git only
+// when jj is absent or errors (a plain git checkout, or a jj version whose
+// template syntax differs).
 func gitShortSHA() string {
+	if sha := jjWorkspaceSHA(); sha != "" {
+		warnUnpublishedSHA(sha)
+		return sha
+	}
 	out, err := exec.Command("git", "rev-parse", "--short=12", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// unpublishedWarned keeps the notice to one line per run; gitShortSHA is
+// called for both the capture filename and the profile's CapturedAtSHA.
+var unpublishedWarned sync.Once
+
+// warnUnpublishedSHA says so when the recorded provenance names a commit that
+// exists only in this repository. Writing such a baseline is legitimate — it
+// is how a local experiment is measured — but a reviewer reading the stamp
+// later cannot fetch it, so the run is not reproducible by anyone else until
+// the commit is pushed. Saying it at capture time is the only moment the
+// operator can still act on it.
+func warnUnpublishedSHA(sha string) {
+	if capturedSHAIsPublished(sha) {
+		return
+	}
+	unpublishedWarned.Do(func() {
+		fmt.Fprintf(os.Stderr,
+			"bench-ratchet: warning: recording SHA %s, which is not reachable from any remote-tracking ref.\n"+
+				"  The measured tree exists only in this repository, so a baseline stamped with it\n"+
+				"  cannot be reproduced by anyone who has not fetched that commit. Push it, or pass\n"+
+				"  -sha <published commit> if this run represents one.\n", sha)
+	})
+}
+
+// jjWorkspaceSHA returns this jj workspace's commit as a git-resolvable
+// 12-character sha, or "" when the directory is not in a jj repository.
+//
+// jj stores its commits in the git object store, so a jj commit id IS a git
+// sha: `git cat-file -t` reports "commit" for it, and jj pins it with a
+// refs/jj/keep/<sha> ref so it survives gc. The conversion this function
+// performs is therefore not a translation between id spaces — it is choosing
+// WHICH commit describes the measured tree, which is the part `git rev-parse
+// HEAD` gets wrong.
+//
+// It resolves to a STABLE commit rather than to @ unconditionally. jj rewrites
+// the working-copy commit on every snapshot, and for a clean checkout @ is an
+// empty commit that exists only in this repo. When @ is empty the tree being
+// measured IS the parent's tree, so the parent is both the truthful and the
+// durable answer — typically a pushed commit such as main's tip, which anyone
+// can check out with plain git. When @ is non-empty the working copy genuinely
+// differs from every named commit, and @'s own id is the only thing that
+// identifies what ran; see capturedSHAIsPublished for what that costs.
+//
+// The command deliberately snapshots (no --ignore-working-copy): emptiness has
+// to be judged against the files the benchmark just read, not a stale snapshot.
+func jjWorkspaceSHA() string {
+	const tmpl = `if(empty, parents.map(|p| p.commit_id().short(12)).join(" "), commit_id.short(12))`
+	out, err := exec.Command("jj", "log", "--no-graph", "-r", "@", "-T", tmpl).Output()
+	if err != nil {
+		return ""
+	}
+	// An empty @ with several parents is a merge; no single commit describes
+	// that tree, so fall through to @ itself rather than picking one arbitrarily.
+	fields := strings.Fields(string(out))
+	if len(fields) != 1 {
+		out, err = exec.Command("jj", "log", "--no-graph", "-r", "@", "-T", "commit_id.short(12)").Output()
+		if err != nil {
+			return ""
+		}
+		fields = strings.Fields(string(out))
+	}
+	if len(fields) != 1 {
+		return ""
+	}
+	sha := fields[0]
+
+	// Guarantee plain git can resolve what we are about to record. jj exports
+	// to git lazily, so ask it to sync before concluding the object is absent.
+	if !gitHasCommit(sha) {
+		_ = exec.Command("jj", "git", "export").Run()
+		if !gitHasCommit(sha) {
+			return ""
+		}
+	}
+	return sha
+}
+
+// gitDir returns the path to the git directory for this repository, or ""
+// if it cannot be determined. Handles jj workspaces that may not have .git
+// in their working directory.
+func gitDir() string {
+	// Try jj first: it knows the git directory even for secondary workspaces
+	// that don't have .git in their working tree.
+	out, err := exec.Command("jj", "git", "root").Output()
+	if err == nil && len(out) > 0 {
+		return strings.TrimSpace(string(out))
+	}
+	// Fall back to git: works for plain git checkouts, and is the user's
+	// configuration if jj is not in use.
+	out, err = exec.Command("git", "rev-parse", "--git-dir").Output()
+	if err == nil && len(out) > 0 {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
+}
+
+// gitHasCommit reports whether git can resolve sha to a commit object in
+// this repository's git directory.
+func gitHasCommit(sha string) bool {
+	gdir := gitDir()
+	if gdir == "" {
+		return false
+	}
+	return exec.Command("git", "--git-dir="+gdir, "cat-file", "-e", sha+"^{commit}").Run() == nil
+}
+
+// capturedSHAIsPublished reports whether sha is reachable from a
+// remote-tracking ref, i.e. whether someone who cloned this repository could
+// check the commit out.
+//
+// This is the difference between a sha that documents a measurement and one
+// that merely labels it. jj keeps every local commit alive under
+// refs/jj/keep/<sha>, which makes it resolvable HERE and is never pushed, so
+// reachability from refs/remotes/* is the only honest test of whether a
+// non-jj user could reproduce the run.
+func capturedSHAIsPublished(sha string) bool {
+	gdir := gitDir()
+	if gdir == "" {
+		return true
+	}
+	out, err := exec.Command("git", "--git-dir="+gdir, "for-each-ref", "--contains", sha,
+		"--format=%(refname)", "refs/remotes/").Output()
+	if err != nil {
+		// An older git without --contains on for-each-ref cannot answer;
+		// stay silent rather than warn on a false negative.
+		return true
+	}
+	return len(strings.Fields(string(out))) > 0
 }
 
 func writeBaseline(path string, b Baseline) error {

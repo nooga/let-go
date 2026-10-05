@@ -7,6 +7,7 @@ package rt
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -58,6 +59,14 @@ type CoreLoadOptions struct {
 //     overwrite the native adapters #438 Def'd at init, so without the reapply
 //     a bundle that eager-re-Defs one would strand its callers on the
 //     trampoline and lose the direct-call fast path.
+//
+// nativeBackedNS is the namespace set LoadCoreBundle saw before its first
+// decode in this process; see the hybrid-detection comment there.
+var (
+	nativeBackedNSOnce sync.Once
+	nativeBackedNS     map[string]bool
+)
+
 func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 	if len(CoreCompiledLGB) == 0 {
 		return nil, fmt.Errorf("LoadCoreBundle: embedded core is empty (built -tags bootstrap?)")
@@ -67,13 +76,21 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 	savedNS := CurrentNS.Deref()
 	defer CurrentNS.SetRoot(savedNS)
 
-	// Namespaces present before decode are native-backed (installers ran at
-	// package init). A bundle chunk for one of them is a HYBRID namespace whose
-	// chunk must run eagerly (qualified refs bypass the on-demand loader).
-	preexisting := map[string]bool{}
-	for name := range AllNSes() {
-		preexisting[name] = true
-	}
+	// Namespaces present before the FIRST decode in this process are
+	// native-backed (installers ran at package init). A bundle chunk for one of
+	// them is a HYBRID namespace whose chunk must run eagerly (qualified refs
+	// bypass the on-demand loader). The set is captured once: a decode registers
+	// a placeholder for every bundled namespace, so a second boot in the same
+	// process (a test, a benchmark iteration) that judged hybrids from the live
+	// registry would replay every lazy namespace eagerly and no longer measure
+	// what startup does.
+	nativeBackedNSOnce.Do(func() {
+		nativeBackedNS = map[string]bool{}
+		for name := range AllNSes() {
+			nativeBackedNS[name] = true
+		}
+	})
+	preexisting := nativeBackedNS
 
 	tDecode := time.Now()
 	unit, err := bytecode.DecodeToExecUnitBytes(CoreCompiledLGB, LGBVarResolver)

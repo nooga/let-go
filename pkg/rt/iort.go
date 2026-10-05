@@ -71,6 +71,25 @@ func (h *IOHandle) File() *os.File { return h.file }
 func (h *IOHandle) Writer() io.Writer    { return h.writer }
 func (h *IOHandle) ReaderRaw() io.Reader { return h.reader }
 
+// ProcessWriter returns the writer to hand a child process. Go's os/exec
+// passes an *os.File through as the child's descriptor and pipes anything
+// else, so file-backed handles yield their file: the std-stream handles
+// resolve the CURRENT os.Stdout/os.Stderr (test-time swaps still redirect
+// the child), and a handle over a file from `open` yields that file.
+// Handles over arbitrary writers (with-out-str, io/buffer) keep the writer.
+func (h *IOHandle) ProcessWriter() io.Writer {
+	if w, ok := h.writer.(stdStreamWriter); ok {
+		if f := w.cur(); f != nil {
+			return f
+		}
+		return h.writer
+	}
+	if h.file != nil && h.writer == io.Writer(h.file) {
+		return h.file
+	}
+	return h.writer
+}
+
 // Write is the convenience write-string path used by the print fns and
 // (write! handle x). Returns an error if the handle isn't writable.
 func (h *IOHandle) Write(s string) (int, error) {

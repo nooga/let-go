@@ -223,6 +223,20 @@
         (vm-call "NewList"
                  [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
 
+(defn- boxed-set-expr [xs]
+  "#{…} constant → vm.NewSet([]vm.Value{…}). Set literals reach the IR as set
+   VALUES, so a set can appear as a :const aux and needs an emitter here
+   alongside vectors, lists and maps. Element order is unspecified and
+   irrelevant: NewSet re-hashes."
+  ;; vm.NewSet folds an empty slice to EmptyPersistentSet itself, but the
+  ;; shared value emits smaller and matches boxed-list-expr's empty arm.
+  (if (zero? (count xs))
+    (vm-sel "EmptyPersistentSet")
+    (let [elems (mapv boxed-value-expr (seq xs))]
+      (when (every? identity elems)
+        (vm-call "NewSet"
+                 [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
 (defn- boxed-map-expr [m]
   (if (zero? (count m))
     (vm-sel "EmptyPersistentMap")
@@ -239,6 +253,26 @@
       (when elems
         (vm-call "NewPersistentMap"
                  [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
+;; A data-read collection constant (vector/map/set) can carry reader metadata
+;; (issue #801) — evaluating it must yield a value carrying that metadata,
+;; the same contract the bytecode compiler's compileForm now honours (a
+;; `with-meta` call wrapping the constructed collection). vm.ArrayVector,
+;; vm.PersistentMap and vm.PersistentSet all implement vm.IMeta (Meta/
+;; WithMeta) unconditionally — a value with no metadata just returns itself —
+;; so the wrap is safe to apply whenever `(meta v)` is non-nil, regardless of
+;; which of the three collection kinds `built` is. The meta value itself must
+;; also be boxable; if it isn't, this — like every other boxed-*-expr — falls
+;; back to nil (whole-function bridge fallback) rather than silently dropping
+;; the metadata.
+(defn- boxed-with-meta [v built]
+  (if (or (nil? built) (nil? (meta v)))
+    built
+    (let [mexpr (boxed-value-expr (meta v))]
+      (when mexpr
+        (gogen/call
+          (gogen/field-sel (gogen/type-assert built (gogen/type "vm.IMeta")) "WithMeta")
+          [mexpr])))))
 
 (declare value-expr)
 
@@ -326,8 +360,16 @@
     (instance? java.util.regex.Pattern v)
     (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
     (list? v)       (boxed-list-expr v)
-    (vector? v)     (boxed-vector-expr v)
-    (map? v)        (boxed-map-expr v)
+    (vector? v)     (boxed-with-meta v (boxed-vector-expr v))
+    ;; A sorted map satisfies map?, and boxed-map-expr renders any map as a
+    ;; vm.NewPersistentMap literal — same entries, no ordering. Nothing here can
+    ;; re-emit a comparator either, so a sorted map is not a Go literal: return
+    ;; nil, the "can't lower this" signal the boxed-*-expr helpers already use.
+    (sorted? v)     nil
+    (map? v)        (boxed-with-meta v (boxed-map-expr v))
+    ;; Reachable since read-string reads data: `(quote #{1 2})` is a set
+    ;; CONSTANT, where a code-read source only ever produced (hash-set 1 2).
+    (set? v)        (boxed-with-meta v (boxed-set-expr v))
     :else nil))
 
 (declare go-name)
@@ -938,181 +980,128 @@
 
 (defn- float64-cast [expr] (gogen/call (gogen/ident "float64") [expr]))
 
+(def ^:private binary-op-vm-helpers
+  {:add                      "AddValue"
+   :sub                      "SubValue"
+   :mul                      "MulValue"
+   :unchecked-add            "UncheckedAddValue"
+   :unchecked-sub            "UncheckedSubValue"
+   :unchecked-mul            "UncheckedMulValue"
+   :lt                       "LtValue"
+   :lte                      "LeValue"
+   :gt                       "GtValue"
+   :gte                      "GeValue"
+   :bit-and                  "BitAndValue"
+   :bit-or                   "BitOrValue"
+   :bit-xor                  "BitXorValue"
+   :bit-and-not              "BitAndNotValue"
+   :bit-shift-left           "BitShiftLeftValue"
+   :bit-shift-right          "BitShiftRightValue"
+   :unsigned-bit-shift-right "UnsignedBitShiftRightValue"
+   :quot                     "QuotValue"
+   :div                      "DivValue"
+   :eq                       "EqValue"})
+
+(def ^:private order-ops #{:lt :lte :gt :gte})
+(def ^:private bitwise-ops #{:bit-and :bit-or :bit-xor :bit-and-not
+                             :bit-shift-left :bit-shift-right :unsigned-bit-shift-right})
+(def ^:private unchecked-ops #{:unchecked-add :unchecked-sub :unchecked-mul})
+
+(defn- binary-needs-vm-helper? [op s0 s1]
+  (or (= "vm.Value" s0)
+      (= "vm.Value" s1)
+      (and (= op :quot) (not (and (= "int64" s0) (= "int64" s1))))
+      (and (= op :div)  (not (and (= "float64" s0) (= "float64" s1))))
+      (and (contains? bitwise-ops op)
+           (or (not= "int64" s0) (not= "int64" s1)))
+      (and (contains? unchecked-ops op)
+           (or (not= "int64" s0) (not= "int64" s1)))
+      (and (= op :eq) (not= s0 s1))))
+
+(defn- lower-binary-helper-call [vm-helper lhs-expr rhs-expr op result-spec]
+  (let [call (gogen/call
+               (gogen/field-sel (gogen/ident "rt") vm-helper)
+               [lhs-expr rhs-expr])]
+    (if (and (or (contains? order-ops op) (= op :eq))
+             (= "vm.Value" result-spec))
+      (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [call])
+      call)))
+
+(defn- lower-native-binary-call [op op-str s0 s1 lhs-expr rhs-expr result-spec]
+  (let [l (if (and (= "int64" s0) (= "float64" s1)) (float64-cast lhs-expr) lhs-expr)
+        r (if (and (= "float64" s0) (= "int64" s1)) (float64-cast rhs-expr) rhs-expr)
+        raw-binary (if (= op :unsigned-bit-shift-right)
+                     (gogen/call (gogen/ident "int64")
+                       [(gogen/binary ">>"
+                          (gogen/call (gogen/ident "uint64") [l])
+                          (gogen/call (gogen/ident "uint64") [r]))])
+                     (gogen/binary op-str l r))]
+    (if (and (comparison-op? op-str) (= "vm.Value" result-spec))
+      (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [raw-binary])
+      raw-binary)))
+
+(defn- lower-binary-rhs [f closed-exprs nid op refs]
+  (let [op-str      (get binary-op op)
+        r0          (nth refs 0)
+        r1          (nth refs 1)
+        s0          (go-type-spec (ir/type-of r0 f))
+        s1          (go-type-spec (ir/type-of r1 f))
+        use-helper? (binary-needs-vm-helper? op s0 s1)
+        vm-helper   (when use-helper? (get binary-op-vm-helpers op))
+        mixed?      (and (not vm-helper)
+                         (not= s0 s1)
+                         (or (= "vm.Value" s0) (= "vm.Value" s1)))
+        lhs-expr    (if (or vm-helper mixed?)
+                      (box-as-value f closed-exprs r0)
+                      (value-expr f closed-exprs r0))
+        rhs-expr    (if (or vm-helper mixed?)
+                      (box-as-value f closed-exprs r1)
+                      (value-expr f closed-exprs r1))
+        result-spec (go-type-spec (ir/type-of nid f))]
+    (when (and lhs-expr rhs-expr)
+      (if vm-helper
+        (lower-binary-helper-call vm-helper lhs-expr rhs-expr op result-spec)
+        (lower-native-binary-call op op-str s0 s1 lhs-expr rhs-expr result-spec)))))
+
+(defn- lower-unary-rhs [f closed-exprs nid op refs]
+  (let [lhs-id   (nth refs 0)
+        lhs-spec (go-type-spec (ir/type-of lhs-id f))]
+    (if (= "vm.Value" lhs-spec)
+      (when-let [lhs (box-as-value f closed-exprs lhs-id)]
+        (let [helper (case op
+                       :inc "AddValue"
+                       :dec "SubValue"
+                       :bit-not "BitNotValue")]
+          (gogen/call
+            (gogen/field-sel (gogen/ident "rt") helper)
+            (if (= op :bit-not)
+              [lhs]
+              [lhs (vm-call "Int" [(gogen/int-lit 1)])]))))
+      (when-let [lhs (value-expr f closed-exprs lhs-id)]
+        (case op
+          :inc (gogen/binary "+" lhs (gogen/int-lit 1))
+          :dec (gogen/binary "-" lhs (gogen/int-lit 1))
+          :bit-not (gogen/unary "^" lhs))))))
+
+(defn- lower-dot-rhs [f closed-exprs nid refs]
+  (let [obj-id   (nth refs 0)
+        field    (ir/aux nid f)]
+    (when-let [obj-expr (value-expr f closed-exprs obj-id)]
+      (gogen/field-sel obj-expr (go-name (name field))))))
+
 (defn- inst-rhs [f closed-exprs nid]
   (let [op   (ir/op nid f)
         refs (ir/refs nid f)]
     (cond
       (contains? binary-op op)
-      (let [op-str       (get binary-op op)
-            s0           (go-type-spec (ir/type-of (nth refs 0) f))
-            s1           (go-type-spec (ir/type-of (nth refs 1) f))
-            order-op?    (#{"<" "<=" ">" ">="} op-str)
-            arith-op?    (#{"+" "-" "*" "/" "&" "|" "^" "&^" "<<" ">>"} op-str)
-            bitwise-op?  (contains? #{:bit-and :bit-or :bit-xor :bit-and-not
-                                      :bit-shift-left :bit-shift-right :unsigned-bit-shift-right} op)
-            any-vm?      (or (= "vm.Value" s0) (= "vm.Value" s1))
-            ;; quot ("/") lowers to native Go `/` ONLY for int/int — Go integer
-            ;; division truncates toward zero exactly like clojure.core/quot.
-            ;; For any other operand mix (float, ratio, boxed) native `/` is
-            ;; wrong: float `/` does NOT truncate, and a native int/float `/`
-            ;; isn't valid Go. Force the rt.QuotValue helper, which performs the
-            ;; runtime truncating division across the numeric tower.
-            ;; quot and div both render Go `/` but route differently (dispatch
-            ;; on the op-kw, NOT op-str): quot is native only for int/int (Go
-            ;; int64 `/` truncates toward zero like quot); div is native only for
-            ;; float/float (Go float `/` matches clojure.core// on floats).
-            ;; Every other operand mix uses the runtime helper — native `/`
-            ;; would be wrong (no truncation for quot; Ratio dropped for div) or
-            ;; invalid Go (mixed int/float). rt.QuotValue / rt.DivValue compute
-            ;; the exact numeric-tower result.
-            quot-rt?     (and (= op :quot)
-                              (not (and (= "int64" s0) (= "int64" s1))))
-            div-rt?      (and (= op :div)
-                              (not (and (= "float64" s0) (= "float64" s1))))
-            bitwise-rt?  (and bitwise-op?
-                              (or (not (= "int64" s0))
-                                  (not (= "int64" s1))))
-            ;; unchecked-*: native Go + - * for int/int (Go int64 arithmetic
-            ;; already wraps, which IS the unchecked contract); anything else
-            ;; goes through rt.Unchecked<Op>Value, which wraps exactly like
-            ;; the core fn (#64): vm.numUnchecked wraps only an Int/Int pair
-            ;; and leaves every other numeric type its own arithmetic.
-            unchecked-op? (contains? #{:unchecked-add :unchecked-sub :unchecked-mul} op)
-            unchecked-rt? (and unchecked-op?
-                               (or (not (= "int64" s0))
-                                   (not (= "int64" s1))))
-            ;; Cross-type `=`: two concrete but DIFFERENT numeric types (int vs
-            ;; float64) must route to rt.EqValue, not native ==. Clojure `=` is
-            ;; category-sensitive across the numeric tower — (= 1 1.0) is false —
-            ;; but widening the int side to float64 (as the arithmetic path does
-            ;; below) and comparing with Go == would make it true. Same-type
-            ;; concrete scalars keep native == below, which is correct. (#534)
-            eq-cross-type? (and (= op :eq) (not= s0 s1))
-            ;; rt.LtValue/AddValue/... polymorphic helpers — used when any
-            ;; operand is vm.Value (so we don't bail the whole defn), or when
-            ;; quot/div need the runtime divide (above). Each helper mirrors the
-            ;; bytecode VM's OP_<X>: vm.Int fast path then vm.Num<X> fallback for
-            ;; ordering; always-delegate to vm.Num<X> for arithmetic (keeps
-            ;; overflow / BigInt / Ratio promotion semantics in one place).
-            vm-helper    (when (or any-vm? quot-rt? div-rt? bitwise-rt? unchecked-rt? eq-cross-type?)
-                           (cond
-                             ;; Before the op-str arms: unchecked ops share
-                             ;; "+" "-" "*" with add/sub/mul but must NOT
-                             ;; route to the promoting AddValue/SubValue/MulValue.
-                             (= op :unchecked-add) "UncheckedAddValue"
-                             (= op :unchecked-sub) "UncheckedSubValue"
-                             (= op :unchecked-mul) "UncheckedMulValue"
-                             (= op-str "<")  "LtValue"
-                             (= op-str "<=") "LeValue"
-                             (= op-str ">")  "GtValue"
-                             (= op-str ">=") "GeValue"
-                             (= op-str "+")  "AddValue"
-                             (= op-str "-")  "SubValue"
-                             (= op-str "*")  "MulValue"
-                             (= op :bit-and) "BitAndValue"
-                             (= op :bit-or)  "BitOrValue"
-                             (= op :bit-xor) "BitXorValue"
-                             (= op :bit-and-not) "BitAndNotValue"
-                             (= op :bit-shift-left) "BitShiftLeftValue"
-                             (= op :bit-shift-right) "BitShiftRightValue"
-                             (= op :unsigned-bit-shift-right) "UnsignedBitShiftRightValue"
-                             (= op :quot)    "QuotValue"
-                             (= op :div)     "DivValue"
-                             ;; = routed here for a vm.Value operand (Go's ==
-                             ;; panics on non-comparable dynamic types and
-                             ;; compares identity, not value) OR two concrete-
-                             ;; but-different numeric types — see eq-cross-type?
-                             ;; above. rt.EqValue -> vm.ValueEquals.
-                             (= op :eq)      "EqValue"
-                             :else           nil))
-            ;; Mixed operand types (only meaningful when NOT routing
-            ;; through a helper, i.e. for `==`/`!=` with one vm.Value
-            ;; side): box the other so Go's `==` sees compatible types.
-            mixed?       (and (not vm-helper)
-                              (not= s0 s1)
-                              (or (= "vm.Value" s0) (= "vm.Value" s1)))
-            lhs-expr     (cond
-                           vm-helper (box-as-value f closed-exprs (nth refs 0))
-                           mixed?    (box-as-value f closed-exprs (nth refs 0))
-                           :else     (value-expr f closed-exprs (nth refs 0)))
-            rhs-expr     (cond
-                           vm-helper (box-as-value f closed-exprs (nth refs 1))
-                           mixed?    (box-as-value f closed-exprs (nth refs 1))
-                           :else     (value-expr f closed-exprs (nth refs 1)))
-            result-spec  (go-type-spec (ir/type-of nid f))]
-        (cond
-          ;; Polymorphic helper path: emit rt.<Op>Value(lhs, rhs).
-          ;; Helpers return: bool for ordering, vm.Value for arithmetic.
-          (and vm-helper lhs-expr rhs-expr)
-          (let [call (gogen/call
-                       (gogen/field-sel (gogen/ident "rt") vm-helper)
-                       [lhs-expr rhs-expr])]
-            (if (and (or order-op? (= op :eq)) (= "vm.Value" result-spec))
-              ;; Helper returns Go bool but inst declared type didn't narrow to
-              ;; bool — wrap (ordering ops and =).
-              (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [call])
-              call))
-
-          ;; Native Go binary path: both operands typed compatibly.
-          (and lhs-expr rhs-expr)
-          ;; Mixed concrete int/float64: typeinfer promotes such an op to :float
-          ;; (matching the numeric tower), but Go rejects `int <op> float64` — and
-          ;; an untyped float constant against an int operand is a hard compile
-          ;; error ("0.0625 truncated to int"). Widen the int side to float64 so
-          ;; the native op runs in float, same as the VM's int→float promotion.
-          ;; Only int/float64 arithmetic and ordering reach here mixed — sound to
-          ;; widen since (< 1 0.5) == (< 1.0 0.5). quot is native for int/int
-          ;; only, div for float/float only, bitwise/shift for int/int only, and
-          ;; cross-type `=` routes to rt.EqValue (see eq-cross-type? above). (#534)
-          (let [l (if (and (= "int64" s0) (= "float64" s1)) (float64-cast lhs-expr) lhs-expr)
-                r (if (and (= "float64" s0) (= "int64" s1)) (float64-cast rhs-expr) rhs-expr)
-                raw-binary (cond
-                             (= op :unsigned-bit-shift-right)
-                             (gogen/call (gogen/ident "int64")
-                               [(gogen/binary ">>"
-                                  (gogen/call (gogen/ident "uint64") [l])
-                                  (gogen/call (gogen/ident "uint64") [r]))])
-                             :else
-                             (gogen/binary op-str l r))]
-            (if (and (comparison-op? op-str) (= "vm.Value" result-spec))
-              (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [raw-binary])
-              raw-binary))
-
-          :else nil))
+      (lower-binary-rhs f closed-exprs nid op refs)
 
       (or (= op :inc) (= op :dec) (= op :bit-not))
-      (let [lhs-id   (nth refs 0)
-            lhs-spec (go-type-spec (ir/type-of lhs-id f))]
-        (if (= "vm.Value" lhs-spec)
-          (let [lhs (box-as-value f closed-exprs lhs-id)]
-            (when lhs
-              (gogen/call
-                (gogen/field-sel (gogen/ident "rt")
-                  (cond
-                    (= op :inc) "AddValue"
-                    (= op :dec) "SubValue"
-                    :else "BitNotValue"))
-                (if (= op :bit-not)
-                  [lhs]
-                  [lhs (vm-call "Int" [(gogen/int-lit 1)])]))))
-          (let [lhs (value-expr f closed-exprs lhs-id)]
-            (when lhs
-              (cond
-                (= op :inc) (gogen/binary "+" lhs (gogen/int-lit 1))
-                (= op :dec) (gogen/binary "-" lhs (gogen/int-lit 1))
-                :else       (gogen/unary "^" lhs))))))
+      (lower-unary-rhs f closed-exprs nid op refs)
 
-      ;; (. obj field) -> Go struct field selector obj.field. The field name
-      ;; is munged (go-name) to the same valid Go identifier the struct decl
-      ;; uses, so a Lisp field like `the-side` selects obj.the_side.
       (= op :dot)
-      (let [obj-id   (nth refs 0)
-            field    (ir/aux nid f)
-            obj-expr (value-expr f closed-exprs obj-id)]
-        (when obj-expr
-          (gogen/field-sel obj-expr (go-name (name field)))))
+      (lower-dot-rhs f closed-exprs nid refs)
 
-      ;; RHS of a :load-var's one-time snapshot local: ec.Deref(rt.LookupVar(...)).
       (= op :load-var)
       (load-var-deref-expr (ir/aux nid f))
 
@@ -1954,6 +1943,46 @@
 
 (declare trampoline-call-stmts)
 
+(defn- fresh-local-name [f extra-names base]
+  (let [used0 (into #{"ec" "callErr"} extra-names)
+        used1 (reduce (fn [s nid] (conj s (value-name f nid)))
+                      used0 (range (ir/inst-count f)))
+        used2 (reduce (fn [s i] (conj s (go-arg-name "arg" i) (go-arg-name "a" i)))
+                      used1 (range (ir/fn-arity f)))]
+    (loop [i 0]
+      (let [candidate (if (zero? i) base (str base "_" i))]
+        (if (contains? used2 candidate)
+          (recur (inc i))
+          candidate)))))
+
+(defn- shared-closure-args
+  "Materialize closure arguments once across direct and fallback branches.
+   Keep registration deferred until both branches can be emitted."
+  [f closed-exprs nid arg-rids param-specs arg-exprs]
+  (into {}
+        (keep-indexed
+          (fn [i rid]
+            (when (and (= "vm.Value" (nth param-specs i))
+                       (closure-value? f rid))
+              [i {:name (fresh-local-name
+                          f (mapcat gogen/ident-names closed-exprs)
+                          (str "ca" nid "_" i))
+                  :expr (nth arg-exprs i)}]))
+          arg-rids)))
+
+(defn- shared-closure-inits [shared]
+  (mapv (fn [[_ {:keys [name expr]}]]
+          (register-typed-call-temp! name "vm.Value")
+          (gogen/assign "=" (gogen/ident name) expr))
+        (sort-by first shared)))
+
+(defn- shared-arg-exprs [shared args expr-fn]
+  (mapv (fn [i arg]
+          (if-let [entry (get shared i)]
+            (gogen/ident (:name entry))
+            (expr-fn arg)))
+        (range (count args)) args))
+
 (defn- emit-typed-direct-call
   "Direct-call emit with per-arg coercion + result boxing. Branches on
    the call entry's typed signature (param-specs + result-spec).
@@ -2008,15 +2037,19 @@
               ;; branch, and only register the guard temps once both
               ;; are known non-nil; registering earlier would leak
               ;; unused function-scoped var decls (Go compile error).
-              (let [fallback (trampoline-call-stmts f closed-exprs nid
-                                                    target refs)]
+              (let [shared (shared-closure-args f closed-exprs nid arg-rids param-specs arg-exprs)
+                    direct-args (shared-arg-exprs shared arg-exprs identity)
+                    fallback-args (shared-arg-exprs shared arg-rids
+                                    (fn [rid] (box-as-value f closed-exprs rid)))
+                    fallback (trampoline-call-stmts f closed-exprs nid
+                                                    target refs fallback-args)]
                 (if (nil? fallback)
                   ;; No trampoline branch can be built: only the flat,
                   ;; unguarded form remains (pre-root-guard behavior).
                   (when (empty? guard-idx)
                     (typed-call-result-stmts f nid target entry arg-exprs))
                   (let [then (typed-call-result-stmts f nid target
-                                                      entry arg-exprs)]
+                                                      entry direct-args)]
                     (when then
                       (doseq [i guard-idx]
                         (let [g (:guard (nth descs i))]
@@ -2046,7 +2079,7 @@
                               (nil? root-guard) type-cond
                               (nil? type-cond)  root-guard
                               :else (gogen/binary "&&" root-guard type-cond))]
-                        (conj asserts
+                        (conj (into (shared-closure-inits shared) asserts)
                               (gogen/if-stmt nil cond-e
                                              then fallback))))))))))]
     (when stmts
@@ -2196,58 +2229,62 @@
          (keyword? (ir/aux callee f))
          (or (= 1 arg-count) (= 2 arg-count)))))
 
-(defn- trampoline-call-stmts [f closed-exprs nid target refs]
+(defn- trampoline-call-stmts
   "Emit the runtime-dispatch trampoline for a :call, assigning the result to
    `target`. This is the always-correct fallback path: a cross-ns cached-var
    IFn dispatch when the callee var is recorded (base set), else the boxed
    rt.InvokeValueEC path. Extracted from call-assign-stmts so the native
    multimethod type-switch can reuse the IDENTICAL trampoline for its default:
    arm (open/late/unmapped-type dispatch must behave exactly as today)."
-  (let [nn         (load-var-ns+name f (first refs))
-        ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
-        ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
-        ;; is var-mediated, so it resolves at runtime via the var's root
-        ;; whether or not the callee was emitted as a Go func — strictly
-        ;; more robust than a bare direct call (which dangles if the callee
-        ;; fell back) and it eliminates the per-call rt.LookupVar uniformly.
-        ;; record-cross-ns-var! no-ops when *cross-ns-vars-used* is unbound
-        ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
-        ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
-        base       (when nn (record-cross-ns-var! (first nn) (second nn)))
-        arg-exprs  (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
-        args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
-    (when (every? identity arg-exprs)
-      (if base
-        ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
-        ;; callee var ONCE (memoized through the package-level __v_* pointer)
-        ;; and re-reads its fn root each call, so per call:
-        ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
-        ;; Caching the *Var (not the fn) keeps the var as the override seam
-        ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
-        ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
-        (let [cached-fn (gogen/call
-                          (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
-                          [(gogen/unary "&" (gogen/ident base))
-                           (gogen/string-lit (first nn))
-                           (gogen/string-lit (second nn))])
-              ;; Dispatch through ec so the callee (and any dynamic vars it
-              ;; reads, or goroutines it spawns) sees the running context:
-              ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
-              invoke    (gogen/call
-                          (gogen/field-sel (gogen/ident "ec") "Invoke")
-                          [cached-fn args-slice])]
-          (emit-call-stmts f target invoke))
-        ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
-        ;; which threads ec into the dynamic invocation path.
-        (let [callee (box-as-value f closed-exprs (first refs))
-              invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
-                                 [(gogen/ident "ec") callee args-slice])]
-          (when callee
-            (if (keyword-callee-total? f refs)
-              ;; Total keyword lookup: the error is always nil at arity
-              ;; 1-2, so discard it (`_`) and skip the dead check.
-              [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
-              (emit-call-stmts f target invoke))))))))
+  ([f closed-exprs nid target refs]
+   (trampoline-call-stmts f closed-exprs nid target refs nil))
+  ([f closed-exprs nid target refs prepared-args]
+   (let [nn         (load-var-ns+name f (first refs))
+         ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
+         ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
+         ;; is var-mediated, so it resolves at runtime via the var's root
+         ;; whether or not the callee was emitted as a Go func — strictly
+         ;; more robust than a bare direct call (which dangles if the callee
+         ;; fell back) and it eliminates the per-call rt.LookupVar uniformly.
+         ;; record-cross-ns-var! no-ops when *cross-ns-vars-used* is unbound
+         ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
+         ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
+         base       (when nn (record-cross-ns-var! (first nn) (second nn)))
+         arg-exprs  (or prepared-args
+                        (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))
+         args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
+     (when (every? identity arg-exprs)
+       (if base
+         ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
+         ;; callee var ONCE (memoized through the package-level __v_* pointer)
+         ;; and re-reads its fn root each call, so per call:
+         ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
+         ;; Caching the *Var (not the fn) keeps the var as the override seam
+         ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
+         ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
+         (let [cached-fn (gogen/call
+                           (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
+                           [(gogen/unary "&" (gogen/ident base))
+                            (gogen/string-lit (first nn))
+                            (gogen/string-lit (second nn))])
+               ;; Dispatch through ec so the callee (and any dynamic vars it
+               ;; reads, or goroutines it spawns) sees the running context:
+               ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
+               invoke    (gogen/call
+                           (gogen/field-sel (gogen/ident "ec") "Invoke")
+                           [cached-fn args-slice])]
+           (emit-call-stmts f target invoke))
+         ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
+         ;; which threads ec into the dynamic invocation path.
+         (let [callee (box-as-value f closed-exprs (first refs))
+               invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
+                                  [(gogen/ident "ec") callee args-slice])]
+           (when callee
+             (if (keyword-callee-total? f refs)
+               ;; Total keyword lookup: the error is always nil at arity
+               ;; 1-2, so discard it (`_`) and skip the dead check.
+               [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
+               (emit-call-stmts f target invoke)))))))))
 
 ;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
 ;; Shape: {multifn-name-str {:dispatch-type :type
@@ -2629,13 +2666,9 @@
                        (let [stmts (lower-inst-stmts f closed-exprs (first remaining))]
                          (if (nil? stmts)
                            (let [op (ir/op (first remaining) f)]
-                             ;; A nil result means "no statement". Side-effect-free
-                             ;; ops (loads/const/block-arg, and any other dead value)
-                             ;; can be skipped. A :call that returns nil, however, is
-                             ;; an un-lowerable side-effecting call (e.g. push-binding!
-                             ;; with a (var X) arg) — dropping it would change behavior,
-                             ;; so the whole function must fall back instead.
-                             (if (and (not= op :call)
+                             ;; Calls and guarded regions execute even when their
+                             ;; result is unused; failed lowering requires fallback.
+                             (if (and (not (contains? #{:call :try} op))
                                       (or (= op :load-arg)
                                           (= op :load-var)
                                           (= op :load-closed)
@@ -3179,13 +3212,9 @@
         (let [stmts (lower-inst-stmts f closed-exprs (first remaining))]
           (if (nil? stmts)
             (let [op (ir/op (first remaining) f)]
-              ;; A nil result means "no statement". Side-effect-free
-              ;; ops (loads/const/block-arg, and any other dead value)
-              ;; can be skipped. A :call that returns nil, however, is
-              ;; an un-lowerable side-effecting call (e.g. push-binding!
-              ;; with a (var X) arg) — dropping it would change behavior,
-              ;; so the whole function must fall back instead.
-              (if (and (not= op :call)
+              ;; Calls and guarded regions execute even when their result is
+              ;; unused; failed lowering requires whole-function fallback.
+              (if (and (not (contains? #{:call :try} op))
                        (or (= op :load-arg)
                            (= op :load-var)
                            (= op :load-closed)
@@ -3199,20 +3228,7 @@
 (defn- fresh-keyword-tag-name [f bid]
   ;; A type-switch binding scopes over every clause, including the non-keyword
   ;; default body. Avoid shadowing any source/local identifier referenced there.
-  (let [used0 #{"ec" "callErr"}
-        used1 (reduce (fn [s nid] (conj s (value-name f nid)))
-                      used0
-                      (range (ir/inst-count f)))
-        used2 (loop [i 0 s used1]
-                (if (< i (ir/fn-arity f))
-                  (recur (inc i) (conj s (go-arg-name "arg" i) (go-arg-name "a" i)))
-                  s))
-        base (str "_kw" bid)]
-    (loop [i 0]
-      (let [candidate (if (zero? i) base (str base "_" i))]
-        (if (contains? used2 candidate)
-          (recur (inc i))
-          candidate)))))
+  (fresh-local-name f nil (str "_kw" bid)))
 
 (defn- lower-tree [f closed-exprs node]
   "Lower a structurized control tree to Go statements.

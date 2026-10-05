@@ -333,6 +333,18 @@ func (m *SortedMap) assocImpl(key, val Value) *SortedMap {
 	return &SortedMap{root: newRoot, count: newCount, cmp: m.cmp}
 }
 
+// UsesDefaultComparator reports whether m orders keys with DefaultCompare.
+// A map built by sorted-map-by carries a caller-supplied Comparator that no
+// literal can express, so code that rebuilds a sorted map from its entries —
+// the compiler emitting a sorted-map form, for one — has to refuse rather
+// than quietly reorder it.
+func (m *SortedMap) UsesDefaultComparator() bool {
+	if m.cmp == nil {
+		return true
+	}
+	return reflect.ValueOf(m.cmp).Pointer() == reflect.ValueOf(Comparator(DefaultCompare)).Pointer()
+}
+
 // --- Value ---
 
 func (m *SortedMap) Type() ValueType { return SortedMapType }
@@ -394,7 +406,16 @@ func (m *SortedMap) Count() Value  { return MakeInt(m.count) }
 
 // --- Collection ---
 
-func (m *SortedMap) Empty() Collection { return EmptySortedMap }
+// Empty returns an empty sorted map ordered the same way this one is. The
+// comparator is part of the collection's identity, not decoration: an empty
+// built by sorted-map-by that came back ordering by DefaultCompare would
+// reorder everything poured into it, with nothing reporting the change.
+func (m *SortedMap) Empty() Collection {
+	if m.UsesDefaultComparator() {
+		return EmptySortedMap
+	}
+	return NewSortedMap(m.cmp, nil)
+}
 
 func (m *SortedMap) Conj(value Value) Collection {
 	// Accept [k v] vectors or MapEntry-like things

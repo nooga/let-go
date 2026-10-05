@@ -9,6 +9,9 @@ produces a binary that boots via `rt.BootCore`, loads the program namespaces
 Frame emission is opt-in (`--entry-frame`) so package-only callers such as
 Gloat keep historical behavior and own their own executable templates.
 
+`lg compile examples/aot/native-entry/fib.lg` does all of this in one step and
+writes `./fib`. `build.sh` spells the steps out.
+
 ```
 ./examples/aot/native-entry/build.sh
 ./examples/aot/native-entry/out/fib.native       # => 55

@@ -5,8 +5,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -16,11 +14,12 @@ import (
 // prevents is a clean git merge of two Flag* declarations that both use the
 // same shift (the #501 / #624 shape).
 func TestFlagsLayout(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	// go test runs a test in its package directory; the source path from
+	// runtime.Caller is not usable, since -trimpath rewrites it.
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	dir := filepath.Dir(thisFile)
 
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {

@@ -49,6 +49,7 @@ type LispReader struct {
 	column             int
 	lastCol            int
 	lastRune           rune
+	shebangChecked     bool
 	maxPercent         int
 	inShortFn          bool
 	r                  *bufio.Reader
@@ -82,8 +83,7 @@ func NewLispReader(r io.Reader, inputName string) *LispReader {
 }
 
 // NewLispReaderWithTaggedReaders returns a reader that dispatches custom tagged
-// literals through registry. Built-in #uuid and #inst literals remain available
-// when they are not overridden.
+// literals through registry. Built-in #uuid, #inst, and #go literals remain available.
 func NewLispReaderWithTaggedReaders(r io.Reader, inputName string, registry *TaggedReaderRegistry) *LispReader {
 	return newLispReaderWithResolvers(r, inputName, registry, rootDataReaderResolver)
 }
@@ -92,6 +92,12 @@ func newLispReaderWithResolvers(r io.Reader, inputName string, registry *TaggedR
 	reader := NewLispReader(r, inputName)
 	reader.taggedReaders = registry
 	reader.dataReaderResolver = resolver
+	return reader
+}
+
+func newDataReaderWithResolvers(r io.Reader, inputName string, registry *TaggedReaderRegistry, resolver taggedDataReaderResolver) *LispReader {
+	reader := newLispReaderWithResolvers(r, inputName, registry, resolver)
+	reader.data = true
 	return reader
 }
 
@@ -172,7 +178,42 @@ func (r *LispReader) unread() error {
 	return err
 }
 
+// skipShebang consumes a `#!` first line, which lets an .lg file run as an
+// executable script (`#!/usr/bin/env lg`). Only the very start of the input
+// qualifies; anywhere else `#!` stays an invalid hash macro, and the data
+// reader keeps Clojure's behavior. It peeks before any rune is read: a Peek
+// between ReadRune and UnreadRune would invalidate that UnreadRune, but here
+// no rune has been read yet, and nothing is consumed unless the line is a
+// shebang.
+func (r *LispReader) skipShebang() error {
+	if r.data || r.pos != 0 {
+		return nil
+	}
+	if b, _ := r.r.Peek(2); len(b) < 2 || b[0] != '#' || b[1] != '!' {
+		return nil
+	}
+	for {
+		c, err := r.next()
+		if err == io.EOF {
+			// Like a `;` comment, the line may end the input.
+			return nil
+		}
+		if err != nil {
+			return NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		if c == '\n' || c == '\r' {
+			return nil
+		}
+	}
+}
+
 func (r *LispReader) eatWhitespace() (rune, error) {
+	if !r.shebangChecked {
+		r.shebangChecked = true
+		if err := r.skipShebang(); err != nil {
+			return -1, err
+		}
+	}
 	ch, err := r.next()
 	if err != nil {
 		return -1, NewReaderError(r, "unexpected error").Wrap(err)
@@ -824,11 +865,18 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 }
 
 func readSet(r *LispReader, _ rune) (vm.Value, error) {
-	startLine := r.line
-	startCol := max(
-		// -2 because '#' and '{' were consumed
-		r.column-2, 0)
-	ret := vm.EmptyList
+	// A set literal reads as a set VALUE, the way map and vector literals read
+	// as maps and vectors. It used to read as the form `(hash-set …)`, which
+	// compiled correctly but made read-string return a constructor call instead
+	// of data:
+	//
+	//	(read-string "#{1}")   ;=> (hash-set 1)   ; before
+	//	(read-string "#{1}")   ;=> #{1}           ; now, and what Clojure returns
+	//
+	// Evaluation is unchanged: compileForm's vm.SetType case emits the same
+	// hash-set invocation and compiles each element, so `#{x (f y)}` still
+	// evaluates its elements.
+	var forms []vm.Value
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -845,28 +893,19 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		if form.Type() != vm.VoidType {
-			ret = ret.Conj(form).(*vm.List)
-		}
+		// Collection readers share appendNonVoid so #?@ elements are spliced
+		// and the reader's one-shot splicing state cannot leak to the enclosing
+		// collection. Duplicate detection must run after that expansion.
+		forms = appendNonVoid(r, forms, form)
 	}
-	if r.data {
-		vals := make([]vm.Value, 0)
-		for s := ret.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-			vals = append(vals, s.First())
+
+	result := vm.EmptyPersistentSet
+	for _, form := range forms {
+		if result.Contains(form) == vm.TRUE {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("Duplicate key: %s", form))
 		}
-		for i := range vals {
-			for j := i + 1; j < len(vals); j++ {
-				if vm.ValueEquals != nil && vm.ValueEquals(vals[i], vals[j]) {
-					return vm.NIL, NewReaderError(r, "duplicate element in set literal: "+vals[i].String())
-				}
-			}
-		}
-		return vm.NewSet(vals), nil
+		result = result.Conj(form).(*vm.PersistentSet)
 	}
-	result := ret.Cons(vm.Symbol("hash-set"))
-	vm.FormSource.Set(result, vm.SourceInfo{
-		File: r.inputName, Line: startLine, Column: startCol,
-	})
 	return result, nil
 }
 
@@ -997,6 +1036,21 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
 		}
 		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-map"), vv})
+	// Sets reach syntaxQuote as real set values since set literals read as
+	// data. Without this arm they fell to the default quote branch, so
+	// `#{~x} yielded #{(unquote x)} — unquote, gensym and namespace
+	// qualification were all skipped inside a syntax-quoted set.
+	case form.Type() == vm.SetType:
+		lform := flattenSet(form)
+		uq, err := expandUnquotes(r, lform, env)
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "expanding unquotes for set")
+		}
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat*"), uq})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing unquoted set form")
+		}
+		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-set"), vv})
 	case form.Type() == vm.ListType:
 		uq, err := expandUnquotes(r, form, env)
 		if err != nil {
@@ -1028,6 +1082,21 @@ func flattenMap(form vm.Value) vm.Value {
 			continue
 		}
 		ret = append(ret, k, v)
+	}
+	return ret
+}
+
+// flattenSet is flattenMap's counterpart for sets: a set contributes its
+// elements directly, where a map contributes alternating k, v. Needed so
+// syntaxQuote can expand unquotes inside `#{...}.
+func flattenSet(form vm.Value) vm.Value {
+	sq, ok := form.(vm.Sequable)
+	if !ok {
+		return vm.ArrayVector{}
+	}
+	ret := vm.ArrayVector{}
+	for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+		ret = append(ret, s.First())
 	}
 	return ret
 }
@@ -1298,7 +1367,9 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 		} else {
 			// Skip the value form — it may contain dialect-specific syntax
 			// we can't parse. Count balanced parens/brackets/braces.
-			skipReaderForm(r)
+			if err := skipReaderForm(r); err != nil {
+				return vm.NIL, NewReaderError(r, "skipping reader conditional value").Wrap(err)
+			}
 		}
 	}
 	r.splicing = splicing
@@ -1308,22 +1379,22 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 // skipReaderForm consumes a single form from the reader, handling balanced
 // delimiters. Used to skip unmatched reader conditional branches that may
 // contain syntax our reader doesn't support.
-func skipReaderForm(r *LispReader) {
+func skipReaderForm(r *LispReader) error {
 	ch, err := r.eatWhitespace()
 	if err != nil {
-		return
+		return nil
 	}
 	// Skip line comments
 	for ch == ';' {
 		for ch != '\n' && ch != '\r' {
 			ch, err = r.next()
 			if err != nil {
-				return
+				return nil
 			}
 		}
 		ch, err = r.eatWhitespace()
 		if err != nil {
-			return
+			return nil
 		}
 	}
 	switch ch {
@@ -1331,10 +1402,17 @@ func skipReaderForm(r *LispReader) {
 		close := map[rune]rune{'(': ')', '[': ']', '{': '}'}[ch]
 		depth := 1
 		inString := false
+		// `#` is NOT a terminating macro in this reader: foo# and foo#bar are
+		// ordinary symbols (auto-gensym relies on it), so a `#` met while inside
+		// an atom is a symbol constituent, not a dispatch. Only a `#` that BEGINS
+		// a token starts a dispatch form. inAtom tracks that the way the
+		// tokenizer does (IsTokenBoundary). The prefix macros ' ` ~ @ ^ are also
+		// non-terminating but never start an atom, so '#{1 2} still dispatches.
+		inAtom := false
 		for depth > 0 {
 			c, err := r.next()
 			if err != nil {
-				return
+				return nil
 			}
 			if inString {
 				switch c {
@@ -1350,7 +1428,7 @@ func skipReaderForm(r *LispReader) {
 				// Character literal (e.g. \), \", \(): skip the next char so a
 				// delimiter or quote in a char literal doesn't corrupt the count.
 				if _, err := r.next(); err != nil {
-					return
+					return nil
 				}
 			case ';':
 				// Line comment: skip to end of line so a delimiter inside a
@@ -1358,11 +1436,28 @@ func skipReaderForm(r *LispReader) {
 				for c != '\n' && c != '\r' {
 					c, err = r.next()
 					if err != nil {
-						return
+						return nil
 					}
 				}
 			case '"':
 				inString = true
+			case '#':
+				if inAtom {
+					// foo#, foo#bar: the `#` belongs to the symbol being skipped.
+					break
+				}
+				// A dispatch form nests its own payload. Tagged literals with a raw
+				// reader (#go{...}) are not Lisp forms, so delimiters inside Go
+				// strings, runes, or comments must not reach this counter; skip the
+				// whole dispatch form through the same path a top-level one takes.
+				if err := r.unread(); err != nil {
+					return nil
+				}
+				if err := skipReaderForm(r); err != nil {
+					return err
+				}
+				// A whole form was consumed; whatever follows starts a new token.
+				continue
 			case '(', '[', '{':
 				depth++
 			case close:
@@ -1371,13 +1466,21 @@ func skipReaderForm(r *LispReader) {
 				// closing a different delimiter type — still decrement if matching any open
 				depth--
 			}
+			switch {
+			case IsTokenBoundary(c), c == '(', c == ')', c == '[', c == ']', c == '{', c == '}':
+				inAtom = false
+			case !inAtom && (c == '\'' || c == '`' || c == '~' || c == '@' || c == '^'):
+				// A prefix macro outside an atom: still at a token start.
+			default:
+				inAtom = true
+			}
 		}
 	case '"':
 		// Skip string
 		for {
 			c, err := r.next()
 			if err != nil || c == '"' {
-				return
+				return nil
 			}
 			if c == '\\' {
 				r.next()
@@ -1387,19 +1490,19 @@ func skipReaderForm(r *LispReader) {
 		// Hash dispatch — skip the next form too
 		c, err := r.next()
 		if err != nil {
-			return
+			return nil
 		}
 		switch c {
 		case '(', '{':
 			// #(...) anon fn or #{...} set — balanced delimiters.
 			r.unread()
-			skipReaderForm(r)
+			return skipReaderForm(r)
 		case '"':
 			// #"regex" — a string literal; skip to its closing quote.
 			for {
 				cc, err := r.next()
 				if err != nil {
-					return
+					return nil
 				}
 				if cc == '\\' {
 					r.next()
@@ -1409,34 +1512,74 @@ func skipReaderForm(r *LispReader) {
 			}
 		case '\'', '_':
 			// #'var-quote or #_discard — applies to the single next form.
-			skipReaderForm(r)
+			return skipReaderForm(r)
+		case '#':
+			// ##Inf / ##-Inf / ##NaN — a symbolic value (hashMacros['#']), which
+			// is an atom, not a nested form: consume the token and stop. Falling
+			// into the tag arm below would read "#Inf" as a tag and swallow the
+			// following form as its payload.
+			for {
+				cc, err := r.next()
+				if err != nil {
+					return nil
+				}
+				if IsTokenBoundary(cc) {
+					return r.unread()
+				}
+			}
 		case '?':
 			// Nested reader conditional #?(...) / #?@(...) inside a skipped
 			// branch — skip the whole (list) (consume the optional @ first).
 			cc, err := r.next()
 			if err != nil {
-				return
+				return nil
 			}
 			if cc != '@' {
 				r.unread()
 			}
-			skipReaderForm(r)
+			return skipReaderForm(r)
 		default:
 			// Tagged literal #tag form (e.g. #js [], #inst "..."): skip the tag
-			// token, THEN the form it tags. Skipping only the tag would leave
-			// the tagged collection/value behind and desync the surrounding
-			// reader-conditional, swallowing the rest of the file.
+			// token, THEN the form it tags. A registered raw reader must consume
+			// its own payload because it is not necessarily a Lisp form. Raw
+			// readers are required to be side-effect free for this reason.
+			var tag strings.Builder
+			tag.WriteRune(c)
 			for {
 				cc, err := r.next()
 				if err != nil {
-					return
+					return nil
 				}
 				if isWhitespace(cc) || isTerminatingMacro(cc) {
 					r.unread()
 					break
 				}
+				tag.WriteRune(cc)
 			}
-			skipReaderForm(r)
+			rawReader, raw, builtin, err := r.lookupRawTaggedReader(tag.String())
+			if err != nil {
+				return taggedLiteralError(r, tag.String(), err)
+			}
+			if raw && builtin {
+				// The built-in #go claims only a {-delimited payload here. Anything
+				// else is skipped as an ordinary tagged form, so a dead branch never
+				// fails on a payload it would not have read.
+				next, err := r.eatWhitespace()
+				if err != nil {
+					return nil
+				}
+				if err := r.unread(); err != nil {
+					return nil
+				}
+				raw = next == '{'
+			}
+			if raw {
+				if _, err := rawReader(taggedRawInput{reader: r}); err != nil {
+					return taggedLiteralError(r, tag.String(), err)
+				}
+				return nil
+			}
+			return skipReaderForm(r)
 		}
 	case '^':
 		// Metadata prefix (`^number x`, `^{:k v} x`, `^:kw x`): the metadata
@@ -1445,27 +1588,30 @@ func skipReaderForm(r *LispReader) {
 		// behind and desyncs the surrounding reader-conditional key/value
 		// pairing — which then consumes the closing `)` and swallows the
 		// rest of the file.
-		skipReaderForm(r) // the metadata form
-		skipReaderForm(r) // the form it attaches to
+		if err := skipReaderForm(r); err != nil { // the metadata form
+			return err
+		}
+		return skipReaderForm(r) // the form it attaches to
 	case '\'', '`', '~', '@':
 		// Quote / syntax-quote / unquote / deref prefixes each apply to the
 		// single following form. Skip that form so the prefix doesn't leave
 		// its target dangling. (`~@` composes: `~` skips a form starting with
 		// `@`, which in turn skips one more.)
-		skipReaderForm(r)
+		return skipReaderForm(r)
 	default:
 		// Atom (symbol, number, keyword, etc.) — skip to whitespace/delimiter
 		for {
 			c, err := r.next()
 			if err != nil {
-				return
+				return nil
 			}
 			if isWhitespace(c) || isTerminatingMacro(c) {
 				r.unread()
-				return
+				return nil
 			}
 		}
 	}
+	return nil
 }
 
 func readMeta(r *LispReader, _ rune) (vm.Value, error) {
@@ -1473,8 +1619,13 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
-	var m vm.Value = vm.EmptyPersistentMap
+	m := vm.EmptyPersistentMap
+	dataM := vm.EmptyPersistentMap
 	tagKey := vm.Keyword("tag")
+	assoc := func(k, v vm.Value) {
+		m = m.Assoc(k, v).(*vm.PersistentMap)
+		dataM = dataM.Assoc(k, v).(*vm.PersistentMap)
+	}
 	for {
 		// Unread the lookahead so r.Read() can dispatch normally.
 		if err := r.unread(); err != nil {
@@ -1491,23 +1642,23 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 				if !ok {
 					continue
 				}
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Map:
 			for k, val := range v {
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Keyword:
-			m = m.(*vm.PersistentMap).Assoc(v, vm.TRUE).(*vm.PersistentMap)
+			assoc(v, vm.TRUE)
 		case vm.Symbol:
-			// A bare-symbol tag (`^Iterable x`) is a type hint. Preserve it as
-			// :tag metadata (the IR's typeinfer/lowering passes can use it), but
-			// quote it so the (often host-class) symbol is a datum, not an
-			// evaluated var reference that won't resolve.
+			// Compiler readers emit a with-meta form, so quote the type-hint
+			// symbol to keep it data when that form is evaluated. Data readers
+			// attach the symbol itself, matching Clojure's metadata value.
 			quotedTag := vm.NewList([]vm.Value{vm.Symbol("quote"), v})
-			m = m.(*vm.PersistentMap).Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			m = m.Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			dataM = dataM.Assoc(tagKey, v).(*vm.PersistentMap)
 		case vm.String:
-			m = m.(*vm.PersistentMap).Assoc(tagKey, v).(*vm.PersistentMap)
+			assoc(tagKey, v)
 		default:
 			return vm.NIL, NewReaderError(r, "unsupported meta form")
 		}
@@ -1532,13 +1683,18 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
 	if r.data {
-		// Attach to the value where the runtime supports metadata; values
-		// without metadata support (maps, vectors) read as themselves, which
-		// is what with-meta does for them at runtime too.
+		// Attach to the value where the runtime supports metadata. Data
+		// attaches dataM, in which a bare-symbol tag stays a symbol as in
+		// Clojure; code reading emits a (with-meta ...) form, so m quotes the
+		// tag to keep it a datum when that form is evaluated.
+		//
+		// A target that cannot carry metadata (vm.Symbol is a plain string)
+		// deliberately falls through to the wrapper form below rather than
+		// reading as itself: returning the bare form would drop the metadata
+		// silently, while the wrapper keeps it for whoever consumes the data.
 		if im, ok := form.(vm.IMeta); ok {
-			return im.WithMeta(m), nil
+			return im.WithMeta(dataM), nil
 		}
-		return form, nil
 	}
 	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
 }
@@ -1612,14 +1768,47 @@ func classifyBuiltinTaggedLiteral(tag string) builtinTaggedLiteral {
 	}
 }
 
-func (r *LispReader) resolveCustomDataReader(tag string) (TaggedDataReader, bool, error) {
-	if reader, ok := r.taggedReaders.lookup(tag); ok {
-		return reader, true, nil
+func (r *LispReader) resolveCustomTaggedReader(tag string) (taggedReader, bool, error) {
+	if registered, ok := r.taggedReaders.lookup(tag); ok {
+		return registered, true, nil
 	}
 	if r.dataReaderResolver != nil {
-		return r.dataReaderResolver(tag)
+		reader, ok, err := r.dataReaderResolver(tag, true)
+		if err != nil {
+			return taggedReader{}, false, err
+		}
+		if ok {
+			return taggedReader{data: reader}, true, nil
+		}
 	}
-	return nil, false, nil
+	if registered, ok := defaultTaggedReader(tag); ok {
+		return registered, true, nil
+	}
+	return taggedReader{}, false, nil
+}
+
+// lookupRawTaggedReader reports the raw reader that owns tag while skipping,
+// whether it is the built-in default rather than an explicit registration, and
+// any error resolving *data-readers*. The read path treats a malformed
+// *data-readers* as fatal, so the skip path reports it too.
+func (r *LispReader) lookupRawTaggedReader(tag string) (reader TaggedRawReader, raw, builtin bool, err error) {
+	if registered, ok := r.taggedReaders.lookup(tag); ok {
+		return registered.raw, registered.raw != nil, false, nil
+	}
+	registered, ok := defaultTaggedReader(tag)
+	if !ok || registered.raw == nil {
+		return nil, false, false, nil
+	}
+	if r.dataReaderResolver != nil {
+		_, present, err := r.dataReaderResolver(tag, false)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if present {
+			return nil, false, false, nil
+		}
+	}
+	return registered.raw, true, true, nil
 }
 
 func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
@@ -1630,16 +1819,23 @@ func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
 	tagStr := tag.String()
 	builtin := classifyBuiltinTaggedLiteral(tagStr)
 
-	reader, found, err := r.resolveCustomDataReader(tagStr)
+	registered, found, err := r.resolveCustomTaggedReader(tagStr)
 	if err != nil {
 		return vm.NIL, taggedLiteralError(r, tagStr, err)
 	}
 	if !found && builtin == builtinTaggedLiteralNone && r.taggedReaders != nil {
 		return vm.NIL, NewReaderError(r, fmt.Sprintf("unknown tagged literal #%s", tagStr))
 	}
+	if registered.raw != nil {
+		value, err := registered.raw(taggedRawInput{reader: r})
+		if err != nil {
+			return vm.NIL, taggedLiteralError(r, tagStr, err)
+		}
+		return value, nil
+	}
 
 	var val vm.Value
-	if found {
+	if registered.data != nil {
 		val, err = r.ReadSkipNoValue()
 	} else {
 		val, err = r.Read()
@@ -1647,8 +1843,8 @@ func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, taggedLiteralError(r, tagStr, err)
 	}
-	if found {
-		value, err := reader(val)
+	if registered.data != nil {
+		value, err := registered.data(val)
 		if err != nil {
 			return vm.NIL, taggedLiteralError(r, tagStr, err)
 		}

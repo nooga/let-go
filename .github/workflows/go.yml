@@ -109,17 +109,19 @@ jobs:
       # (TestInteropXxh3KeepsTinygoBuildTag) was retired.
       # TestCustomMain is -short-gated for the same reason (it builds three
       # custom lg binaries and runs -w through each); without a place in this
-      # list it would never run in CI at all.
-      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip, custom main)
+      # list it would never run in CI at all. TestLgbRoundtrip's examples
+      # corpus is -short-gated on the same terms.
+      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip, custom main, lgb round-trip)
         # No -short here so the testing.Short()-gated heavyweight e2e tests run
         # full; the fast `make test` loop passes -short to skip them.
-        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip|TestCustomMain'
+        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip|TestCustomMain|TestLgbRoundtrip'
 
       # Standalone native-entry matrix (#425 / #628): lg-compile --entry-frame,
-      # embed program.lgb, go build, run. Also covers --entry-frame opt-in.
+      # embed program.lgb, go build, run. Also covers --entry-frame opt-in and
+      # the same pipeline driven by `lg compile` (#596).
       # Skipped under -short; fib remains an example under examples/aot/native-entry/.
       - name: AOT native-entry matrix (#425 / #628)
-        run: go test -v -timeout 300s ./test/e2e/ -run 'TestLgCompileEntryFrameOptIn|TestNativeEntryMatrix'
+        run: go test -v -timeout 300s ./test/e2e/ -run 'TestLgCompileEntryFrameOptIn|TestNativeEntryMatrix|TestLgCompileCommand'
 
   # Race-detector pass over the packages that hold cross-goroutine state:
   # the VM's shared runtime structures and the rt layer. Motivated by #464 —
@@ -205,6 +207,18 @@ jobs:
         run: |
           if go tool nm /tmp/lg-ro-nohttp | grep -qE 'net/http|crypto/tls'; then
             echo "net/http linked into an lg_no_http build" >&2
+            exit 1
+          fi
+      # Same guard for lg_no_json, which drops the json and transit
+      # namespaces so encoding/json's reflection codec is not linked.
+      - name: Build runtime-only without encoding/json
+        run: go build -tags lg_no_json -o /tmp/lg-ro-nojson ./cmd/lg-runtime
+      - name: Boot it
+        run: /tmp/lg-ro-nojson -v
+      - name: Assert encoding/json did not link
+        run: |
+          if go tool nm /tmp/lg-ro-nojson | grep -q 'encoding/json'; then
+            echo "encoding/json linked into an lg_no_json build" >&2
             exit 1
           fi
 
@@ -319,8 +333,9 @@ jobs:
           echo "${{ steps.clj.outputs.version }}" > .gold-clojure-version
           echo "Goldens verified against Clojure ${{ steps.clj.outputs.version }}."
 
-  # Engine parity gate + differential engine-output check: `make gogen-diff`
-  # first runs the complete-corpus engine parity gate (strict capability and
+  # Engine parity gate + differential engine-output check: after `make lowered`
+  # builds the gitignored core_go_lowered/ tree, the job first runs the
+  # complete-corpus engine parity gate (strict capability and
   # output census over every test/gold-aot/*.lg fixture, enforcing the committed
   # case ledger test/parity-ledger.txt plus the shrink-only partial and
   # divergence baselines), then runs TestGogenAOTDiff, which builds let-go twice
@@ -337,8 +352,14 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: make gogen-diff
-        run: make gogen-diff
+      - name: Generate the lowered tree
+        run: make lowered
+      # The jank harness imports core_go_lowered/test, so it needs the lowered
+      # tree in this checkout before it can build its generated Go test module.
+      - name: Jank direct-ABI generated Go gate
+        run: make test SHORT=false PKG=./test/e2e RUN=TestJankSuiteDirectABIGeneratedGo COUNT=1
+      - name: Engine parity and differential engine gate
+        run: make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff'
 
   # Single gate for every generated artifact (Policy: docs/contribution-policy.md §3):
   # the bundle is verified in lockstep with pkg/rt/core/**/*.lg (content-based, so

@@ -102,3 +102,34 @@
 
   (testing "float32 in a vector"
     (is (= "[2.5]" (write-json [(float 2.5)])))))
+
+;; Integer literals decode exactly; through float64 they round above 2^53.
+(deftest json-read-exact-integers
+  (testing "both sides of 2^53"
+    (is (= 9007199254740992 (read-json "9007199254740992")))
+    (is (= 9007199254740993 (read-json "9007199254740993")))
+    (is (= -9007199254740993 (read-json "-9007199254740993")))
+    (is (= 9007199254740993 (get (read-json "{\"id\":9007199254740993}") "id"))))
+
+  (testing "int64 limits stay ints"
+    (is (= 9223372036854775807 (read-json "9223372036854775807")))
+    (is (int? (read-json "9223372036854775807")))
+    (is (= -9223372036854775808 (read-json "-9223372036854775808")))
+    (is (int? (read-json "-9223372036854775808"))))
+
+  (testing "past int64 becomes a BigInt, as the reader does"
+    (is (= 9223372036854775808N (read-json "9223372036854775808")))
+    (is (= -9223372036854775809N (read-json "-9223372036854775809")))
+    (is (= 123456789012345678901234567890N (read-json "123456789012345678901234567890"))))
+
+  (testing "decimal and exponent forms keep the float path"
+    (is (= 1.5 (read-json "1.5")))
+    (is (= 1000 (read-json "1e3")))
+    (is (int? (read-json "1e3")))
+    (is (= 0.001 (read-json "1e-3")))
+    (is (float? (read-json "9.223372036854775808e18")))
+    (is (= 0 (read-json "-0"))))
+
+  (testing "malformed input is an error"
+    (doseq [bad ["" "01" "1." ".5" "1e" "+1" "1 2" "[1,]" "{\"a\":1" "1e400" "NaN"]]
+      (is (thrown? Exception (read-json bad)) bad))))

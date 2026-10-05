@@ -68,6 +68,36 @@ func wasmLetgoSource(letgoSrcEnv string, info *runtimeDebug.BuildInfo) (*gomod.R
 	return letgoReplacementFrom(info)
 }
 
+// writeGoModule writes go.mod and go.sum for a generated module named
+// moduleName into dir, requiring the let-go this binary runs. A host built
+// through a `replace` for let-go has that directive reproduced verbatim;
+// anything else (including LETGO_SRC set, which overrides what the binary
+// remembers) takes the ordinary gomod.Generate path. -w and `lg compile` both
+// build through it, so a generated module links the runtime that emitted it.
+func writeGoModule(dir, moduleName string) error {
+	info, _ := runtimeDebug.ReadBuildInfo()
+	rep, err := wasmLetgoSource(os.Getenv("LETGO_SRC"), info)
+	if err != nil {
+		return err
+	}
+	var mod gomod.Files
+	if rep == nil {
+		mod, err = gomod.Generate(dir, moduleName, letgoModuleVersion())
+	} else {
+		mod, err = gomod.GenerateWithReplace(dir, moduleName, *rep)
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod.Mod), 0644); err != nil {
+		return err
+	}
+	if len(mod.Sum) > 0 {
+		return os.WriteFile(filepath.Join(dir, "go.sum"), mod.Sum, 0644)
+	}
+	return nil
+}
+
 // letgoReplacementFrom reads the host's `replace` directive for let-go out of
 // its build info, or nil when there is none. The directive is carried whole
 // — a directory, or a module path with its version — because gomod cannot
@@ -168,7 +198,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string, moduleDir string) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	var chunk *vm.CodeChunk
@@ -218,7 +248,9 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		debugData, debugPath = companion, path
 	}
 
-	// 2. Create temp build directory
+	// 2. Create temp build directory. With a caller-supplied module
+	// the sources go into the directory let-go owns there instead, and the
+	// temp directory holds only the build's cache and scratch.
 	tmpDir, err := os.MkdirTemp("", "lg-wasm-*")
 	if err != nil {
 		return err
@@ -230,46 +262,41 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	goEnv := wasmBuildEnv(tmpDir)
 	goTool := gomod.GoToolPath()
 	buildTags := strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS"))
+	useTinyGo := os.Getenv("LETGO_USE_TINYGO") == "1"
+	srcDir := tmpDir
+	if moduleDir != "" {
+		// tinygo has no -mod flag, so nothing would hold it to the caller's
+		// go.mod as written.
+		if useTinyGo {
+			return fmt.Errorf("-w-module does not support LETGO_USE_TINYGO yet")
+		}
+		m, err := openCallerModule(moduleDir)
+		if err != nil {
+			return err
+		}
+		srcDir = m.GenDir()
+	}
 
 	// 3. Write generated source files
-	if err := os.WriteFile(filepath.Join(tmpDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval)), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval)), 0644); err != nil {
 		return err
 	}
 	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
-		srcDir, err := gomod.FindLetGoSourceDir()
+		letgoDir, err := gomod.FindLetGoSourceDir()
 		if err != nil {
 			return fmt.Errorf("gogen_ir wasm build requires local let-go source for wireup: %w", err)
 		}
-		if err := wasmassets.WriteGogenIRWireup(tmpDir, srcDir); err != nil {
+		if err := wasmassets.WriteGogenIRWireup(srcDir, letgoDir); err != nil {
 			return err
 		}
 	}
 
-	// 4. Write go.mod. A host built through a `replace` for let-go has that
-	// directive reproduced verbatim; anything else (including LETGO_SRC set,
-	// which overrides what the binary remembers) takes the ordinary path.
-	info, _ := runtimeDebug.ReadBuildInfo()
-	rep, err := wasmLetgoSource(os.Getenv("LETGO_SRC"), info)
-	if err != nil {
-		return err
-	}
-	var mod gomod.Files
-	if rep == nil {
-		mod, err = gomod.Generate(tmpDir, wasmModuleName, letgoModuleVersion())
-	} else {
-		mod, err = gomod.GenerateWithReplace(tmpDir, wasmModuleName, *rep)
-	}
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(mod.Mod), 0644); err != nil {
-		return err
-	}
-	if len(mod.Sum) > 0 {
-		if err := os.WriteFile(filepath.Join(tmpDir, "go.sum"), mod.Sum, 0644); err != nil {
+	// 4. Write go.mod, unless the caller supplied one.
+	if moduleDir == "" {
+		if err := writeGoModule(tmpDir, wasmModuleName); err != nil {
 			return err
 		}
 	}
@@ -278,7 +305,6 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	// the generated app imports only runtime packages, while tidy also walks
 	// test-only deps from the replaced local module and can spuriously pull
 	// network-only packages that the wasm build itself does not need.
-	useTinyGo := os.Getenv("LETGO_USE_TINYGO") == "1"
 	wasmPath := filepath.Join(tmpDir, "app.wasm")
 	var build *exec.Cmd
 	if useTinyGo {
@@ -316,25 +342,26 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		default:
 			fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_OPT=%q is not a known tinygo -opt level (0|1|2|s|z); passing as-is\n", optLevel)
 		}
-		tgArgs := []string{"build",
-			"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode,
-			"-stack-size=" + stack}
-		if gc := os.Getenv("LETGO_TINYGO_GC"); gc != "" {
+		gc := os.Getenv("LETGO_TINYGO_GC")
+		if gc != "" {
 			switch gc {
 			case "none", "leaking", "conservative", "precise":
 			default:
 				fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_GC=%q is not a known tinygo gc (none|leaking|conservative|precise); passing as-is\n", gc)
 			}
-			tgArgs = append(tgArgs, "-gc="+gc)
 		}
-		tgArgs = append(tgArgs, "-o", wasmPath, ".")
-		build = exec.Command("tinygo", tgArgs...)
+		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags)...)
 		build.Dir = tmpDir
 		build.Env = os.Environ()
 	} else {
 		fmt.Println("building wasm...")
-		build = exec.Command(goTool, wasmassets.GoBuildArgs(wasmPath, buildTags)...)
-		build.Dir = tmpDir
+		args := wasmassets.GoBuildArgs(wasmPath, buildTags)
+		if moduleDir != "" {
+			// Explicit, so GOFLAGS=-mod=mod cannot edit the caller's go.mod.
+			args = append([]string{args[0], "-mod=readonly"}, args[1:]...)
+		}
+		build = exec.Command(goTool, args...)
+		build.Dir = srcDir
 		build.Env = append(goEnv, "GOOS=js", "GOARCH=wasm")
 	}
 	build.Stderr = os.Stderr
@@ -433,6 +460,27 @@ func wasmBuildEnv(tmpDir string) []string {
 		"GOCACHE="+filepath.Join(tmpDir, ".gocache"),
 		"GOTMPDIR="+filepath.Join(tmpDir, ".gotmp"),
 	)
+}
+
+// tinyGoBuildArgs assembles the tinygo argv, the counterpart of
+// wasm.GoBuildArgs on the stock-Go arm. buildTags carries LG_WASM_BUILD_TAGS:
+// tinygo spells build tags the same way `go build` does, and a request that
+// reaches only one arm is worse than one that reaches neither — the gogen_ir
+// wireup is written to the build dir regardless of toolchain, so an unforwarded
+// tag yields an ordinary bytecode build that is indistinguishable from a
+// successful AOT one. optLevel, panicMode, stack and gc arrive already
+// defaulted and warned about by the caller; gc empty means "leave tinygo's".
+func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string) []string {
+	args := []string{"build",
+		"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode,
+		"-stack-size=" + stack}
+	if gc != "" {
+		args = append(args, "-gc="+gc)
+	}
+	if buildTags != "" {
+		args = append(args, "-tags", buildTags)
+	}
+	return append(args, "-o", wasmPath, ".")
 }
 
 // tinygoFdWriteRe matches TinyGo's WASI fd_write import in its wasm_exec.js.

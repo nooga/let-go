@@ -52,6 +52,12 @@ func NewSortedSet(cmp Comparator, vals []Value) *SortedSet {
 
 // --- Value ---
 
+// UsesDefaultComparator reports whether s orders elements with DefaultCompare.
+// See SortedMap.UsesDefaultComparator.
+func (s *SortedSet) UsesDefaultComparator() bool {
+	return s.impl == nil || s.impl.UsesDefaultComparator()
+}
+
 func (s *SortedSet) Type() ValueType { return SortedSetType }
 func (s *SortedSet) Unbox() any      { return s.elements() }
 
@@ -113,7 +119,14 @@ func (s *SortedSet) Count() Value  { return MakeInt(s.impl.count) }
 
 // --- Collection ---
 
-func (s *SortedSet) Empty() Collection { return EmptySortedSet }
+// Empty returns an empty sorted set ordered the same way this one is.
+// See SortedMap.Empty.
+func (s *SortedSet) Empty() Collection {
+	if s.UsesDefaultComparator() {
+		return EmptySortedSet
+	}
+	return NewSortedSet(s.impl.cmp, nil)
+}
 
 func (s *SortedSet) Conj(value Value) Collection {
 	newImpl := s.impl.assocImpl(value, value)

@@ -382,3 +382,27 @@
       (finally
         (os/delete-tree (str dir "-base.tar"))
         (os/delete-tree checked-out) (os/delete-tree temp) (os/delete-tree dir)))))
+
+(deftest delta-crossings-detected-from-real-measure-output
+  (let [base-text "(ns demo)\n(defn simple [x]\n  (if x 1 2))\n"
+        head-text (str "(ns demo)\n(defn simple [x]\n"
+                       (apply str (for [i (range 1 21)] (str "  (if (= x " i ") " i "\n")))
+                       "  0" (apply str (repeat 20 ")")) "\n)\n")
+        base-corpus {:files [{:path "demo.lg" :lang :lg :text base-text}]
+                     :disk {"demo.lg" "demo.lg"}
+                     :source "revision"}
+        head-corpus {:files [{:path "demo.lg" :lang :lg :text head-text}]
+                     :disk {"demo.lg" "demo.lg"}
+                     :source "revision"}
+        base-res (q/measure {:corpus base-corpus :since "2000-01-01"})
+        head-res (q/measure {:corpus head-corpus :since "2000-01-01"})
+        d (q/compare-results base-res head-res "BASE" "HEAD")
+        crossings (:crossings d)]
+    (is (seq (:definitions (first (:files base-res)))) "base-res preserves :definitions")
+    (is (seq (:definitions (first (:files head-res)))) "head-res preserves :definitions")
+    (is (= 1 (count crossings)))
+    (is (= 'simple (:name (first crossings))))
+    (is (= :rose (:direction (first crossings))))
+    (is (= 21 (:cc (first crossings))))
+    (is (= 2 (:was (first crossings))))))
+
