@@ -361,6 +361,11 @@
     (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
     (list? v)       (boxed-list-expr v)
     (vector? v)     (boxed-with-meta v (boxed-vector-expr v))
+    ;; A sorted map satisfies map?, and boxed-map-expr renders any map as a
+    ;; vm.NewPersistentMap literal — same entries, no ordering. Nothing here can
+    ;; re-emit a comparator either, so a sorted map is not a Go literal: return
+    ;; nil, the "can't lower this" signal the boxed-*-expr helpers already use.
+    (sorted? v)     nil
     (map? v)        (boxed-with-meta v (boxed-map-expr v))
     ;; Reachable since read-string reads data: `(quote #{1 2})` is a set
     ;; CONSTANT, where a code-read source only ever produced (hash-set 1 2).
