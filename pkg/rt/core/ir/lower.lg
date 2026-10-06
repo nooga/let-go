@@ -604,14 +604,9 @@
           ;; be negative when drop-count < argc (i.e., args at top overlap
           ;; the "old" slots they replace).
           ;; Target runtime SP after this op = target-params (RECUR
-          ;; rebuilds the stack from scratch). Target junk = 0.
-          ;;
-          ;; The same applies with drop-count 0 when this block carries
-          ;; junk and the target was entered with none: a loop body below
-          ;; a branch-if whose args sit at the bottom (LICM threads its
-          ;; hoisted values that way) jumps back to a header the entry
-          ;; reached with a clean stack. A plain jump would land with the
-          ;; junk still below the params.
+          ;; rebuilds the stack from scratch). Target junk = 0. Also taken
+          ;; at drop-count 0 when this block's junk would follow a jump
+          ;; into a target entered clean (a LICM-threaded loop's back edge).
           (or (pos? drop-count)
               (and (pos? cur-junk)
                    (= 0 (get (:block-junk-seen @l) target))))
