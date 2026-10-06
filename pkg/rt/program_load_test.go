@@ -231,3 +231,58 @@ func TestRunExecUnitReplayOrderAndMainOnce(t *testing.T) {
 		}
 	})
 }
+
+// A single-file program has no namespace table: its namespace arrives only as
+// unit.MainChunk, whose ns form enters it. Overrides its lowered package queued
+// (lambda-lifted fns among them) must be installed once that chunk has run, and
+// for that namespace only: one that exists only as decode stubs still has its
+// own chunk to run, and a replay after a drain would overwrite the overrides
+// with bytecode.
+func TestRunProgramMainChunkDrainsOnlyTheNamespaceItDefines(t *testing.T) {
+	const (
+		mainNS = "entryframesinglefile"
+		stubNS = "entryframesinglefile.later"
+	)
+	nsMu.Lock()
+	for _, name := range []string{mainNS, stubNS} {
+		delete(nsRegistry, name)
+		delete(pendingGoOverrides, name)
+	}
+	nsMu.Unlock()
+	prev := CurrentNS.Deref()
+	defer CurrentNS.SetRoot(prev)
+
+	native, err := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+		return vm.Int(7), nil
+	})
+	if err != nil {
+		t.Fatalf("wrap native: %v", err)
+	}
+	RegisterGoOverrides(mainNS, map[string]vm.Value{"lifted": native})
+	RegisterGoOverrides(stubNS, map[string]vm.Value{"lifted": native})
+	_ = DefNSBare(mainNS) // decode stubs for the chunk's own vars
+	_ = DefNSBare(stubNS) // decode stubs for a namespace the program only refers to
+
+	inNS := CoreNS.Lookup("in-ns").(*vm.Var).Deref()
+	unit := &bytecode.ExecUnit{MainChunk: mkLogChunk(inNS, vm.Symbol(mainNS))}
+
+	if err := LoadProgramNamespaces(unit); err != nil {
+		t.Fatalf("LoadProgramNamespaces: %v", err)
+	}
+	if err := RunProgramMainChunk(unit); err != nil {
+		t.Fatalf("RunProgramMainChunk: %v", err)
+	}
+	v := LookupNS(mainNS).LookupLocal(vm.Symbol("lifted"))
+	if v == nil {
+		t.Fatal("lifted var missing: the single-file program's overrides were never installed")
+	}
+	if got, err := v.Deref().(vm.Fn).Invoke(nil); err != nil || got != vm.Int(7) {
+		t.Fatalf("lifted: got %v, %v; want 7", got, err)
+	}
+	if LookupNS(stubNS).LookupLocal(vm.Symbol("lifted")) != nil {
+		t.Fatalf("%s: override installed although the namespace exists only as decode stubs", stubNS)
+	}
+	if pendingGoOverrides[stubNS] == nil {
+		t.Fatalf("%s: override no longer pending; its chunk has not run", stubNS)
+	}
+}
