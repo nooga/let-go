@@ -49,6 +49,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Docs frontmatter convention + maintenance hook | `frontmatter-hook.md` |
 | Docs judgement-layer report (stale/supersession/index) | `docs-status.md` |
 | Comment report (devlog/restatement/density) + how to act on it | `comment-lint.md` |
+| What fraction of a program the Go lowerer emits, and why the rest falls back | `lowering-census.md` |
 | Build, test, lint, regenerate, and the CI gate map | `contributor-workflow.md` |
 | Where CI runner time goes (measurement + `scripts/ci-usage.sh`) | `ci-actions-usage.md` |
 | Code-quality score report (`make quality`) | `scripts/quality.lg` (complexity, duplication, coverage, defect density; run `make quality`) |
