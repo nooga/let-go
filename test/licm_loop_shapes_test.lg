@@ -1,0 +1,130 @@
+;; LICM on two loop shapes that used to fail ir.validate and send the whole
+;; function back to the VM (let-go#1026, #1027). Each case asserts that the
+;; Go target lowers the form (:status, not generated text) and that the same
+;; form, IR-compiled through the optimizing pipeline that includes LICM,
+;; returns what the plain bytecode compiler's version returns.
+(ns test.licm-loop-shapes-test
+  (:require
+   [ir.passes.pipeline :as pipeline]
+   [ir.passes.typeinfer :as typeinfer]
+   [test :refer :all]))
+
+(def ^:private this-ns (find-ns 'test.licm-loop-shapes-test))
+
+;; Deterministic stand-in for an input read: each call returns the next key.
+;; Impure on purpose, so LICM must leave the call inside the loop.
+(def key-feed (atom []))
+(def key-reads (atom 0))
+(defn licm-read-key []
+  (swap! key-reads inc)
+  (let [k (first @key-feed)]
+    (swap! key-feed rest)
+    k))
+
+(defn- go-status [form]
+  (binding [pipeline/*target* :go
+            typeinfer/*typeinfer-max-drains* nil]
+    (:status (pipeline/compile-form form this-ns))))
+
+(defn- rename [form suffix]
+  (apply list (first form) (symbol (str (second form) suffix)) (drop 2 form)))
+
+;; Defines the form twice, as <name>-vm through the bytecode compiler and as
+;; <name>-ir through *ir-compile* in strict mode (a pipeline failure throws
+;; rather than falling back), and returns both fns.
+(defn- vm-and-ir [form]
+  (binding [*ns* this-ns]
+    (let [vm (binding [*ir-compile* false] (eval (rename form "-vm")))
+          ir (binding [*ir-compile* true *ir-compile-strict* true]
+               (eval (rename form "-ir")))]
+      [@vm @ir])))
+
+(defn- run-with-keys [f ks & args]
+  (reset! key-feed ks)
+  (reset! key-reads 0)
+  (let [v (apply f args)]
+    [v @key-reads]))
+
+;; --- let-go#1026: a zero-binding loop -------------------------------------
+;; In a zero-arg fn the entry Branch to the loop is InstId 0. The VM checks
+;; matter as much as the status: threading a hoisted value through that
+;; Branch passes validation once done, but the bytecode lowerer drops the
+;; args of a terminator at InstId 0 and the call indexes past its stack.
+
+(def zero-binding-let
+  '(defn licm-zero-let []
+     (loop [] (let [k (licm-read-key)] (if (= k "7") (recur) k)))))
+
+(def zero-binding-test
+  '(defn licm-zero-test []
+     (loop [] (if (= (licm-read-key) "7") (recur) (licm-read-key)))))
+
+(def zero-binding-while
+  '(defn licm-zero-while []
+     (loop [] (when (= (licm-read-key) "7") (recur)))))
+
+(deftest zero-binding-loop-lowers
+  (testing "a zero-binding loop around an impure call lowers for the Go target"
+    (is (= :lowered (go-status zero-binding-let)))
+    (is (= :lowered (go-status zero-binding-test)))
+    (is (= :lowered (go-status zero-binding-while)))))
+
+(deftest zero-binding-loop-matches-vm
+  (testing "the IR-compiled loop returns what the VM returns, reading each key once"
+    (doseq [form [zero-binding-let zero-binding-test zero-binding-while]]
+      (let [[vm ir] (vm-and-ir form)
+            ks      ["7" "7" "3" "5" "9"]]
+        (is (= (run-with-keys vm ks) (run-with-keys ir ks)))))))
+
+;; --- let-go#1027: a hoisted call sharing its callee LoadVar ---------------
+;; CSE merges identical in-loop LoadVars, so `(vector 0 1)`, which LICM hoists,
+;; and `(vector i ...)`, which stays in the loop, call through one LoadVar.
+;; Hoisting must leave that LoadVar in place for the call that stays.
+
+(def shared-callee
+  '(defn licm-shared-callee [n]
+     (loop [i 0 acc []]
+       (if (< i n)
+         (recur (inc i) (conj acc (vector i (vector 0 1))))
+         acc))))
+
+;; The function the issue reports. The bytecode IR lowerer rejects it with or
+;; without LICM ("value not on stack"), so only its Go lowering is checked;
+;; shared-callee carries the value check for the same mechanism.
+(def bfs-path
+  '(defn licm-bfs-path [grid goal-fn]
+     (let [start [0 0]]
+       (loop [visited #{start} queue [[start nil]] found nil steps 0]
+         (if (or (empty? queue) found (>= steps 3000))
+           found
+           (let [[pos first-dir] (first queue)
+                 queue (subvec queue 1)
+                 [cx cy] pos
+                 state (reduce (fn [[visited queue found] [dx dy]]
+                                 (if found
+                                   [visited queue found]
+                                   (let [nx (+ cx dx) ny (+ cy dy)
+                                         npos [nx ny]
+                                         tile (get-in grid [ny nx])]
+                                     (if (and tile (not (contains? visited npos)))
+                                       (let [visited (conj visited npos)
+                                             step-dir (or first-dir [dx dy])]
+                                         (if (goal-fn npos tile)
+                                           [visited queue step-dir]
+                                           [visited (conj queue [npos step-dir]) found]))
+                                       [visited queue found]))))
+                               [visited queue found]
+                               [[0 -1] [0 1] [-1 0] [1 0]])]
+             (recur (first state) (second state) (nth state 2) (inc steps))))))))
+
+(deftest shared-callee-loop-lowers
+  (testing "a loop whose hoisted call shares its callee LoadVar lowers for the Go target"
+    (is (= :lowered (go-status shared-callee)))
+    (is (= :lowered (go-status bfs-path)))))
+
+(deftest shared-callee-loop-matches-vm
+  (testing "the IR-compiled loop returns what the VM returns"
+    (let [[vm ir] (vm-and-ir shared-callee)]
+      (is (= [[0 [0 1]] [1 [0 1]] [2 [0 1]]] (vm 3)))
+      (is (= (vm 3) (ir 3)))
+      (is (= (vm 0) (ir 0))))))
