@@ -70,7 +70,7 @@
     [v @key-reads]))
 
 ;; --- let-go#1026: a zero-binding loop -------------------------------------
-;; In a zero-arg fn the entry Branch to the loop is InstId 0 (let-go#1029).
+;; In a zero-arg fn the entry Branch to the loop is InstId 0.
 ;; LICM hoists the loop's constant to the entry block and passes it on that
 ;; Branch; the bytecode lowerer must emit the Branch's args, or the call
 ;; indexes past its stack. The VM checks run in strict mode, so a fallback
@@ -182,7 +182,7 @@
       (ir/add-terminator! f b1 :return [p1] nil)
       (ir/add-terminator! f b2 :return [p2] nil)
       (is (= 0 br))
-      ;; Asymmetric args are the lowerer's precondition, not the IR's (#978).
+      ;; Asymmetric args are the lowerer's precondition, not the IR's.
       (is (nil? (validate-error f)))
       (is (re-find #"block #0 :branch-if has asymmetric" (str (lower-error f)))))))
 
