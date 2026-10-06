@@ -1,0 +1,24 @@
+;; Host-class namespaces (Float, Long, TimeUnit, System, ...) are created from
+;; Go so that Class/member forms resolve. Code evaluated in one, as after
+;; (in-ns 'Float), must see clojure.core like any other namespace does; the Go
+;; constructor used to skip the core refer every other namespace gets, so even
+;; (inc 1) failed with "Can't resolve inc".
+(ns test.host-class-ns-refers-core-test
+  (:require
+   [test :refer :all]))
+
+(defn- eval-in [ns-sym form]
+  (binding [*ns* (find-ns ns-sym)]
+    (eval form)))
+
+(deftest host-class-namespaces-refer-clojure-core
+  (doseq [n '[Float Long TimeUnit System DateTimeFormatter Instant]]
+    (testing (str n)
+      (is (some? (find-ns n)))
+      (is (= 2 (eval-in n '(inc 1))))
+      (is (= 1 (eval-in n '(let [a 1] (or nil a)))))
+      (is (= "boom" (eval-in n '(try (throw (ex-info "boom" {})) (catch e (ex-message e)))))))))
+
+(deftest host-class-members-still-resolve
+  (is (= 42 (Long/parseLong "42")))
+  (is (= 1.5 (Float/parseFloat "1.5"))))
