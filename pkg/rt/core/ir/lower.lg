@@ -792,7 +792,7 @@
         params (ir/block-params bid f)
         insts  (ir/block-insts bid f)
         term   (ir/block-term bid f)
-        term-op (when (and term (not (zero? term))) (ir/op term f))
+        term-op (when term (ir/op term f))
         ;; For :branch-if, defer the cond's emission past the body walk
         ;; so the branch-target args can be materialized BELOW the cond
         ;; (positions 0..N-1) before BRANCH_FALSE pops the cond.
@@ -860,8 +860,9 @@
           nil
           :else (emit-inst! l nid))))
 
-    ;; Terminator.
-    (when (and term (not (zero? term)))
+    ;; Terminator. nil is the only "no terminator": InstId 0 is a real
+    ;; Inst, and an entry block that holds nothing but its Branch has it.
+    (when term
       (cond
         (= term-op :branch-if)
         (let [cond-aux (ir/aux term f)
@@ -938,7 +939,7 @@
 
 (defn- block-succs [f bid]
   (let [term (ir/block-term bid f)]
-    (if (or (nil? term) (zero? term))
+    (if (nil? term)
       []
       (let [op  (ir/op term f)
             aux (ir/aux term f)]
