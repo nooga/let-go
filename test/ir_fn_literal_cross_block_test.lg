@@ -1,0 +1,50 @@
+;; A function literal is an allocation with identity: lowering creates it once
+;; and every use sees that object (never one closure per reference). A literal
+;; bound outside an `if` or `loop` and used inside it reaches the inner blocks
+;; as a block argument, like any value that cannot be re-created at its use;
+;; the IR builder used to treat it as a re-creatable constant, so the bytecode
+;; lowerer rejected every such defn.
+(ns test.ir-fn-literal-cross-block-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+(defn- strict-defn [src]
+  (binding [*ir-compile* true *ir-compile-strict* true]
+    (eval (read-string src))))
+
+(deftest fn-literal-used-in-both-branches
+  (let [f (strict-defn "(defn ir-fnlit-branches [x] (let [g (fn [y] (inc y))] (if x (g 1) (g 2))))")]
+    (is (= 2 (@f true)))
+    (is (= 3 (@f false)))))
+
+(deftest fn-literal-used-in-a-loop
+  (let [f (strict-defn "(defn ir-fnlit-loop [n] (let [g (fn [y] (+ y 2))] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (g acc)) acc))))")]
+    (is (= 6 (@f 3)))
+    (is (= 0 (@f 0)))))
+
+(deftest fn-literal-keeps-its-identity-across-blocks
+  (let [f (strict-defn "(defn ir-fnlit-identity [x] (let [g (fn [y] y)] (if x [g g] [g g])))")]
+    (doseq [x [true false]]
+      (let [[a b] (@f x)]
+        (is (fn? a))
+        (is (identical? a b))))))
+
+;; A literal used once, inside one branch, is created at that use like any
+;; single-use value. Pinning it under the branch's stack left the two branches
+;; of the join at different depths, so the lowerer rejected the defn.
+(deftest single-use-fn-literals-inside-branches
+  (let [f (strict-defn "(defn ir-fnlit-cond [xs] (cond (some #(= :a %) xs) :a (every? #(= :b %) xs) :b :else :c))")]
+    (is (= :a (@f [:x :a])))
+    (is (= :b (@f [:b :b])))
+    (is (= :c (@f [:x])))))
+
+;; The other side of the same rule: a literal used once inside a leaf branch
+;; (one that jumps to the join) is emitted where it is defined, which is the
+;; shape the lowerer can carry into the join.
+(deftest single-use-fn-literal-in-a-leaf-branch
+  (let [f (strict-defn "(defn ir-fnlit-leaf [form] (cond (and (symbol? form) (not= form '&)) (list form) (vector? form) (apply concat (map ir-fnlit-leaf form)) (map? form) (apply concat (map (fn [e] (ir-fnlit-leaf (vec e))) (seq form))) :else nil))")]
+    (is (= '(a) (@f 'a)))
+    (is (= '(a b) (@f '[a & b])))
+    (is (= '(k v) (@f '{k v})))
+    (is (nil? (@f 1)))))
