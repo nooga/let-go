@@ -1,0 +1,69 @@
+;; test/lowering_census_test.lg
+;; scripts/lowering-census.lg against a fixture with a known split. The test
+;; runner's cwd is test/, so the fixture is at fixtures/lowering-census here.
+(ns test.lowering-census-test
+  (:require
+   [clojure.string :as str]
+   [lowering-census :as census]
+   [test :refer :all]))
+
+(def ^:private fixture "fixtures/lowering-census/census_fixture.lg")
+
+;; main's exit code, with its report swallowed.
+(defn- exit-code [args]
+  (let [c (atom nil)]
+    (with-out-str (reset! c (census/main args)))
+    @c))
+
+(defn- row [r name arity]
+  (first (filter (fn [u] (and (= name (:name u)) (= arity (:arity u))))
+                 (mapcat :units (:namespaces r)))))
+
+(deftest counts-lowered-and-fallback-arity-units
+  (let [r (census/census-files [fixture])]
+    ;; add1, pair/1 and pair/2 lower; gap does not.
+    (is (= 3 (:lowered (:totals r))))
+    (is (= 1 (:fallback (:totals r))))
+    (is (= 75.0 (:percent (:totals r))))
+    (is (= 0 (:disagreements r)))
+    (is (= :lowered (:status (row r "add1" "1"))))
+    (is (= :lowered (:status (row r "pair" "1"))))
+    (is (= :lowered (:status (row r "pair" "2"))))
+    (is (= :fallback (:status (row r "gap" "1"))))))
+
+(deftest fallback-reason-is-grouped-by-cause
+  (let [r (census/census-files [fixture])]
+    (is (= [{:reason "ir/build: unresolved symbol" :count 1}] (:reasons r)))
+    (is (str/includes? (:detail (row r "gap" "1")) "unresolved symbol total"))))
+
+(deftest normalize-reason-folds-names-and-numbers
+  (is (= "ir/build: unresolved symbol"
+         (census/normalize-reason "ir/build: unresolved symbol foo")))
+  (is (= "ir/build: unresolved symbol"
+         (census/normalize-reason "ir/build: unresolved symbol bar")))
+  (is (= "validate/cross-block-ref"
+         (census/normalize-reason "Inst #4 (op=:call, block=1) has cross-block ref 7 (defined in block 2)")))
+  (is (= "something odd at N,N"
+         (census/normalize-reason "something odd at 12,345"))))
+
+(deftest gate-fails-below-the-floor-and-passes-at-it
+  (is (= 1 (exit-code ["--gate" "80" fixture])))
+  (is (= 0 (exit-code ["--gate" "75" fixture])))
+  (is (= 0 (exit-code [fixture]))))
+
+(deftest edn-output-reads-back
+  (let [out (with-out-str (census/main ["--edn" fixture]))
+        r   (read-string out)]
+    (is (= 3 (:lowered (:totals r))))
+    (is (= 1 (:fallback (:totals r))))))
+
+(deftest by-reason-lists-the-falling-back-unit
+  (let [out (with-out-str (census/main ["--by-reason" fixture]))]
+    (is (str/includes? out "1  ir/build: unresolved symbol"))
+    (is (str/includes? out "fixture.lowering-census/gap/1"))
+    (is (not (str/includes? out "add1")))))
+
+(deftest usage-errors-exit-2
+  (is (= 2 (exit-code [])))
+  (is (= 2 (exit-code ["--nope" fixture])))
+  (is (= 2 (exit-code ["--gate"]))))
