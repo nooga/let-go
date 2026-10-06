@@ -59,6 +59,10 @@
   (try (validate/validate-fn! f "test") nil
        (catch Exception e (ex-message e))))
 
+(defn- lower-error [f]
+  (try (lower/lower f) nil
+       (catch Exception e (ex-message e))))
+
 (defn- run-with-keys [f ks & args]
   (reset! key-feed ks)
   (reset! key-reads 0)
@@ -156,8 +160,8 @@
       (is (nil? (validate-error f)))
       (is (= 2 ((chunk->fn 0 false (lower/lower f))))))))
 
-(deftest validate-checks-branch-if-at-inst-0
-  (testing "the symmetric-args check covers a BranchIf at InstId 0"
+(deftest lower-checks-branch-if-at-inst-0
+  (testing "the lowerer's symmetric-args check covers a BranchIf at InstId 0"
     (let [f  (ir/new-fn "entry-branch-if-zero" 1 false)
           b1 (ir/add-block f)
           b2 (ir/add-block f)
@@ -178,7 +182,9 @@
       (ir/add-terminator! f b1 :return [p1] nil)
       (ir/add-terminator! f b2 :return [p2] nil)
       (is (= 0 br))
-      (is (re-find #"block #0 :branch-if has asymmetric" (str (validate-error f)))))))
+      ;; Asymmetric args are the lowerer's precondition, not the IR's (#978).
+      (is (nil? (validate-error f)))
+      (is (re-find #"block #0 :branch-if has asymmetric" (str (lower-error f)))))))
 
 ;; --- let-go#1027: a hoisted call sharing its callee LoadVar ---------------
 ;; CSE merges identical in-loop LoadVars, so `(vector 0 1)`, which LICM hoists,

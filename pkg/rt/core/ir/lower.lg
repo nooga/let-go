@@ -253,7 +253,7 @@
     (loop [i 0]
       (when (< i (count blocks))
         (let [term-id (:term (nth blocks i))]
-          (when (and term-id (> term-id 0))
+          (when term-id
             (let [term (nth insts term-id)]
               (when (= :branch-if (nth term 0))
                 (let [aux    (nth term 2)
