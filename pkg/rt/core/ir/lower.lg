@@ -605,7 +605,16 @@
           ;; the "old" slots they replace).
           ;; Target runtime SP after this op = target-params (RECUR
           ;; rebuilds the stack from scratch). Target junk = 0.
-          (pos? drop-count)
+          ;;
+          ;; The same applies with drop-count 0 when this block carries
+          ;; junk and the target was entered with none: a loop body below
+          ;; a branch-if whose args sit at the bottom (LICM threads its
+          ;; hoisted values that way) jumps back to a header the entry
+          ;; reached with a clean stack. A plain jump would land with the
+          ;; junk still below the params.
+          (or (pos? drop-count)
+              (and (pos? cur-junk)
+                   (= 0 (get (:block-junk-seen @l) target))))
           (let [;; The emitted drop must empty the RUNTIME stack down to
                 ;; the args: runtime SP = lowerer SP + this block's
                 ;; junk-below, so cur-junk is added to `ignore`. Without
