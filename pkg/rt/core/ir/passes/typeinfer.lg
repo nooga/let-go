@@ -133,28 +133,35 @@
 
 (defn- call-core-type
   "Infer result type for a small set of builtins whose result kind is
-   structurally known from operand kinds (clojure.core) or fixed (math)."
+   structurally known from operand kinds (clojure.core) or fixed (math).
+   Returns :bottom while the operand it reads is still :bottom: answering nil
+   there makes infer-one fall back to :unknown, which absorbs whatever the
+   operand later resolves to, so the result would depend on whether the
+   worklist reached the operand or the call first."
   [inst f state]
   (let [refs (ir/refs inst f)]
     (when (seq refs)
       (let [callee (first refs)
-            args   (rest refs)]
+            args   (rest refs)
+            arg0-type (fn [] (normalize-type (state-type state (first args))))]
         (when-let [[ns name] (load-var-ns+name callee f)]
           (cond
             (= ns "clojure.core")
             (cond
               (= name "transient")
               (when (= 1 (count args))
-                (transient-kind-of (normalize-type (state-type state (first args)))))
+                (let [t (arg0-type)]
+                  (if (= t :bottom) :bottom (transient-kind-of t))))
 
               (= name "persistent!")
               (when (= 1 (count args))
-                (persistent-kind-of (normalize-type (state-type state (first args)))))
+                (let [t (arg0-type)]
+                  (if (= t :bottom) :bottom (persistent-kind-of t))))
 
               (or (= name "conj!") (= name "assoc!") (= name "dissoc!") (= name "disj!"))
               (when (seq args)
-                (let [t (normalize-type (state-type state (first args)))]
-                  (when (contains? #{:transient-vector :transient-map :transient-set} t)
+                (let [t (arg0-type)]
+                  (when (contains? #{:bottom :transient-vector :transient-map :transient-set} t)
                     t)))
 
               :else nil)
