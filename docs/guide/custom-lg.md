@@ -168,6 +168,11 @@ Add `lgprogram/` to `.gitignore`.
 `lg compile` takes the same pair as `-module <dir>` and `-import <pkg>`, for a
 native binary built in your module.
 
+Run both from your custom binary, not a stock `lg`: compiling the program
+resolves its `(:require ...)` forms, so the namespaces have to exist at build
+time as well as in the output, for the reason given under
+[Distributing a single binary](#distributing-a-single-binary).
+
 ### How `-w` finds let-go
 
 Without `-w-module`, the WASM build scaffolds a fresh Go module, so it has to

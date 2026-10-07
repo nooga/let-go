@@ -126,7 +126,16 @@ func TestOpenCallerModuleImports(t *testing.T) {
 		t.Errorf("%s survived a build without -import: %v", importsFileName, err)
 	}
 
-	if _, err := openCallerModule(dir, []string{" "}); err == nil || !strings.Contains(err.Error(), "empty package path") {
-		t.Errorf("blank -import: err = %v, want an empty-path error", err)
+	// A bad -import is refused before the previous build's directory goes.
+	if _, err := openCallerModule(dir, []string{"example.com/a"}); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	for _, bad := range []string{"", " ", " example.com/a"} {
+		if _, err := openCallerModule(dir, []string{bad}); err == nil || !strings.Contains(err.Error(), "not a package path") {
+			t.Errorf("-import %q: err = %v, want a bad-path error", bad, err)
+		}
+		if _, err := os.Stat(filepath.Join(m.GenDir(), importsFileName)); err != nil {
+			t.Errorf("-import %q removed the previous build's %s: %v", bad, importsFileName, err)
+		}
 	}
 }
