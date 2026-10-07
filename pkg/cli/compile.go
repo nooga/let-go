@@ -81,14 +81,26 @@ func compileHost() vm.Value {
 			return goBuild(s[0], s[1], false)
 		}),
 		vm.Keyword("open-module"), vm.NewCtxNativeFn("open-module", func(_ *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-			if len(vs) != 1 {
-				return vm.NIL, fmt.Errorf("open-module expects 1 arg, got %d", len(vs))
+			if len(vs) != 2 {
+				return vm.NIL, fmt.Errorf("open-module expects 2 args, got %d", len(vs))
 			}
 			dir, ok := vs[0].(vm.String)
 			if !ok {
 				return vm.NIL, fmt.Errorf("open-module: arg 1 is %s, not a string", vs[0].Type())
 			}
-			m, err := openCallerModule(string(dir))
+			pkgs, err := vm.SeqToSlice(vs[1])
+			if err != nil {
+				return vm.NIL, fmt.Errorf("open-module: arg 2: %w", err)
+			}
+			imports := make([]string, len(pkgs))
+			for i, p := range pkgs {
+				str, ok := p.(vm.String)
+				if !ok {
+					return vm.NIL, fmt.Errorf("open-module: import %d is %s, not a string", i+1, p.Type())
+				}
+				imports[i] = string(str)
+			}
+			m, err := openCallerModule(string(dir), imports)
 			if err != nil {
 				return vm.NIL, err
 			}

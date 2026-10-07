@@ -14,6 +14,9 @@
            (cmd/parse-args ["-o" "bin/a" "a.lg" "-work" "w" "b.lg"]))))
   (testing "-module"
     (is (= {:files ["a.lg"] :module-dir "m"} (cmd/parse-args ["-module" "m" "a.lg"]))))
+  (testing "-import repeats, in order"
+    (is (= {:files ["a.lg"] :module-dir "m" :imports ["x/a" "x/b"]}
+           (cmd/parse-args ["-import" "x/a" "-module" "m" "-import" "x/b" "a.lg"]))))
   (testing "-- ends flag parsing"
     (is (= {:files ["-odd.lg"]} (cmd/parse-args ["--" "-odd.lg"]))))
   (testing "help"
@@ -23,7 +26,9 @@
     (is (:error (cmd/parse-args [])))
     (is (:error (cmd/parse-args ["-o"])))
     (is (:error (cmd/parse-args ["-x" "a.lg"])))
-    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"])))))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"]))))
+    (is (re-find #"needs a value" (:error (cmd/parse-args ["a.lg" "-import"]))))
+    (is (re-find #"requires -module" (:error (cmd/parse-args ["-import" "x/a" "a.lg"])))))
   (testing "-- does not skip the checks"
     (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
@@ -40,8 +45,8 @@
    :scaffold-module (fn [dir module] (swap! calls conj [:scaffold-module module]))
    :go-build        (fn [dir out] (swap! calls conj [:go-build out]))
    :go-build-readonly (fn [dir out] (swap! calls conj [:go-build-readonly out]))
-   :open-module     (fn [module-dir]
-                      (swap! calls conj [:open-module module-dir])
+   :open-module     (fn [module-dir imports]
+                      (swap! calls conj [:open-module module-dir imports])
                       {:dir (scratch-dir "gen") :import-path "example.com/host/lgprogram"})
    :make-temp-dir   (fn [] (swap! calls conj [:make-temp-dir]) (scratch-dir "tmp"))
    :remove-dir      (fn [dir] (swap! calls conj [:remove-dir]) (syscall/rm-rf dir))})
@@ -95,8 +100,21 @@
         res   (lg.compiler/build-program [path] "out" nil "host-mod" (recording-host calls))]
     (testing "builds read-only in the opened module, with no scaffold or temp dir"
       (is (nil? (:error res)))
-      (is (= [[:open-module "host-mod"]
+      (is (= [[:open-module "host-mod" []]
               [:compile-lgb "lgc.mod/-main"]
               [:go-build-readonly "out"]]
              @calls)))
+    (remove-fixture path)))
+
+(deftest build-program-passes-imports
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.imp)\n(defn -main [] (println 1))\n")]
+    (testing "hands the imports to open-module"
+      (lg.compiler/build-program [path] "out" nil "host-mod" ["x/a" "x/b"] (recording-host calls))
+      (is (= [:open-module "host-mod" ["x/a" "x/b"]] (first @calls))))
+    (testing "refuses them without a caller module, before any step runs"
+      (reset! calls [])
+      (is (re-find #"caller-supplied module"
+                   (:error (lg.compiler/build-program [path] "out" nil nil ["x/a"] (recording-host calls)))))
+      (is (empty? @calls)))
     (remove-fixture path)))

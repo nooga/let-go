@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-30
+last-verified: 2026-10-07
 ---
 
 # Building a custom `lg`
@@ -53,8 +53,8 @@ ldflags contract), and drive `-v` output. They do not become the runtime's
 identity: `(System/getProperty "let-go.version")` still reports the let-go
 version your module actually links, read from Go build info.
 
-`-w` is another exception — see [Limitation: `-w` and custom
-namespaces](#limitation--w-and-custom-namespaces) below.
+`-w` is another exception: it needs your module and the package named
+explicitly. See [`-w` and custom namespaces](#-w-and-custom-namespaces) below.
 
 Both imports are blank on purpose. The generated package registers its
 namespaces from `init()`, and a driver like go-sqlite3 registers itself with
@@ -136,23 +136,43 @@ at build time too.
 For cross-OS bundling, `-bundle-base` takes a path to a target-platform build of
 *your* binary — build `mytool` for each target, then bundle against each.
 
-## Limitation: `-w` and custom namespaces
+## `-w` and custom namespaces
 
-`-w` cannot carry your generated namespaces into the WASM output. Unlike `-b`,
-which copies the running binary, the WASM build scaffolds a *fresh* Go module
-and renders its `main.go` from a fixed template that imports let-go runtime
-packages only — it has no way to know about `example.com/mytool/interop`. A
-script that requires your namespace will compile into the image and then fail to
-resolve it at runtime.
+Unlike `-b`, which copies the running binary, `-w` builds a new Go program for
+the browser. By default it scaffolds a fresh module whose `main.go` imports
+let-go's runtime packages only, so your generated namespaces are not in it: a
+script that requires one compiles into the image and then fails to resolve it at
+runtime.
 
-`-w` still works from a custom binary for scripts that stay within the stock
-namespaces. If you need custom Go bindings in WASM today, build the WASM module
-yourself against `pkg/wasmhost` and blank-import your interop package there.
+To carry them over, build inside your own module and name the packages to link:
+
+```
+./mytool -w web -w-module . -import example.com/mytool/interop script.lg
+```
+
+- `-w-module <dir>` builds inside the Go module at `<dir>`. lg writes the
+  generated `main.go`, `program.lgb` and lowered packages into
+  `<dir>/lgprogram/` and nowhere else, and replaces that directory on every
+  build. It refuses an `lgprogram/` it did not create, which it recognizes by
+  the `.lg-generated` marker inside.
+- `-import <pkg>` blank-imports `<pkg>` into the generated program, so its
+  `init()` registers its namespaces as it does in your custom `lg`. Repeat it
+  for each package, drivers included. It needs `-w-module`.
+
+The module's `go.mod` and `go.sum` are used as they are: the build runs with
+`-mod=readonly`, so a package that no `require` provides fails the build with
+Go's own error instead of being added. `-mod=readonly` also means a `vendor/`
+directory in the module is ignored; dependencies come from the module cache.
+Add `lgprogram/` to `.gitignore`.
+
+`lg compile` takes the same pair as `-module <dir>` and `-import <pkg>`, for a
+native binary built in your module.
 
 ### How `-w` finds let-go
 
-The WASM build scaffolds a fresh Go module, so it has to decide which let-go
-that module requires. It reads your binary's build info and reproduces your
+Without `-w-module`, the WASM build scaffolds a fresh Go module, so it has to
+decide which let-go that module requires. (With `-w-module`, your `go.mod`
+decides.) It reads your binary's build info and reproduces your
 `go.mod`'s `replace` directive for `github.com/nooga/let-go` verbatim:
 
 - a directory replace (`=> /src/let-go`) becomes the same directory replace;

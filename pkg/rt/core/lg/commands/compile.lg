@@ -14,7 +14,8 @@
    [lg.compiler]))
 
 (def usage
-  (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir>] <file.lg>...\n"
+  (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir> [-import <pkg>]...]\n"
+       "                  <file.lg>...\n"
        "\n"
        "Compiles a let-go program to a standalone native binary through the Go\n"
        "backend. One input must define -main or main. Needs a Go toolchain.\n"
@@ -22,7 +23,10 @@
        "  -o <out>      output path (default: the entry file's name, no .lg)\n"
        "  -work <dir>   build the generated Go module in <dir> and keep it\n"
        "  -module <dir> build inside the Go module at <dir>, whose go.mod and\n"
-       "                go.sum are used as they are; lg writes only <dir>/lgprogram\n"))
+       "                go.sum are used as they are; lg writes only <dir>/lgprogram\n"
+       "  -import <pkg> with -module: blank-import the Go package <pkg> into the\n"
+       "                program, so its init() registers its namespaces; repeatable.\n"
+       "                The module must already require it\n"))
 
 (def ^:private flag-keys
   {"-o" :out "-work" :work-dir "-module" :module-dir})
@@ -32,11 +36,13 @@
     (empty? (:files opts)) {:error "lg compile: no input files"}
     (and (:work-dir opts) (:module-dir opts))
     {:error "lg compile: -work and -module are exclusive"}
+    (and (seq (:imports opts)) (not (:module-dir opts)))
+    {:error "lg compile: -import requires -module"}
     :else opts))
 
 (defn parse-args
-  "argv → {:files [..] :out s :work-dir s :module-dir s}, {:help true}, or
-   {:error msg}."
+  "argv → {:files [..] :out s :work-dir s :module-dir s :imports [..]},
+   {:help true}, or {:error msg}. :imports is present only when -import is."
   [argv]
   (loop [args (seq argv) opts {:files []}]
     (if-not args
@@ -45,6 +51,10 @@
         (cond
           (contains? #{"-h" "-help" "--help"} a) {:help true}
           (= "--" a) (check-opts (update opts :files into (rest args)))
+          (= "-import" a)
+          (if-let [v (second args)]
+            (recur (nnext args) (update opts :imports (fnil conj []) v))
+            {:error "lg compile: -import needs a value"})
           (contains? flag-keys a)
           (if-let [v (second args)]
             (recur (nnext args) (assoc opts (get flag-keys a) v))
@@ -70,7 +80,7 @@
       :else
       (let [res (try
                   (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
-                                             (:module-dir opts) host)
+                                             (:module-dir opts) (:imports opts) host)
                   (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
         (if (:error res)
           (do (err-println (:error res)) 1)
