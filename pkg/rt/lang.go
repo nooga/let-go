@@ -4127,8 +4127,6 @@ func installLangNS() {
 		default:
 			return vm.NIL, fmt.Errorf("index-of expected String or Char as second arg")
 		}
-		strRunes := []rune(string(s))
-		needleRunes := []rune(needle)
 		start := 0
 		if len(vs) == 3 {
 			from, ok := vs[2].(vm.Int)
@@ -4137,14 +4135,29 @@ func installLangNS() {
 			}
 			start = int(from)
 		}
-		if start < 0 || start > len(strRunes) {
+		str := string(s)
+		if !vm.ByteSearchable(needle) {
+			strRunes := []rune(str)
+			if start < 0 || start > len(strRunes) {
+				return vm.NIL, nil
+			}
+			idx := runeIndex(strRunes[start:], []rune(needle))
+			if idx == -1 {
+				return vm.NIL, nil
+			}
+			return vm.MakeInt(idx + start), nil
+		}
+		// Search bytes from start's byte offset and count runes up to the
+		// hit, instead of converting the whole string to []rune per call.
+		bstart, ok := vm.RuneOffset(str, start)
+		if !ok {
 			return vm.NIL, nil
 		}
-		idx := runeIndex(strRunes[start:], needleRunes)
+		idx := strings.Index(str[bstart:], needle)
 		if idx == -1 {
 			return vm.NIL, nil
 		}
-		return vm.MakeInt(idx + start), nil
+		return vm.MakeInt(start + utf8.RuneCountInString(str[bstart:bstart+idx])), nil
 	})
 	ns.Def("index-of", indexOf)
 
@@ -4166,24 +4179,45 @@ func installLangNS() {
 		default:
 			return vm.NIL, fmt.Errorf("last-index-of expected String or Char as second arg")
 		}
-		strRunes := []rune(string(s))
-		needleRunes := []rune(needle)
-		end := len(strRunes)
+		end := -1 // rune index the match must end by; -1 means the whole string
 		if len(vs) == 3 {
 			from, ok := vs[2].(vm.Int)
 			if !ok {
 				return vm.NIL, fmt.Errorf("last-index-of expected Int as third arg")
 			}
+			// Nothing is found before index 0, as in Clojure. The empty
+			// needle at from -1 keeps let-go's existing 0 (Java returns -1).
+			if from < 0 {
+				if needle == "" && from == -1 {
+					return vm.MakeInt(0), nil
+				}
+				return vm.NIL, nil
+			}
 			end = int(from) + 1
 		}
-		if end > len(strRunes) {
-			end = len(strRunes)
+		str := string(s)
+		if !vm.ByteSearchable(needle) {
+			strRunes := []rune(str)
+			if end < 0 || end > len(strRunes) {
+				end = len(strRunes)
+			}
+			idx := runeLastIndex(strRunes[:end], []rune(needle))
+			if idx == -1 {
+				return vm.NIL, nil
+			}
+			return vm.MakeInt(idx), nil
 		}
-		idx := runeLastIndex(strRunes[:end], needleRunes)
+		bend := len(str)
+		if end >= 0 {
+			if bo, ok := vm.RuneOffset(str, end); ok {
+				bend = bo
+			}
+		}
+		idx := strings.LastIndex(str[:bend], needle)
 		if idx == -1 {
 			return vm.NIL, nil
 		}
-		return vm.MakeInt(idx), nil
+		return vm.MakeInt(utf8.RuneCountInString(str[:idx])), nil
 	})
 	ns.Def("last-index-of", lastIndexOf)
 

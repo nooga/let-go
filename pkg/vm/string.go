@@ -121,23 +121,26 @@ func (l String) InvokeMethod(name Symbol, args []Value) (Value, error) {
 			if !ok {
 				return NIL, fmt.Errorf("string.charAt index must be an int, got %s", args[0].Type().Name())
 			}
-			rs := []rune(string(l))
-			if i < 0 || int(i) >= len(rs) {
-				return NIL, fmt.Errorf("string.charAt: index %d out of bounds for length %d", int(i), len(rs))
+			r, ok := RuneAt(string(l), int(i))
+			if !ok {
+				return NIL, fmt.Errorf("string.charAt: index %d out of bounds for length %d", int(i), utf8.RuneCountInString(string(l)))
 			}
-			return Char(rs[i]), nil
+			return Char(r), nil
 		}
 	case "indexOf":
 		if len(args) == 1 || len(args) == 2 {
-			rs := []rune(string(l))
-			from := 0
+			str := string(l)
+			from, bfrom := 0, 0
 			if len(args) == 2 {
 				f, ok := args[1].(Int)
 				if !ok {
 					return NIL, fmt.Errorf("string.indexOf fromIndex must be an int, got %s", args[1].Type().Name())
 				}
 				// Java clamps rather than throwing on out-of-range fromIndex.
-				from = min(max(int(f), 0), len(rs))
+				from = max(int(f), 0)
+				if bfrom, ok = RuneOffset(str, from); !ok {
+					from, bfrom = utf8.RuneCountInString(str), len(str)
+				}
 			}
 			var needle string
 			switch a := args[0].(type) {
@@ -150,7 +153,18 @@ func (l String) InvokeMethod(name Symbol, args []Value) (Value, error) {
 			default:
 				return NIL, fmt.Errorf("string.indexOf expected a string or character, got %s", args[0].Type().Name())
 			}
-			tail := string(rs[from:])
+			if !ByteSearchable(needle) {
+				// Search the []rune round-trip, as before: it turns each
+				// invalid byte of the string into U+FFFD, which an invalid
+				// or U+FFFD needle would match differently on the raw bytes.
+				tail := string([]rune(str)[from:])
+				idx := strings.Index(tail, needle)
+				if idx < 0 {
+					return Int(-1), nil
+				}
+				return Int(from + utf8.RuneCountInString(tail[:idx])), nil
+			}
+			tail := str[bfrom:]
 			idx := strings.Index(tail, needle)
 			if idx < 0 {
 				return Int(-1), nil
@@ -167,21 +181,33 @@ func (l String) InvokeMethod(name Symbol, args []Value) (Value, error) {
 		}
 	case "substring":
 		if len(args) == 1 || len(args) == 2 {
-			rs := []rune(string(l))
+			str := string(l)
 			begin, ok := args[0].(Int)
 			if !ok {
 				return NIL, fmt.Errorf("string.substring beginIndex must be an int, got %s", args[0].Type().Name())
 			}
-			end := Int(len(rs))
+			bbegin, okBegin := RuneOffset(str, int(begin))
+			bend, okEnd := len(str), true
+			var end Int
 			if len(args) == 2 {
 				if end, ok = args[1].(Int); !ok {
 					return NIL, fmt.Errorf("string.substring endIndex must be an int, got %s", args[1].Type().Name())
 				}
+				bend, okEnd = RuneOffset(str, int(end))
 			}
-			if begin < 0 || begin > end || int(end) > len(rs) {
-				return NIL, fmt.Errorf("string.substring: range [%d, %d) out of bounds for length %d", int(begin), int(end), len(rs))
+			if !okBegin || !okEnd || bbegin > bend {
+				n := utf8.RuneCountInString(str)
+				if len(args) == 1 {
+					end = Int(n)
+				}
+				return NIL, fmt.Errorf("string.substring: range [%d, %d) out of bounds for length %d", int(begin), int(end), n)
 			}
-			return String(rs[begin:end]), nil
+			sub := str[bbegin:bend]
+			if !utf8.ValidString(sub) {
+				// Slicing []rune turned invalid bytes into U+FFFD; keep that.
+				return String([]rune(sub)), nil
+			}
+			return String(sub), nil
 		}
 	case "startsWith":
 		if len(args) == 1 {
