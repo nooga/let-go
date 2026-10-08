@@ -2229,6 +2229,27 @@
          (keyword? (ir/aux callee f))
          (or (= 1 arg-count) (= 2 arg-count)))))
 
+(defn- boxed-call-stmts
+  "emit-call-stmts for an `invoke` that returns (vm.Value, error), into a
+   `target` whose slot may be natively typed. typeinfer can type a call's
+   result natively even when the call itself lowers to a runtime trampoline:
+   math/* results are :float (call-core-type), so `(- b (math/sqrt d))` stays
+   native float64 around a boxed call. Assigning the vm.Value result straight
+   into that float64 slot is a Go type error (#562). For a live call whose slot
+   spec is a native primitive, take the result into a vm.Value temp tb<nid>,
+   check the error, then unbox into the slot: the copy-site unbox, applied at
+   the call boundary. Function-scoped like tr<nid> (see *typed-call-temps*)."
+  [f nid target invoke]
+  (let [spec (go-type-spec (ir/type-of nid f))]
+    (if (and (live? f nid)
+             (contains? #{"bool" "int64" "float64" "string" "vm.Char"} spec))
+      (let [tmp-name (str "tb" nid)
+            tmp      (gogen/ident tmp-name)]
+        (register-typed-call-temp! tmp-name "vm.Value")
+        (conj (emit-call-stmts f tmp invoke)
+              (gogen/assign "=" target (unbox-from-value spec tmp))))
+      (emit-call-stmts f target invoke))))
+
 (defn- trampoline-call-stmts
   "Emit the runtime-dispatch trampoline for a :call, assigning the result to
    `target`. This is the always-correct fallback path: a cross-ns cached-var
@@ -2273,7 +2294,7 @@
                invoke    (gogen/call
                            (gogen/field-sel (gogen/ident "ec") "Invoke")
                            [cached-fn args-slice])]
-           (emit-call-stmts f target invoke))
+           (boxed-call-stmts f nid target invoke))
          ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
          ;; which threads ec into the dynamic invocation path.
          (let [callee (box-as-value f closed-exprs (first refs))
@@ -2284,7 +2305,7 @@
                ;; Total keyword lookup: the error is always nil at arity
                ;; 1-2, so discard it (`_`) and skip the dead check.
                [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
-               (emit-call-stmts f target invoke)))))))))
+               (boxed-call-stmts f nid target invoke)))))))))
 
 ;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
 ;; Shape: {multifn-name-str {:dispatch-type :type
