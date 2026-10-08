@@ -15,12 +15,20 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// defStaticNS returns (creating if needed) a bare namespace that holds host
-// static members (e.g. `Util/hash`, `Long/parseLong`). Unlike DefNSBare it does
-// NOT auto-refer clojure.core, so defining a member whose name overlaps a core
-// var (`Util/hash` vs `clojure.core/hash`) does not print a shadow WARNING at
-// every `lg` startup. These namespaces only carry static members; they never
-// resolve core names, so the missing refer is harmless.
+// staticNSs are the host-class namespaces defStaticNS created before
+// referStaticNamespaces ran; staticNSsReferred records that it has.
+var (
+	staticNSs         []*vm.Namespace
+	staticNSsReferred bool
+)
+
+// defStaticNS returns (creating if needed) a namespace that holds host static
+// members (e.g. `Util/hash`, `Long/parseLong`). Code evaluated in one, after
+// (in-ns 'Float) say, must see clojure.core like any namespace, so it gets the
+// core and baseline refers — but only once the installers have defined its
+// members (referStaticNamespaces): defining a member whose name overlaps a core
+// var (`Util/hash` vs `clojure.core/hash`) into a namespace that already refers
+// core prints a shadow WARNING at every `lg` startup.
 func defStaticNS(name string) *vm.Namespace {
 	name = resolveNSAlias(name)
 	nsMu.RLock()
@@ -33,8 +41,36 @@ func defStaticNS(name string) *vm.Namespace {
 	ns := vm.NewNamespace(name)
 	nsMu.Lock()
 	nsRegistry[name] = ns
+	referNow := staticNSsReferred
+	if !referNow {
+		staticNSs = append(staticNSs, ns)
+	}
 	nsMu.Unlock()
+	if referNow {
+		referCoreAndBaselines(ns)
+	}
 	return ns
+}
+
+// referStaticNamespaces gives every host-class namespace created so far the
+// clojure.core and baseline refers, after the host installers have defined
+// their members. A static namespace created later is referred on creation.
+func referStaticNamespaces() {
+	nsMu.Lock()
+	pending := staticNSs
+	staticNSs = nil
+	staticNSsReferred = true
+	nsMu.Unlock()
+	for _, ns := range pending {
+		referCoreAndBaselines(ns)
+	}
+}
+
+func referCoreAndBaselines(ns *vm.Namespace) {
+	if CoreNS != nil && ns != CoreNS {
+		ns.Refer(CoreNS, "", true)
+	}
+	referBaselines(ns)
 }
 
 // installJVMStatics registers JVM static methods and (instance? Class x) markers

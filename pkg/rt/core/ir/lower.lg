@@ -34,10 +34,6 @@
   (and (map? aux)
        (contains? #{:fn-template :multi-fn-template} (:kind aux))))
 
-(defn- fn-template-const? [f nid]
-  (and (= :const (ir/op nid f))
-       (fn-template-aux? (ir/aux nid f))))
-
 (defn- template-value [aux]
   (cond
     (and (fn-template-aux? aux) (= (:kind aux) :fn-template))
@@ -232,11 +228,8 @@
     (when (< i (count uses))
       (let [us (nth uses i)]
         (when-not (ir/uses-empty? us)
-          (let [def-block (ir/block-of i f)
-                def-op    (ir/op i f)]
-            (when-not (and (ir/op-cheap-load? def-op)
-                           (not= def-op :load-var)
-                           (not (fn-template-const? f i)))
+          (let [def-block (ir/block-of i f)]
+            (when-not (ir/reemittable-at-use? i f)
               (ir/uses-for-each us
                 (fn [user-id]
                   (let [user-block (ir/block-of user-id f)]
@@ -249,6 +242,29 @@
                                         "see follow-up issue D")
                                {:fn :lower :type (type i) :value i}))))))))))
       (recur (inc i)))))
+
+(defn- check-branch-if-symmetric-args! [f]
+  "lower-block! places ONE branch-arg shape on the stack under a :branch-if's
+   cond, so both edges must pass the same args. That is a precondition of this
+   lowerer, not of the IR: the execution form (ir.passes.cleanup) compacts params
+   per target and legitimately diverges them. Throws naming the offending block."
+  (let [blocks (ir/raw-blocks f)
+        insts  (ir/all-insts f)]
+    (loop [i 0]
+      (when (< i (count blocks))
+        (let [term-id (:term (nth blocks i))]
+          (when (and term-id (> term-id 0))
+            (let [term (nth insts term-id)]
+              (when (= :branch-if (nth term 0))
+                (let [aux    (nth term 2)
+                      t-args (ir/branch-target-args (ir/cond-target-true aux))
+                      f-args (ir/branch-target-args (ir/cond-target-false aux))]
+                  (when-not (= t-args f-args)
+                    (throw (ex-info (str "ir/lower: block #" i " :branch-if has asymmetric"
+                                         " branch-target args (true=" t-args ", false=" f-args
+                                         ") — lower-block! requires true.args == false.args")
+                                    {:fn :lower :type (type i) :value i}))))))))
+        (recur (inc i))))))
 
 ;; --- heuristics ------------------------------------------------------
 
@@ -426,6 +442,10 @@
                            (reset! crosses true)))))))
                @crosses))))))
 
+(defn- ends-in-branch-if? [f bid]
+  (let [t (ir/block-term bid f)]
+    (if (nil? t) false (= :branch-if (ir/op t f)))))
+
 (defn- should-body-emit-cheap? [l nid]
   "Decide whether a cheap-load Inst should be body-emitted at its
    def site (vs. deferred to materialize at use site).
@@ -439,10 +459,15 @@
     (cond
       (zero? uc) false
       ;; A function literal is an allocation with observable identity, not a
-      ;; replayable scalar constant. Materialize it once per lowering site and
-      ;; DUP_NTH every local reuse; re-running template-value would manufacture
-      ;; a distinct *vm.Func for each reference.
-      (fn-template-const? (f-of l) nid) true
+      ;; replayable scalar constant. With more than one use, materialize it
+      ;; once per lowering site and DUP_NTH every local reuse; re-running
+      ;; template-value would manufacture a distinct *vm.Func per reference.
+      (and (> uc 1) (ir/fn-literal-const? nid (f-of l))) true
+      ;; A single use creates it once either way. Body-emit it too, except in a
+      ;; block that ends in :branch-if: there the pinned value would sit under
+      ;; the test and reach the two successors at different depths.
+      (and (ir/fn-literal-const? nid (f-of l))
+           (not (ends-in-branch-if? (f-of l) (ir/block-of nid (f-of l))))) true
       (> uc 1) false
       :else
       ;; uc == 1 already → bitset has exactly one user-id. Pull it via
@@ -756,8 +781,8 @@
       (and us
            (not (ir/uses-empty? us))
            (= term (ir/uses-first us))))
-    ;; Not a branch arg of its own terminator (targets are symmetric
-    ;; by validate-fn!, so checking the true side suffices).
+    ;; Not a branch arg of its own terminator (lower checks the targets
+    ;; are symmetric up front, so checking the true side suffices).
     (let [tt (ir/cond-target-true (ir/aux term (f-of l)))]
       (not (some (fn [a] (= a cond-ref)) (ir/branch-target-args tt))))))
 
@@ -841,8 +866,8 @@
         (= term-op :branch-if)
         (let [cond-aux (ir/aux term f)
               t-bt     (ir/cond-target-true cond-aux)
-              ;; build-if produces symmetric args; validate-fn! enforces
-              ;; true.args == false.args, so either side works.
+              ;; check-branch-if-symmetric-args! ran in lower, so
+              ;; true.args == false.args and either side works.
               args     (ir/branch-target-args t-bt)]
           ;; 1. Materialize the branch-target args at positions 0..N-1.
           (materialize-branch-args! l args)
@@ -962,6 +987,7 @@
   (when (nil? f)
     (throw (ex-info "ir/lower: nil function" {:fn :lower :type (type f) :value f})))
   (let [l (new-lowerer f)]
+    (check-branch-if-symmetric-args! f)
     (check-cross-block! f (:uses @l))
     (let [order   (rpo-block-order f)
           next-of (loop [i 0 acc {}]

@@ -1,0 +1,11 @@
+;; Native-entry fixture: a single-file program whose lowered fn passes its own
+;; inline lambda to a higher-order fn (#783). Lambda lifting turns the lambda
+;; into a sibling var that the lowered body reads, so the program's overrides
+;; must be installed after its main chunk runs, or that var is nil.
+(ns liftedfn)
+
+(defn run-all [fs]
+  (mapv (fn [f] (f)) fs))
+
+(defn -main []
+  (println (run-all [(fn [] 1) (fn [] 2)])))

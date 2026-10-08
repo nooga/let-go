@@ -1,0 +1,12 @@
+{
+  "note": "A single-file program whose lowered fn passes its own inline lambda to mapv (#783): the lambda is lifted to a sibling var, read through rt.LookupVar, which exists only once the program's overrides are installed after its main chunk runs.",
+  "namespace": "liftedfn",
+  "generatedFile": "liftedfn/liftedfn.go",
+  "entryFn": "Main",
+  "lispFn": "run-all",
+  "goFn": "RunAll",
+  "lowering": "direct",
+  "functionFragment": "func RunAll(ec *vm.ExecContext, arg0 vm.Value) (vm.Value, error) {\n\tvar v3 vm.Value\n\tvar callErr error\n\tv3, callErr = ec.Invoke(rt.CachedVarFn(&__v_clojure_core_mapv, \"clojure.core\", \"mapv\"), []vm.Value{ec.Deref(rt.LookupVar(\"liftedfn\", \"run-all__lifted0\")), arg0})\n\tif callErr != nil {\n\t\treturn nil, callErr\n\t}\n\treturn v3, nil\n}",
+  "callFragment": "RunAll(ec, arg__3)",
+  "semanticWrap": "vm.NewArrayVector([]vm.Value{__EXPR__})"
+}
