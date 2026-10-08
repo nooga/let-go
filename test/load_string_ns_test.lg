@@ -1,0 +1,37 @@
+;; load-string evaluates in the caller's namespace and restores *ns* when it
+;; returns, as Clojure's does: an in-ns inside the loaded string holds for the
+;; rest of that string only.
+(ns test.load-string-ns-test
+  (:require
+   [test :refer :all]))
+
+(def local-value 41)
+
+(deftest load-string-evaluates-in-the-callers-namespace
+  (is (= 41 (load-string "local-value")))
+  (is (= 'test.load-string-ns-test (load-string "(ns-name *ns*)"))))
+
+(deftest load-string-restores-the-namespace
+  (let [before (ns-name *ns*)]
+    (load-string "1")
+    (is (= before (ns-name *ns*)))
+    (binding [*data-readers* {}]
+      (load-string "1"))
+    (is (= before (ns-name *ns*)))))
+
+(deftest load-string-scopes-an-in-ns-to-the-loaded-string
+  (let [before (ns-name *ns*)]
+    (is (= 'load-string-ns-other
+           (load-string "(in-ns 'load-string-ns-other) (clojure.core/ns-name clojure.core/*ns*)")))
+    (is (= before (ns-name *ns*)))))
+
+;; A thread binding of *ns* is the caller's to keep: load-string restores the
+;; namespace it changed without writing the bound value into the root. A future
+;; reads *ns* without the caller's binding, so it sees the root.
+(deftest load-string-leaves-the-root-namespace-under-a-binding
+  (let [root-before (ns-name @(future *ns*))
+        bound       (create-ns 'load-string-ns-bound)]
+    (binding [*ns* bound]
+      (load-string "1")
+      (is (= 'load-string-ns-bound (ns-name *ns*))))
+    (is (= root-before (ns-name @(future *ns*))))))

@@ -22,6 +22,8 @@ regenerated files commit together with the edit. `make check-generated` proves f
 - Canonical binary is `build/lg` (promoted to `bin/lg` after `make smoke`). Never build
   ad-hoc binaries (e.g. `go build -o letgo`) or run loose binaries from the repo root;
   execute scripts and tests with `build/lg` (e.g. `LG_SOURCE_PATHS=scripts build/lg ...`).
+- `go test` with a profiling flag (`-cpuprofile`, `-memprofile`, ...) keeps `<pkg>.test` in the
+  working directory; pass `-o build/<pkg>.test` so it never lands at the repo root.
 - No test files at the repo root; `.lg` tests under `test/`, Go tests beside their package.
 - Docs under `docs/` carry frontmatter; run `python3 scripts/docs_frontmatter_hook.py --check`
   on the files you touch.

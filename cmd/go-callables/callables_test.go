@@ -768,4 +768,3 @@ func TestAnalyzeSourceReportsActualFilenameInErrors(t *testing.T) {
 		t.Errorf("error %q still contains fictional src.go", err.Error())
 	}
 }
-
