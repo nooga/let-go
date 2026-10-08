@@ -102,7 +102,7 @@ configuration surface.
 | `*native-imports-used*` | `lower_go.lg:1352` | Go imports referenced by the fn currently being emitted. |
 | `*cross-ns-vars-used*` | `lower_go.lg:1371` | Cross-ns var references collected during emission (feeds the cross-package collector). |
 | `*call-err-used*` | `lower_go.lg:1645` | Whether the emitted fn body needs the `callErr` plumbing. |
-| `*typed-call-temps*` | `lower_go.lg:1657` | Temp bindings for typed direct calls in the current fn. |
+| `*typed-call-temps*` | `lower_go.lg:1839` | Function-scoped temps in the current fn: typed direct-call results and guards, and the trampoline-result unbox temps (`tb`/`tv`/`tk<nid>`). |
 | `*closure-arg-prefix*` | `lower_go.lg:64` | Prefix disambiguating closure-local arg names (captured-name shadowing fix). |
 | `*force-needs-error*` | `lower_go.lg:2465` | Forces error plumbing on for a body regardless of inference. |
 | `*deftype-ctors*` | `lower_go.lg:1906` | Deftype constructors in scope for native ctor-call emission. |
