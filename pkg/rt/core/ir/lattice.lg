@@ -458,17 +458,23 @@
           (recur (inc i)))
         state))))
 
+(defn join-inst-fact!
+  "Join fact into nid's fact in place. Returns true if the fact changed."
+  [state nid fact]
+  (let [old    (state-fact state nid)
+        joined (join-facts old fact)]
+    (if (= joined old)
+      false
+      (do (assoc-state-fact state nid joined)
+          true))))
+
 (defn join-inst-type! [state nid t]
-  (let [joined (join-facts (state-fact state nid) (fact-from-type t))]
-    (if (= joined (state-fact state nid))
-      state
-      (assoc-state-fact state nid joined))))
+  (join-inst-fact! state nid (fact-from-type t))
+  state)
 
 (defn join-inst-mask! [state nid mask]
-  (let [joined (join-facts (state-fact state nid) (mask-fact mask))]
-    (if (= joined (state-fact state nid))
-      state
-      (assoc-state-fact state nid joined))))
+  (join-inst-fact! state nid (mask-fact mask))
+  state)
 
 (defn flush-state-types! [state f]
   ;; Walk nids positionally and write back only the ones a join marked
