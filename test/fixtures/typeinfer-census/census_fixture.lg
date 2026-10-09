@@ -1,0 +1,16 @@
+;; Fixture for test/typeinfer_census_test.lg. `root` and `build` each get one
+;; fact from ir.passes.typeinfer's call-core-type (a math fn's :float, a
+;; transient's kind), which the test's control takes away; `add1` is typed by
+;; arithmetic alone; `pick` stays :unknown. `loaded` prints while the file
+;; loads, which must stay out of an --edn snapshot.
+(ns fixture.typeinfer-census)
+
+(def loaded (do (println "fixture.typeinfer-census loaded") true))
+
+(defn add1 [x] (+ x 1))
+
+(defn root [x] (math/sqrt x))
+
+(defn build [n] (persistent! (conj! (transient []) n)))
+
+(defn pick [m k] (get m k))
