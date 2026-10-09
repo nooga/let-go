@@ -1,0 +1,338 @@
+;; lowering-census — how much of a program the Go lowerer (ir.lower-go)
+;; lowers, and why the rest falls back.
+;;
+;;   lg scripts/lowering-census.lg <file.lg>...             table per ns + totals
+;;   lg scripts/lowering-census.lg --edn <file.lg>...       machine-readable
+;;   lg scripts/lowering-census.lg --by-reason <file.lg>... fallbacks grouped by reason, most first
+;;   lg scripts/lowering-census.lg --gate <min-percent> <file.lg>...   exit 1 below the floor
+;;   lg scripts/lowering-census.lg --follow <root> <entry.lg>...       also load the
+;;       namespaces the files require, resolved as <root>/<ns path>.lg
+;;
+;; `lg compile` emits Go for every function the lowerer accepts and a VM bridge
+;; for every one it does not, per function (per arity for a multi-arity defn),
+;; and prints nothing about the split. This script prints it. It is the exact
+;; count that lg.compiler/count-lowered-funcs approximates with a regex over the
+;; generated Go; nothing here reads Go text.
+;;
+;; The unit is one arity of a defn/defn-. defmulti and defmethod forms lower
+;; through the multimethod dispatcher rather than as functions, so they are not
+;; scored. The script runs on the normal build; -tags gogen_ir is not needed.
+;;
+;; How a unit is scored: lowered or not comes from the package pass that
+;; `lg compile` itself runs (ir.passes.pipeline/lower-all-ns-to-go-result, the
+;; :fns it returns). That pass reports only what it emitted, so the reason a unit
+;; fell back comes from lowering the form alone (pipeline/compile-form, the
+;; {:status :fallback :reason ...} the lowerer returns in bridge mode). A unit
+;; the standalone pass lowers but the package pass dropped is reported as
+;; "not emitted by the package pass" and counted in :disagreements.
+;;
+;; Report-only: exits 0 unless --gate is given. Like lg compile, it evaluates
+;; the definitional forms of the files (def, defn, defmacro, require, ...) so
+;; cross-namespace names resolve, and never runs other top-level forms.
+
+(ns lowering-census
+  (:require
+   [clojure.string :as str]
+   [ir.build :as build]
+   [ir.coverage :as cov]
+   [ir.passes.pipeline :as pipeline]
+   [ir.passes.typeinfer :as typeinfer]
+   [lg.compiler :as lgc]))
+
+(def ^:private usage
+  "usage: lowering-census [--edn] [--by-reason] [--gate MIN-PERCENT] [--follow ROOT] <file.lg>...")
+
+;; --- scoring one namespace --------------------------------------------------
+
+(defn- defn-form? [f]
+  (and (seq? f) (contains? #{'defn 'defn-} (first f))))
+
+(defn- bare-name [f]
+  (let [n (second f)]
+    (str (if (and (seq? n) (= 'with-meta (first n))) (second n) n))))
+
+;; The arity vectors of a defn in source order, as compile-form* reads them: a
+;; single vector (possibly return-hinted) or one leading vector per arity list.
+(defn- arity-vectors [f]
+  (let [tail (drop 2 f)
+        tail (if (string? (first tail)) (rest tail) tail)
+        tail (if (map? (first tail)) (rest tail) tail)
+        x    (first tail)]
+    (if (or (vector? x) (build/return-hinted-arity-vector? x))
+      [x]
+      (mapv first tail))))
+
+;; Same arity the package pass records: parameters including a rest slot.
+(defn- arity-of [argvec]
+  (count (remove (fn [p] (= '& p)) (build/unwrap-arity-vector argvec))))
+
+(defn- variadic? [argvec]
+  (boolean (some (fn [p] (= '& p)) (build/unwrap-arity-vector argvec))))
+
+(defn- arity-label [argvec]
+  (str (arity-of argvec) (when (variadic? argvec) "+")))
+
+;; The message of a caught exception, or of the "#error {:message ...}" string
+;; the lowerer stores as :reason when it catches one in bridge mode.
+(defn- error-message [x]
+  (let [s (str x)
+        m (re-find #":message \"((?:[^\"\\]|\\.)*)\"" s)]
+    (if m (second m) s)))
+
+;; Group like causes with the shared lowering-failure taxonomy (ir.coverage, the
+;; one scripts/ir-stress.lg buckets by), then fold what still names a particular
+;; function or value: every unresolved symbol is one cause whatever its name, and
+;; numbers in an uncategorised message become N so the same failure groups.
+(defn normalize-reason [reason]
+  (let [bucket (cov/classify-error (error-message reason))]
+    (cond
+      (and (keyword? bucket) (= "unresolved" (namespace bucket)))
+      "ir/build: unresolved symbol"
+
+      (keyword? bucket)
+      (subs (str bucket) 1)
+
+      :else
+      (-> bucket
+          (str/replace #"^:other \| " "")
+          (str/replace #"\d+" "N")))))
+
+;; What the standalone pass says about each arity of one form: a vector of
+;; {:status :lowered|:fallback :reason raw} in arity order.
+(defn- standalone-statuses [f the-ns n]
+  (let [r (try
+            (binding [pipeline/*target* :go
+                      typeinfer/*typeinfer-max-drains* nil]
+              (pipeline/compile-form f the-ns))
+            (catch e {:status :fallback :reason (str e)}))
+        fns (:fns r)]
+    (cond
+      ;; per-arity results of a multi-arity defn; a lambda-lifted defn is also a
+      ;; template but is ONE arity whose lifted siblings all lowered.
+      (and (= :multi-fn-template (:kind r)) (not-any? :lifted? fns) (= n (count fns)))
+      (mapv (fn [e] (if (:result e)
+                      {:status :lowered}
+                      {:status :fallback :reason (:reason e)}))
+            fns)
+
+      (= :multi-fn-template (:kind r))
+      (vec (repeat n {:status :lowered}))
+
+      (= :lowered (:status r))
+      (vec (repeat n {:status :lowered}))
+
+      :else
+      (vec (repeat n {:status :fallback :reason (or (:reason r) (str "status " (:status r)))})))))
+
+;; The row for one arity of one defn. `emitted` is the set of [name arity] the
+;; package pass emitted, or nil when the package pass failed for the namespace.
+(defn- unit-row [ns-str name argvec standalone emitted package-failed?]
+  (let [base {:ns ns-str :name name :arity (arity-label argvec)}]
+    (cond
+      (contains? emitted [name (arity-of argvec)])
+      (assoc base :status :lowered)
+
+      package-failed?
+      (assoc base :status :fallback
+             :reason "package pass failed for the namespace"
+             :detail "package pass failed for the namespace")
+
+      (= :lowered (:status standalone))
+      (assoc base :status :fallback :disagreement? true
+             :reason "not emitted by the package pass"
+             :detail "lowered alone, dropped by the package pass")
+
+      :else
+      (assoc base :status :fallback
+             :reason (normalize-reason (:reason standalone))
+             :detail (error-message (:reason standalone))))))
+
+;; One row per arity unit of the namespace's defns.
+(defn- ns-units [spec package]
+  (let [the-ns  (the-ns (:nsn spec))
+        ns-str  (str (:nsn spec))
+        emitted (set (map (fn [e] [(:fn-name e) (:arity e)]) (:fns package)))]
+    (vec
+     (mapcat
+      (fn [f]
+        (let [avs (arity-vectors f)
+              nm  (bare-name f)
+              ;; Standalone lowering is only needed for the reason a unit fell
+              ;; back, so a defn whose every arity was emitted skips it.
+              sa  (if (every? (fn [av] (contains? emitted [nm (arity-of av)])) avs)
+                    (vec (repeat (count avs) {:status :lowered}))
+                    (standalone-statuses f the-ns (count avs)))]
+          (map (fn [av s] (unit-row ns-str nm av s emitted (nil? package)))
+               avs sa)))
+      (filter defn-form? (:lf spec))))))
+
+;; Run f with stdout swallowed. The lowerer prints a WARNING line for every
+;; function it drops; the census reports the same facts in its own table.
+(defn- quietly [f]
+  (let [r (atom nil)]
+    (with-out-str (reset! r (f)))
+    @r))
+
+(defn- percent [lowered total]
+  (when (pos? total) (/ (* 100.0 lowered) total)))
+
+(defn- summarize [units]
+  (let [lowered (count (filter (fn [u] (= :lowered (:status u))) units))
+        total   (count units)]
+    {:lowered lowered :fallback (- total lowered) :percent (percent lowered total)}))
+
+(defn- ranked-reasons [units]
+  (->> units
+       (filter (fn [u] (= :fallback (:status u))))
+       (group-by :reason)
+       (map (fn [[reason us]] {:reason reason :count (count us)}))
+       (sort-by (fn [r] [(- (:count r)) (:reason r)]))
+       vec))
+
+;; --- running -------------------------------------------------------------
+
+(defn census-files
+  "Census of the given files: {:namespaces [...] :totals {...} :reasons [...]
+   :disagreements n}. Loads the files' definitional forms first (as lg compile
+   does), so call it from a process that is happy to have them defined."
+  [files]
+  (let [specs   (mapv (fn [p] (lgc/parse-spec "census" p)) files)
+        _       (lgc/load-specs! specs)
+        results (quietly
+                 (fn []
+                   (binding [pipeline/*target* :go]
+                     (pipeline/lower-all-ns-to-go-result
+                      (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)))))
+        rows    (vec (map-indexed
+                      (fn [i spec]
+                        (let [units (quietly (fn [] (ns-units spec (nth results i))))]
+                          (merge {:ns (str (:nsn spec)) :file (:path spec) :units units}
+                                 (summarize units))))
+                      specs))
+        all     (vec (mapcat :units rows))]
+    {:namespaces rows
+     :totals (summarize all)
+     :reasons (ranked-reasons all)
+     :disagreements (count (filter :disagreement? all))}))
+
+;; --- following requires ----------------------------------------------------
+
+(defn- ns->file [root ns-sym]
+  (str root "/" (str/replace (str/replace (str ns-sym) "." "/") "-" "_") ".lg"))
+
+;; The given files plus every namespace they require that exists as a file under
+;; root, breadth first, each file once. Requires outside root (core, libraries)
+;; are skipped: they load from the runtime, not from the program.
+(defn follow-requires [root files]
+  (loop [todo (vec files) seen []]
+    (if (empty? todo)
+      seen
+      (let [p (first todo)]
+        (if (some (fn [s] (= s p)) seen)
+          (recur (vec (rest todo)) seen)
+          (let [forms (rest (lgc/read-all p))
+                deps  (->> (lgc/spec-dep-syms forms)
+                           (map (fn [d] (ns->file root d)))
+                           (filter os/stat))]
+            (recur (into (vec (rest todo)) deps) (conj seen p))))))))
+
+;; --- reports ---------------------------------------------------------------
+
+(defn- pct-str [p] (if (nil? p) "-" (format "%.1f%%" (double p))))
+
+(defn- pad [s n] (let [s (str s)] (str s (apply str (repeat (max 0 (- n (count s))) " ")))))
+(defn- lpad [s n] (let [s (str s)] (str (apply str (repeat (max 0 (- n (count s))) " ")) s)))
+
+(defn- print-table [r]
+  (let [rows  (conj (mapv (fn [n] [(:ns n) n]) (:namespaces r)) ["total" (:totals r)])
+        width (apply max 5 (map (fn [[label _]] (count label)) rows))]
+    (println (str (pad "ns" width) "  " (lpad "lowered" 7) "  " (lpad "fallback" 8) "  " (lpad "percent" 7)))
+    (doseq [[label row] rows]
+      (println (str (pad label width) "  " (lpad (:lowered row) 7) "  " (lpad (:fallback row) 8)
+                    "  " (lpad (pct-str (:percent row)) 7))))))
+
+(defn- print-reasons [r limit]
+  (let [reasons (:reasons r)]
+    (when (seq reasons)
+      (println)
+      (println "fallback reasons, most first")
+      (doseq [x (take limit reasons)]
+        (println (str (lpad (:count x) 6) "  " (:reason x))))
+      (when (> (count reasons) limit)
+        (println (str "       ... " (- (count reasons) limit) " more; --by-reason lists every one"))))))
+
+(defn- print-by-reason [r]
+  (let [units (filter (fn [u] (= :fallback (:status u))) (mapcat :units (:namespaces r)))
+        by    (group-by :reason units)]
+    (doseq [{:keys [reason count]} (:reasons r)]
+      (println (str count "  " reason))
+      (doseq [u (get by reason)]
+        (println (str "      " (:ns u) "/" (:name u) "/" (:arity u)))))))
+
+(defn- print-notes [r]
+  (when (pos? (:disagreements r))
+    (println)
+    (println (str (:disagreements r) " unit(s) lowered when lowered alone but were not emitted by"
+                  " the package pass; their reason is \"not emitted by the package pass\"."))))
+
+;; --- cli -------------------------------------------------------------------
+
+(defn parse-args [args]
+  (loop [args args opts {:files []}]
+    (if (empty? args)
+      opts
+      (let [a (first args)]
+        (cond
+          (= a "--edn")       (recur (rest args) (assoc opts :edn? true))
+          (= a "--by-reason") (recur (rest args) (assoc opts :by-reason? true))
+          (or (= a "--gate") (= a "--follow"))
+          (if (empty? (rest args))
+            (throw (Exception. (str a " requires an argument")))
+            (recur (rest (rest args))
+                   (assoc opts (if (= a "--gate") :gate :follow) (second args))))
+          (str/starts-with? a "--") (throw (Exception. (str "unknown flag " a)))
+          :else (recur (rest args) (update opts :files conj a)))))))
+
+(defn- report [opts r]
+  (let [floor  (when (:gate opts) (parse-double (:gate opts)))
+        below? (and floor (< (or (:percent (:totals r)) 0.0) floor))]
+    (cond
+      (:edn? opts)       (println (pr-str r))
+      (:by-reason? opts) (print-by-reason r)
+      :else              (do (print-table r) (print-reasons r 10) (print-notes r)))
+    (when below?
+      (println (str "lowering-census: " (pct-str (:percent (:totals r)))
+                    " lowered is below the --gate floor of " (:gate opts) "%")))
+    (if below? 1 0)))
+
+(defn main
+  "Run the census for `args` and return the process exit code: 0, 1 when --gate
+   names a floor the total is below, or 2 for a usage error or when a file
+   cannot be read or loaded."
+  [args]
+  (let [[opts err] (try [(parse-args args) nil] (catch Throwable e [nil e]))]
+    (cond
+      err
+      (do (println "lowering-census:" (ex-message err)) (println usage) 2)
+
+      (empty? (:files opts))
+      (do (println usage) 2)
+
+      :else
+      ;; A file that fails to read or evaluate stops lg compile the same way, so
+      ;; it is a usage-level failure here, not a census row.
+      (let [[r err] (try
+                      (let [files (if (:follow opts)
+                                    (follow-requires (:follow opts) (:files opts))
+                                    (:files opts))]
+                        [(census-files files) nil])
+                      (catch Throwable e [nil e]))]
+        (if err
+          (do (println "lowering-census: cannot load the input:" (ex-message err)) 2)
+          (report opts r))))))
+
+;; Entry guard: run only as a script, never when a test requires this namespace.
+;; os/args is [binary script user-arg...].
+(let [argv (vec (seq os/args))]
+  (when (str/ends-with? (or (get argv 1) "") "scripts/lowering-census.lg")
+    (os/exit (main (vec (drop 2 argv))))))

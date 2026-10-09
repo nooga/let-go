@@ -1,0 +1,14 @@
+;; Fixture for test/lowering_census_test.lg: three defn units the Go lowerer
+;; emits and one it cannot. `gap` binds a destructured map argument with a
+;; symbol-to-keyword pair ({total :debt}); ir.build does not rebuild that
+;; binding, so the defn falls back to the VM. If the lowerer learns the shape,
+;; swap in another one it rejects and keep the expected counts in the test.
+(ns fixture.lowering-census)
+
+(defn add1 [x] (+ x 1))
+
+(defn pair
+  ([a] a)
+  ([a b] (+ a b)))
+
+(defn gap [{total :debt}] total)
