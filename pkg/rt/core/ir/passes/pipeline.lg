@@ -87,14 +87,29 @@
    [dce                 "dce"]
    [run-typeinfra-epoch nil]])
 
+;; A typeinfra epoch is skipped when no pass has edited f since the previous
+;; epoch: its facts would come out the same. Every structural mutator in
+;; ir.data swaps a new :insts or :blocks vector into the Function, so the
+;; vectors the previous epoch left behind being identical? to the current ones
+;; means nothing was edited. (The type and source-info side tables are mutated
+;; in place, but only typeinfer writes types.) In the default list this skips
+;; the trailing epoch for a fn the middle passes left alone.
 (defn- run-pass-list [f pass-list]
-  (reduce (fn [g entry]
-            (let [pass  (nth entry 0)
-                  label (nth entry 1)]
-              (pass g)
-              (when label (validate-fn! g label))
-              g))
-          f pass-list))
+  (let [after-epoch (atom nil)]
+    (reduce (fn [g entry]
+              (let [pass   (nth entry 0)
+                    label  (nth entry 1)
+                    epoch? (= pass run-typeinfra-epoch)
+                    prev   @after-epoch]
+                (when-not (and epoch? prev
+                               (identical? (nth prev 0) (ir/all-insts g))
+                               (identical? (nth prev 1) (ir/raw-blocks g)))
+                  (pass g)
+                  (when epoch?
+                    (reset! after-epoch [(ir/all-insts g) (ir/raw-blocks g)])))
+                (when label (validate-fn! g label))
+                g))
+            f pass-list)))
 
 (defn- optimize-fn-tail [f]
   (run-pass-list f default-pass-list))
