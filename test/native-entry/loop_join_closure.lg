@@ -1,0 +1,54 @@
+;; Regression fixture for a disagreeing closure join inside a loop whose body
+;; continues through many sequential joins.
+;;
+;; The loop-carried closure f is either replaced by a new closure or retained
+;; at the join that binds g, so g's parameter has disagreeing edges and needs a
+;; real local. Every one-armed `when` after it is another two-way join between
+;; that binding and the back edge. Lowering must give g a local that each edge
+;; assigns, and must not let the back edge or the joins after it resolve g to
+;; one branch's closure, which would drop the other branch the way #766 did.
+;;
+;; xs holds four values the whens match (0 1 5 7) and one they do not (12),
+;; so the result is the closure's value plus 10 per match.
+(ns loopjoinclosure)
+
+(defn choose-across-joins [flag xs x y]
+  (let [hits (atom 0)]
+    (loop [f (fn [] x) i 0]
+      (if (< i (count xs))
+        (let [g (if flag (fn [] y) f)
+              v (nth xs i)]
+          (when (= 0 v) (swap! hits inc))
+          (when (= 1 v) (swap! hits inc))
+          (when (= 2 v) (swap! hits inc))
+          (when (= 3 v) (swap! hits inc))
+          (when (= 4 v) (swap! hits inc))
+          (when (= 5 v) (swap! hits inc))
+          (when (= 6 v) (swap! hits inc))
+          (when (= 7 v) (swap! hits inc))
+          (recur g (inc i)))
+        (+ (f) (* 10 (deref hits)))))))
+
+;; Same shape, exercised the other way. The gate pins exactly one direct call to
+;; the fixture's goFn in the entry function, so the replace path needs its own
+;; callee rather than a second call to choose-across-joins.
+(defn choose-across-joins-replacing [flag xs x y]
+  (let [hits (atom 0)]
+    (loop [f (fn [] x) i 0]
+      (if (< i (count xs))
+        (let [g (if flag (fn [] y) f)
+              v (nth xs i)]
+          (when (= 0 v) (swap! hits inc))
+          (when (= 1 v) (swap! hits inc))
+          (when (= 2 v) (swap! hits inc))
+          (when (= 3 v) (swap! hits inc))
+          (when (= 4 v) (swap! hits inc))
+          (when (= 5 v) (swap! hits inc))
+          (when (= 6 v) (swap! hits inc))
+          (when (= 7 v) (swap! hits inc))
+          (recur g (inc i)))
+        (+ (f) (* 10 (deref hits)))))))
+
+(defn -main []
+  (println (choose-across-joins false [0 1 5 7 12] 1 2))
+  (println (choose-across-joins-replacing true [0 1 5 7 12] 1 2)))

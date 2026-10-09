@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/rt"
@@ -735,6 +736,47 @@ func TestLowerGoClosureCapturingLoopCarriedBlockParam(t *testing.T) {
 	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
 		reason := result.ValueAt(vm.Keyword("reason"))
 		t.Fatalf("expected closure-over-loop-block-param to lower; got status=%v reason=%v", got, reason)
+	}
+}
+
+// TestLowerGoSequentialJoinsInLoopLowerInPolynomialTime: a loop body made of
+// many one-armed `when`s must lower in time polynomial in their number. licm
+// threads each hoisted constant through every block of the loop as a block
+// parameter, so every join carries parameters whose lineage runs back through
+// all the joins before it and around the back edge. Resolving those
+// parameters by a per-query walk that cannot cache answers reached through the
+// loop header visits every path through the joins, doubling the lowering time
+// with each `when`: at this size that is hours, against a few seconds when each
+// parameter is solved once per function.
+func TestLowerGoSequentialJoinsInLoopLowerInPolynomialTime(t *testing.T) {
+	ensureLoader()
+
+	const joins = 20
+	var body strings.Builder
+	for k := 0; k < joins; k++ {
+		fmt.Fprintf(&body, "\n\t\t\t\t(when (= %d (aget a i)) (aset a i 0))", k)
+	}
+	start := time.Now()
+	v := runLispExpr(t, fmt.Sprintf(
+		`(do (create-ns (quote joinsinloop))
+		     (intern (quote joinsinloop) (quote clear-matches))
+		     (ir.passes.pipeline/lower-ns-to-go "joinsinloop" (quote joinsinloop)
+		       [(quote (defn clear-matches [a n]
+		                 (loop [i 0]
+		                   (when (< i n)%s
+		                     (recur (inc i))))
+		                 nil))]))`, body.String()))
+	elapsed := time.Since(start)
+
+	got := string(v.(vm.String))
+	if !strings.Contains(got, "func ClearMatches(") {
+		t.Fatalf("expected clear-matches to lower to a Go function:\n%s", got)
+	}
+	if n := strings.Count(got, `"clojure.core", "aset")`); n != joins {
+		t.Fatalf("expected %d aset calls, one per when, got %d:\n%s", joins, n, got)
+	}
+	if elapsed > 2*time.Minute {
+		t.Fatalf("lowering %d sequential joins in a loop took %v; expected seconds", joins, elapsed)
 	}
 }
 
