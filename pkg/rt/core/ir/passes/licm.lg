@@ -137,35 +137,30 @@
         invariant
         (recur new-invariant)))))
 
-(defn hoist-one! [f nid pre-header loop-set]
-  "Clone Inst nid into pre-header, redirect all uses to the clone,
-   remove the original from its block. Returns the new InstId (the clone
-   in the pre-header).
+(defn hoist-one! [f nid pre-header loop-set callee-clones]
+  "Clone Inst nid into pre-header, redirect all uses to the clone and
+   remove the original. Returns the clone's InstId.
 
-   Special case: if nid is a :call to a total-pure builtin, also hoist its
-   callee LoadVar to the pre-header (if it's in a loop block), so the call's
-   callee remains a direct load-var rather than becoming a block-arg.
-
-   After this, nid is marked :invalid and all uses flow through the clone.
-   The clone is positioned in the pre-header."
+   A :call whose callee LoadVar is in the loop calls a pre-header clone of
+   it, one per LoadVar via `callee-clones`. Only hoisted calls use the
+   clone: after CSE the same LoadVar can feed a call that stays in the
+   loop (let-go#1027); drop-dead-callees! removes unused originals."
   (let [op   (ir/op nid f)
         refs (ir/refs nid f)
         aux  (ir/aux nid f)]
-    ;; If this is a call, hoist the callee LoadVar first (if it's in the loop)
     (let [refs-to-use
           (if (and (= op :call) (pos? (count refs)))
             (let [callee-nid (first refs)
                   callee-op  (ir/op callee-nid f)]
               (if (and (= callee-op :load-var)
                        (loop-set (ir/block-of callee-nid f)))
-                ;; Hoist the callee LoadVar to pre-header and update the call's refs
-                (let [callee-refs   (ir/refs callee-nid f)
-                      callee-aux    (ir/aux callee-nid f)
-                      callee-clone  (ir/add-inst f pre-header callee-op callee-refs callee-aux)
-                      callee-block  (ir/block-of callee-nid f)]
-                  (ir/replace-all-uses! f callee-nid callee-clone)
-                  (ir/remove-inst! f callee-block callee-nid)
-                  ;; Return the new refs with the cloned callee at the front
+                (let [callee-clone
+                      (or (get @callee-clones callee-nid)
+                          (let [c (ir/add-inst f pre-header callee-op
+                                               (ir/refs callee-nid f)
+                                               (ir/aux callee-nid f))]
+                            (swap! callee-clones assoc callee-nid c)
+                            c))]
                   (vec (concat [callee-clone] (rest refs))))
                 refs))
             refs)]
@@ -175,6 +170,14 @@
         (ir/replace-all-uses! f nid clone)
         (ir/remove-inst! f from-block nid)
         clone))))
+
+(defn- drop-dead-callees! [f callee-clones]
+  "Remove each in-loop LoadVar that hoist-one! cloned into the pre-header
+   once nothing references it any more. One still feeding an in-loop Inst
+   stays where it is."
+  (doseq [orig (sort (keys @callee-clones))]
+    (when (ir/uses-empty? (nth (ir/uses f) orig))
+      (ir/remove-inst! f (ir/block-of orig f) orig))))
 
 ;; --- threading hoisted values through the loop header ----------------
 
@@ -296,12 +299,16 @@
         loop-set   (loop-blocks f back-edge)
         pre-header (unique-pre-header f header loop-set)
         var-facts  (mut/analyze-var-stability f)]
-    (when pre-header
+    ;; Skip a pre-header ending in InstId 0: the threading step and ir.lower
+    ;; read a 0 terminator as absent and would drop its args (let-go#1026).
+    (when (and pre-header (not= 0 (ir/block-term pre-header f)))
       (let [hoistable      (collect-hoistable f loop-set var-facts)
+            callee-clones  (atom {})
             ;; Hoist each in deterministic order, collecting [orig → clone] pairs.
             hoisted-pairs  (mapv (fn [orig]
-                                   [orig (hoist-one! f orig pre-header loop-set)])
+                                   [orig (hoist-one! f orig pre-header loop-set callee-clones)])
                                  (sort hoistable))]
+        (drop-dead-callees! f callee-clones)
         (when (seq hoisted-pairs)
           (thread-hoisted-through-header!
             f
