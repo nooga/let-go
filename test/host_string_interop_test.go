@@ -42,9 +42,15 @@ func TestStringHostMethods(t *testing.T) {
 		{`(.indexOf "hello" "zz")`, vm.Int(-1)},
 		{`(.indexOf "abc" 98)`, vm.Int(1)}, // Java's indexOf(int ch) codepoint form
 		{`(.indexOf "aba" \a 1)`, vm.Int(2)},
+		{`(.indexOf "héllo wörld" "ö" 3)`, vm.Int(7)},
+		{`(.indexOf "héllo" "" 99)`, vm.Int(5)}, // Java clamps fromIndex
+		{`(.indexOf "héllo" "l" -4)`, vm.Int(2)},
+		{`(.charAt "日本語" 2)`, vm.Char('語')},
 		{`(.concat "a" "b")`, vm.String("ab")},
 		{`(.substring "hello" 1)`, vm.String("ello")},
 		{`(.substring "hello" 1 3)`, vm.String("el")},
+		{`(.substring "héllo" 1 3)`, vm.String("él")},
+		{`(.substring "héllo" 5)`, vm.String("")},
 		{`(.startsWith "hello" "he")`, vm.Boolean(true)},
 		{`(.endsWith "hello" "lo")`, vm.Boolean(true)},
 		{`(.contains "hello" "ell")`, vm.Boolean(true)},
@@ -60,6 +66,13 @@ func TestStringHostMethods(t *testing.T) {
 			assert.Equal(t, tc.want, v)
 		})
 	}
+
+	t.Run("substring out of bounds fails loudly", func(t *testing.T) {
+		for _, expr := range []string{`(.substring "héllo" 6)`, `(.substring "héllo" 3 2)`, `(.substring "héllo" -1 2)`, `(.substring "héllo" 1 9)`} {
+			_, err := evalStringInterop(expr)
+			assert.Error(t, err, expr)
+		}
+	})
 
 	t.Run("charAt out of bounds fails loudly", func(t *testing.T) {
 		_, err := evalStringInterop(`(.charAt "ab" 5)`)
