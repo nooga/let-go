@@ -196,8 +196,7 @@
    :disagreements n}. Loads the files' definitional forms first (as lg compile
    does), so call it from a process that is happy to have them defined."
   [files]
-  (let [specs   (mapv (fn [p] (lgc/parse-spec "census" p)) files)
-        _       (lgc/load-specs! specs)
+  (let [specs   (lgc/load-specs! (mapv (fn [p] (lgc/parse-spec "census" p)) files))
         results (quietly
                  (fn []
                    (binding [pipeline/*target* :go]
