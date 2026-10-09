@@ -259,3 +259,26 @@ func TestTypeInferTypesTransientCallOnFirstEpoch(t *testing.T) {
 		}
 	}
 }
+
+// optimize-fn skips its trailing typeinfra epoch when no middle pass edited the
+// function, and runs it when one did. Counting typeinfer calls observes the
+// skip without touching run-typeinfra-epoch, whose identity the skip checks.
+func TestOptimizeFnSkipsTrailingEpochOnlyWhenUnedited(t *testing.T) {
+	ensureLoader()
+	got := runLispString(t, `(pr-str
+		(let [epochs (fn [form]
+		               (let [n  (atom 0)
+		                     ti ir.passes.typeinfer/typeinfer
+		                     f  (ir.build/build-fn form)]
+		                 (with-redefs [ir.passes.typeinfer/typeinfer
+		                               (fn [& args] (swap! n inc) (apply ti args))]
+		                   (ir.passes.pipeline/optimize-fn f))
+		                 @n))]
+		  [;; no middle pass changes this one
+		   (epochs '(defn unedited [x y] (+ x y)))
+		   ;; constfold rewrites (+ 1 2)
+		   (epochs '(defn folded [x] (+ x (+ 1 2))))]))`)
+	if got != "[1 2]" {
+		t.Fatalf("typeinfer epochs per optimize-fn: got %s, want [1 2] (unedited, folded)", got)
+	}
+}
