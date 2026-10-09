@@ -225,3 +225,37 @@ func TestTypeInfraStateSeedsWithoutTouchingInstTypesUntilFlush(t *testing.T) {
 		t.Fatalf("expected flush to materialize inferred arg seeds\n--- dump ---\n%s", after)
 	}
 }
+
+// The drain is LIFO, so the call to transient is visited before the [] it
+// reads. Its type has to wait for that operand; settling on :unknown first
+// leaves the call untyped until a second epoch, so the facts would depend on
+// visit order.
+func TestTypeInferTypesTransientCallOnFirstEpoch(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn mapv-shaped [f coll]
+	                       (persistent! (reduce (fn* [acc x] (conj! acc (f x))) (transient []) coll)))`)
+
+	passVarCounter++
+	fnVar := fmt.Sprintf("*typeinfra-fn-%d*", passVarCounter)
+	rt.NS(rt.NameCoreNS).Def(fnVar, fn)
+
+	for epoch := 1; epoch <= 2; epoch++ {
+		runLispExpr(t, fmt.Sprintf(`(let [s (ir.lattice/new-typeinfra-state %[1]s)
+		                                  s (ir.lattice/seed-state-from-inst-types! s %[1]s)
+		                                  s (ir.passes.infer-arg-types/infer-arg-types %[1]s s)
+		                                  s (ir.passes.typeinfer/typeinfer %[1]s s)]
+		                              (ir.lattice/flush-state-types! s %[1]s))`, fnVar))
+		got := runLispExpr(t, fmt.Sprintf(`(pr-str
+			(some (fn* [i]
+			        (let [callee (first (ir/refs i %[1]s))]
+			          (when (and (= :call (ir/op i %[1]s))
+			                     (= :load-var (ir/op callee %[1]s))
+			                     (= "transient" (name (symbol (ir/aux callee %[1]s)))))
+			            (ir/type-of i %[1]s))))
+			      (range (ir/inst-count %[1]s))))`, fnVar))
+		if string(got.(vm.String)) != ":transient-vector" {
+			t.Fatalf("after epoch %d, (transient []) is typed %s, want :transient-vector", epoch, got)
+		}
+	}
+}
