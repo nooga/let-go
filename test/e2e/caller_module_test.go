@@ -196,6 +196,121 @@ func TestCallerModule(t *testing.T) {
 		}
 	})
 
+	// -import: the module holds a generated interop package for hash/crc32,
+	// which registers the crc32 namespace from init(). The lg that compiles the
+	// program does not have it, so the program requires it when -main runs; the
+	// namespace resolves only if -import linked the package into the build.
+	impApp := filepath.Join(fix, "imp.lg")
+	writeFile(t, impApp, `(ns imp)
+(defn -main []
+  (require 'crc32)
+  (println ((resolve 'crc32/ChecksumIEEE) (.getBytes "hello"))))
+(when-not *compiling-aot* (-main))
+`)
+	const crcHello = "907060870\n"
+	newInteropModule := func(t *testing.T) string {
+		t.Helper()
+		mod := newModule(t, true)
+		if out, err := runCmd(ctx, t, "go", root, []string{"run", "./cmd/lginterop",
+			"-packages", "hash/crc32", "-out-pkg", "interop", "-out", filepath.Join(mod, "interop")}); err != nil {
+			t.Fatalf("lginterop: %v\n%s", err, out)
+		}
+		return mod
+	}
+
+	t.Run("-import links the package into lg compile and -w builds", func(t *testing.T) {
+		mod := newInteropModule(t)
+		before := readModFiles(t, mod)
+
+		exe := filepath.Join(t.TempDir(), "imp.native")
+		if out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-o", exe, "-module", mod,
+			"-import", "example.com/host/interop", impApp}, env...); err != nil {
+			t.Fatalf("lg compile -import: %v\n%s", err, out)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 || string(stdout) != crcHello {
+			t.Fatalf("native: err=%v exit=%d stdout=%q, want %q; stderr=%q", err, exit, stdout, crcHello, stderr)
+		}
+
+		// Without -import the same program must fail, or the check above
+		// proves nothing about -import.
+		if out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-o", exe, "-module", mod, impApp}, env...); err != nil {
+			t.Fatalf("lg compile without -import: %v\n%s", err, out)
+		}
+		if stdout, _, exit, _ := runNativeEntryBinary(ctx, exe); exit == 0 || string(stdout) == crcHello {
+			t.Fatalf("without -import the program still resolved crc32: exit=%d stdout=%q", exit, stdout)
+		}
+
+		outDir := filepath.Join(t.TempDir(), "web")
+		if out, err := runCmd(ctx, t, bin, fix, []string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external",
+			"-w-module", mod, "-import", "example.com/host/interop", impApp}, env...); err != nil {
+			t.Fatalf("lg -w -import: %v\n%s", err, out)
+		}
+		if after := readModFiles(t, mod); !bytes.Equal(before[0], after[0]) || !bytes.Equal(before[1], after[1]) {
+			t.Error("-import changed the caller's go.mod or go.sum")
+		}
+		node, err := exec.LookPath("node")
+		if err != nil {
+			t.Skip("node not on PATH; cannot run the wasm build")
+		}
+		goroot, err := runCmd(ctx, t, "go", root, []string{"env", "GOROOT"})
+		if err != nil {
+			t.Fatalf("go env GOROOT: %v", err)
+		}
+		// The generated main writes *out* through the _lgOutput JS global, so
+		// the driver defines it and runs the module with Go's wasm_exec.js.
+		driver := filepath.Join(t.TempDir(), "run.js")
+		writeFile(t, driver, `const fs = require("fs");
+require(process.argv[2]);
+globalThis._lgOutput = (s) => process.stdout.write(s);
+const go = new Go();
+WebAssembly.instantiate(fs.readFileSync(process.argv[3]), go.importObject)
+  .then((r) => go.run(r.instance))
+  .catch((e) => { console.error(e); process.exit(1); });
+`)
+		cmd := exec.CommandContext(ctx, node, driver,
+			filepath.Join(strings.TrimSpace(goroot), "lib", "wasm", "wasm_exec.js"),
+			filepath.Join(outDir, "main.wasm"))
+		var wout, werr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &wout, &werr
+		if err := cmd.Run(); err != nil || wout.String() != crcHello {
+			t.Fatalf("wasm: err=%v stdout=%q, want %q; stderr=%q", err, wout.String(), crcHello, werr.String())
+		}
+	})
+
+	t.Run("-import of a package the module does not provide is reported", func(t *testing.T) {
+		const missing = "example.com/nowhere/interop"
+		for _, cmd := range []string{"compile", "-w"} {
+			mod := newModule(t, true)
+			before := readModFiles(t, mod)
+			args := []string{"compile", "-o", filepath.Join(t.TempDir(), "x"), "-module", mod, "-import", missing, lib, app}
+			if cmd == "-w" {
+				args = []string{"-w", filepath.Join(t.TempDir(), "web"), "-w-module", mod, "-import", missing, app}
+			}
+			out, err := runCmd(ctx, t, bin, fix, args, env...)
+			if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 || !strings.Contains(out, missing) {
+				t.Errorf("lg %s: err=%v, want exit 1 naming %s\n%s", cmd, err, missing, out)
+			}
+			if after := readModFiles(t, mod); !bytes.Equal(before[0], after[0]) || !bytes.Equal(before[1], after[1]) {
+				t.Errorf("lg %s: a failed -import build changed the caller's go.mod or go.sum", cmd)
+			}
+		}
+	})
+
+	t.Run("-import requires a caller module", func(t *testing.T) {
+		for _, args := range [][]string{
+			{"compile", "-import", "example.com/x", app},
+			{"-w", t.TempDir(), "-import", "example.com/x", app},
+		} {
+			cmd := exec.CommandContext(ctx, bin, args...)
+			cmd.Dir = fix
+			out, err := cmd.CombinedOutput()
+			if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 2 || !strings.Contains(string(out), "-import requires") {
+				t.Errorf("lg %v: err=%v, want exit 2 naming -import\n%s", args[0], err, out)
+			}
+		}
+	})
+
 	t.Run("-work and -module are exclusive", func(t *testing.T) {
 		cmd := exec.CommandContext(ctx, bin, "compile", "-work", t.TempDir(), "-module", t.TempDir(), app)
 		cmd.Dir = fix

@@ -390,11 +390,22 @@ var wasmShell string
 var wasmPayload string
 var wasmHostEval bool
 var wasmModule string
+var wasmImports stringList
 var storageID string
 var stripDebug bool
 var debugOutput string
 var sourcePaths string
 var resourcePaths string
+
+// stringList is a repeatable string flag: each occurrence appends a value.
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, ",") }
+
+func (l *stringList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
+}
 
 // flagsOnce guards registerFlags. Registration used to happen in package
 // init(), which is fine for a binary that IS this package but wrong for an
@@ -428,6 +439,7 @@ func registerFlags() {
 	flag.StringVar(&wasmPayload, "w-wasm", "inline", "wasm delivery for -w: 'inline' (default; gzip-base64 baked into index.html) or 'external' (emit a separate main.wasm the loader fetches + streams)")
 	flag.BoolVar(&wasmHostEval, "w-host-eval", false, "for -w: expose LetGoHost.eval(code) to call into the loaded image and keep it live (park after the program's main returns); works in both boot modes. Pair with -w-shell none")
 	flag.StringVar(&wasmModule, "w-module", "", "for -w: build inside the Go module at this directory, whose go.mod and go.sum are used as they are (built -mod=readonly); lg writes only <dir>/lgprogram, and refuses that directory unless it carries lg's marker")
+	flag.Var(&wasmImports, "import", "for -w with -w-module: blank-import this Go package into the generated main package, so its init() registers its namespaces; repeatable. The module must already require it")
 	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script name, or current directory for main.lg)")
 	flag.StringVar(&sourcePaths, "source-paths", "",
 		"namespace search paths separated by the OS path-list separator "+
@@ -600,6 +612,10 @@ func runMain() int {
 		fmt.Fprintln(os.Stderr, "error: -w-module requires -w")
 		return 2
 	}
+	if len(wasmImports) > 0 && wasmModule == "" {
+		fmt.Fprintln(os.Stderr, "error: -import requires -w-module")
+		return 2
+	}
 	if debugOutput != "" && !stripDebug {
 		fmt.Fprintln(os.Stderr, "error: -debug-output requires -strip")
 		return 2
@@ -685,7 +701,7 @@ func runMain() int {
 			fmt.Fprintf(os.Stderr, "error: -w-wasm must be 'inline' or 'external', got %q\n", wasmPayload)
 			return 1
 		}
-		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, storageIDForScript(files[0]), customShellTemplate, wasmModule); err != nil {
+		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, storageIDForScript(files[0]), customShellTemplate, wasmModule, wasmImports); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}

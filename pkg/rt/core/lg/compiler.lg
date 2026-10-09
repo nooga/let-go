@@ -294,8 +294,11 @@
      :go-build          (f dir out)        builds the module in dir to out
      :make-temp-dir     (f)                returns a fresh directory
      :remove-dir        (f dir)            deletes it
-     :open-module       (f module-dir)     prepares the directory let-go owns
-                                           in a caller's module; returns
+     :open-module       (f module-dir imports)
+                                           prepares the directory let-go owns
+                                           in a caller's module and
+                                           blank-imports each Go package in
+                                           imports; returns
                                            {:dir d :import-path p}
      :go-build-readonly (f dir out)        builds dir to out, -mod=readonly
    program.lgb comes from a separate process, not this one: lowering loads the
@@ -306,13 +309,22 @@
    Go module the caller prepared and replaces work-dir: the program is
    generated into the directory :open-module hands back, lowered packages
    import each other under its import path, and the caller's go.mod and go.sum
-   are used as they are. Returns compile-program's result plus :out, or a map
-   with :error."
-  ([files out work-dir host] (build-program files out work-dir nil host))
-  ([files out work-dir module-dir host]
-   (if module-dir
-     (let [m ((:open-module host) module-dir)]
+   are used as they are. `imports` names Go packages to link into the program
+   for their init(), typically ones registering namespaces; it needs
+   module-dir, whose go.mod must require them. Returns compile-program's result
+   plus :out, or a map with :error."
+  ([files out work-dir host] (build-program files out work-dir nil nil host))
+  ([files out work-dir module-dir host] (build-program files out work-dir module-dir nil host))
+  ([files out work-dir module-dir imports host]
+   (cond
+     module-dir
+     (let [m ((:open-module host) module-dir (vec imports))]
        (build-in files out (:dir m) (:import-path m) true host))
+     ;; The scaffolded module requires only let-go, so any other package
+     ;; could not build there.
+     (seq imports)
+     {:error "lg compile: Go imports need a caller-supplied module"}
+     :else
      (let [work (or work-dir ((:make-temp-dir host)))]
        (try
          (build-in files out work program-module false host)
