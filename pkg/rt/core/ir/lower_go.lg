@@ -1855,6 +1855,16 @@
     (gogen/assign "=" target res-expr)
     (gogen/assign "=" target (box-result-from-type res-expr result-spec))))
 
+(defn- error-return-zero
+  "The zero value f returns alongside an error, per its Go result type."
+  [f]
+  (case (function-return-spec f)
+    "bool"    (gogen/ident "false")
+    "int64"   (gogen/int-lit 0)
+    "float64" (gogen/float-lit 0.0)
+    "string"  (gogen/string-lit "")
+    (gogen/ident "nil")))
+
 (defn- emit-call-stmts [f assign-target invoke-expr]
   "Build the [assign err-check] statement pair shared by both call paths.
    assign-target is either a gogen ident (used? case) or '_'; invoke-expr
@@ -1862,12 +1872,7 @@
   (mark-call-err-used!)
   (let [err-id     (gogen/ident "callErr")
         assign     (gogen/multi-assign "=" [assign-target err-id] [invoke-expr])
-        zero-expr  (case (function-return-spec f)
-                     "bool"    (gogen/ident "false")
-                     "int64"   (gogen/int-lit 0)
-                     "float64" (gogen/float-lit 0.0)
-                     "string"  (gogen/string-lit "")
-                     (gogen/ident "nil"))
+        zero-expr  (error-return-zero f)
         err-check  (gogen/if-stmt nil
                                   (gogen/binary "!=" err-id (gogen/ident "nil"))
                                   [(gogen/return-stmt [zero-expr err-id])]
@@ -2229,6 +2234,56 @@
          (keyword? (ir/aux callee f))
          (or (= 1 arg-count) (= 2 arg-count)))))
 
+(defn- boxed-call-stmts
+  "emit-call-stmts for an `invoke` that returns (vm.Value, error), into a
+   `target` whose slot may be natively typed. typeinfer can type a call's
+   result natively even when the call itself lowers to a runtime trampoline:
+   math/* results are :float (call-core-type), so `(- b (math/sqrt d))` stays
+   native float64 around a boxed call. Assigning the vm.Value result straight
+   into that float64 slot is a Go type error (#562). For a live call whose slot
+   spec is a native scalar, take the result into a vm.Value temp tb<nid>, check
+   the error, then comma-ok assert it to the slot's vm type and convert.
+
+   The assert is checked, not trusted: the call is a trampoline because its var
+   can be redefined (with-redefs, alter-var-root), so the inferred type is a
+   claim about the var's usual root, not a proof. A mismatch returns a
+   vm.TypeError through the error result instead of panicking. Temps are
+   function-scoped like tr<nid> (see *typed-call-temps*)."
+  [f nid target invoke]
+  (let [spec (go-type-spec (ir/type-of nid f))
+        ;; slot spec -> [asserted vm type, Go conversion or nil, vm ValueType var]
+        unbox (get {"float64" ["vm.Float"   "float64" "FloatType"]
+                    "int64"   ["vm.Int"     "int64"   "IntType"]
+                    "string"  ["vm.String"  "string"  "StringType"]
+                    "bool"    ["vm.Boolean" "bool"    "BooleanType"]
+                    "vm.Char" ["vm.Char"    nil       "CharType"]}
+                   spec)]
+    (if (and unbox (live? f nid))
+      (let [[assert-spec conv vtype] unbox
+            raw-name (str "tb" nid)
+            val-name (str "tv" nid)
+            ok-name  (str "tk" nid)
+            raw      (gogen/ident raw-name)
+            val      (gogen/ident val-name)
+            ok       (gogen/ident ok-name)]
+        (register-typed-call-temp! raw-name "vm.Value")
+        (register-typed-call-temp! val-name assert-spec)
+        (register-typed-call-temp! ok-name "bool")
+        (into (emit-call-stmts f raw invoke)
+              [(gogen/multi-assign "=" [val ok]
+                 [(gogen/type-assert raw (gogen/type assert-spec))])
+               (gogen/if-stmt nil (gogen/unary "!" ok)
+                 [(gogen/return-stmt
+                    [(error-return-zero f)
+                     (vm-call "NewTypeError"
+                              [raw
+                               (gogen/string-lit "returned where lowered code expects")
+                               (vm-sel vtype)])])]
+                 nil)
+               (gogen/assign "=" target
+                 (if conv (gogen/call (gogen/ident conv) [val]) val))]))
+      (emit-call-stmts f target invoke))))
+
 (defn- trampoline-call-stmts
   "Emit the runtime-dispatch trampoline for a :call, assigning the result to
    `target`. This is the always-correct fallback path: a cross-ns cached-var
@@ -2273,7 +2328,7 @@
                invoke    (gogen/call
                            (gogen/field-sel (gogen/ident "ec") "Invoke")
                            [cached-fn args-slice])]
-           (emit-call-stmts f target invoke))
+           (boxed-call-stmts f nid target invoke))
          ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
          ;; which threads ec into the dynamic invocation path.
          (let [callee (box-as-value f closed-exprs (first refs))
@@ -2284,7 +2339,7 @@
                ;; Total keyword lookup: the error is always nil at arity
                ;; 1-2, so discard it (`_`) and skip the dead check.
                [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
-               (emit-call-stmts f target invoke)))))))))
+               (boxed-call-stmts f nid target invoke)))))))))
 
 ;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
 ;; Shape: {multifn-name-str {:dispatch-type :type
