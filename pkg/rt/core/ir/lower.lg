@@ -253,7 +253,7 @@
     (loop [i 0]
       (when (< i (count blocks))
         (let [term-id (:term (nth blocks i))]
-          (when (and term-id (> term-id 0))
+          (when term-id
             (let [term (nth insts term-id)]
               (when (= :branch-if (nth term 0))
                 (let [aux    (nth term 2)
@@ -604,8 +604,12 @@
           ;; be negative when drop-count < argc (i.e., args at top overlap
           ;; the "old" slots they replace).
           ;; Target runtime SP after this op = target-params (RECUR
-          ;; rebuilds the stack from scratch). Target junk = 0.
-          (pos? drop-count)
+          ;; rebuilds the stack from scratch). Target junk = 0. Also taken
+          ;; at drop-count 0 when this block's junk would follow a jump
+          ;; into a target entered clean (a LICM-threaded loop's back edge).
+          (or (pos? drop-count)
+              (and (pos? cur-junk)
+                   (= 0 (get (:block-junk-seen @l) target))))
           (let [;; The emitted drop must empty the RUNTIME stack down to
                 ;; the args: runtime SP = lowerer SP + this block's
                 ;; junk-below, so cur-junk is added to `ignore`. Without
@@ -792,7 +796,7 @@
         params (ir/block-params bid f)
         insts  (ir/block-insts bid f)
         term   (ir/block-term bid f)
-        term-op (when (and term (not (zero? term))) (ir/op term f))
+        term-op (when term (ir/op term f))
         ;; For :branch-if, defer the cond's emission past the body walk
         ;; so the branch-target args can be materialized BELOW the cond
         ;; (positions 0..N-1) before BRANCH_FALSE pops the cond.
@@ -860,8 +864,9 @@
           nil
           :else (emit-inst! l nid))))
 
-    ;; Terminator.
-    (when (and term (not (zero? term)))
+    ;; Terminator. nil is the only "no terminator": InstId 0 is a real
+    ;; Inst, and an entry block that holds nothing but its Branch has it.
+    (when term
       (cond
         (= term-op :branch-if)
         (let [cond-aux (ir/aux term f)
@@ -938,7 +943,7 @@
 
 (defn- block-succs [f bid]
   (let [term (ir/block-term bid f)]
-    (if (or (nil? term) (zero? term))
+    (if (nil? term)
       []
       (let [op  (ir/op term f)
             aux (ir/aux term f)]

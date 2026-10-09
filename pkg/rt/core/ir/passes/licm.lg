@@ -243,7 +243,7 @@
           ;; The source of the edge can be `preheader` or any block in the loop body.
           (doseq [src (conj (vec body) preheader)
                   :let [term (ir/block-term src f)]
-                  :when (and term (> term 0))
+                  :when term
                   :let [op      (ir/op term f)
                         aux     (ir/aux term f)
                         ;; Determine the value being carried from `src`.
@@ -299,9 +299,7 @@
         loop-set   (loop-blocks f back-edge)
         pre-header (unique-pre-header f header loop-set)
         var-facts  (mut/analyze-var-stability f)]
-    ;; Skip a pre-header ending in InstId 0: the threading step and ir.lower
-    ;; read a 0 terminator as absent and would drop its args (let-go#1026).
-    (when (and pre-header (not= 0 (ir/block-term pre-header f)))
+    (when pre-header
       (let [hoistable      (collect-hoistable f loop-set var-facts)
             callee-clones  (atom {})
             ;; Hoist each in deterministic order, collecting [orig → clone] pairs.
