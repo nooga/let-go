@@ -149,8 +149,25 @@ func LookupVar(nsName, symName string) *vm.Var {
 func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
 	if *ptr == nil {
 		*ptr = LookupVar(nsName, symName)
+		if *ptr == nil {
+			return failingFn(vm.NewExecutionError(fmt.Sprintf("Unable to resolve var: %s/%s", nsName, symName)))
+		}
 	}
-	return (*ptr).Deref().(vm.Fn)
+	val := (*ptr).Deref()
+	if f, ok := val.(vm.Fn); ok {
+		return f
+	}
+	if !(*ptr).IsBound() {
+		return failingFn(vm.NewExecutionError(fmt.Sprintf("Attempting to call unbound fn: #'%s/%s", nsName, symName)))
+	}
+	return failingFn(vm.NewTypeError(val, "is not a function", nil))
+}
+
+// failingFn is a callable that reports err when invoked, so a call through a
+// var holding no function fails as an ordinary call error instead of a panic.
+func failingFn(err error) vm.Fn {
+	f, _ := vm.NativeFnType.Wrap(func([]vm.Value) (vm.Value, error) { return vm.NIL, err })
+	return f.(vm.Fn)
 }
 
 // MultiFnNativeFrozen reports whether the multimethod var still holds its

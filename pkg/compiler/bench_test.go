@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -111,29 +110,27 @@ func BenchmarkInitFromSource(b *testing.B) {
 	}
 }
 
+// initFromLGB is one iteration of BenchmarkInitFromLGB: the bundle-boot path
+// evalInit takes in a real `lg` process — decode the bundle, run clojure.core,
+// the lg baseline namespaces and the hybrid namespaces, and mark everything
+// else needs-load for its first (require ...). Calling the loader itself, not
+// a re-creation of it, keeps the benchmark and startup from drifting apart;
+// TestInitFromLGBLeavesLazyNamespacesUnloaded pins the lazy half.
+func initFromLGB(tb testing.TB) {
+	tb.Helper()
+	if err := loadPrecompiledBundle(); err != nil {
+		tb.Fatal(err)
+	}
+}
+
+// BenchmarkInitFromLGB is the startup gate (cmd/bench-ratchet initFilter):
+// its B/op and allocs/op are what a process pays before user code runs.
 func BenchmarkInitFromLGB(b *testing.B) {
 	if len(rt.CoreCompiledLGB) == 0 {
 		b.Skip("no precompiled core_compiled.lgb")
 	}
-	resolve := func(ns, name string) *vm.Var {
-		n := rt.NS(ns)
-		v := n.Lookup(vm.Symbol(name))
-		if v == vm.NIL {
-			return n.Def(name, vm.NIL)
-		}
-		return v.(*vm.Var)
-	}
 	for i := 0; i < b.N; i++ {
-		unit, err := bytecode.DecodeToExecUnitBytes(rt.CoreCompiledLGB, resolve)
-		if err != nil {
-			b.Fatal(err)
-		}
-		f := vm.NewFrame(unit.MainChunk, nil)
-		_, err = f.RunProtected()
-		vm.ReleaseFrame(f)
-		if err != nil {
-			b.Fatal(err)
-		}
+		initFromLGB(b)
 	}
 }
 

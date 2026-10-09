@@ -17,14 +17,14 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// compileCommand is the argv[1] that selects `lg compile` (#596). Only an
+// compileCommand is the argv[1] that selects `lg compile`. Only an
 // exact first argument dispatches, so every existing invocation — a script
 // path, -e, flags, bare lg for the REPL — reaches the flag parser unchanged.
 // A script literally named "compile" now needs a path prefix: lg ./compile.
 const compileCommand = "compile"
 
 // runCompile runs `lg compile`. Argument parsing, orchestration, and
-// diagnostics are let-go code (lg.commands.compile over lg.compiler, #786);
+// diagnostics are let-go code (lg.commands.compile over lg.compiler);
 // this side boots the runtime and supplies the steps that need this binary or
 // the Go toolchain, as the host map lg.compiler/build-program documents.
 func runCompile(args []string) int {
@@ -78,7 +78,27 @@ func compileHost() vm.Value {
 			return writeGoModule(s[0], s[1])
 		}),
 		vm.Keyword("go-build"), hostFn("go-build", 2, func(s []string) error {
-			return goBuild(s[0], s[1])
+			return goBuild(s[0], s[1], false)
+		}),
+		vm.Keyword("open-module"), vm.NewCtxNativeFn("open-module", func(_ *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+			if len(vs) != 1 {
+				return vm.NIL, fmt.Errorf("open-module expects 1 arg, got %d", len(vs))
+			}
+			dir, ok := vs[0].(vm.String)
+			if !ok {
+				return vm.NIL, fmt.Errorf("open-module: arg 1 is %s, not a string", vs[0].Type())
+			}
+			m, err := openCallerModule(string(dir))
+			if err != nil {
+				return vm.NIL, err
+			}
+			return vm.NewArrayMap([]vm.Value{
+				vm.Keyword("dir"), vm.String(m.GenDir()),
+				vm.Keyword("import-path"), vm.String(m.ImportPath()),
+			}), nil
+		}),
+		vm.Keyword("go-build-readonly"), hostFn("go-build-readonly", 2, func(s []string) error {
+			return goBuild(s[0], s[1], true)
 		}),
 		vm.Keyword("make-temp-dir"), vm.NewCtxNativeFn("make-temp-dir", func(_ *vm.ExecContext, _ []vm.Value) (vm.Value, error) {
 			dir, err := os.MkdirTemp("", "lg-compile-*")
@@ -129,10 +149,12 @@ func compileLGBSubprocess(src, dst, entry string) error {
 	return nil
 }
 
-// goBuild builds the generated module in dir to out. It skips `go mod tidy`
+// goBuild builds the generated package in dir to out. It skips `go mod tidy`
 // for the reason -w does: writeGoModule already resolved the one require the
 // module has, and tidy would also walk let-go's test-only dependencies.
-func goBuild(dir, out string) error {
+// readonly is for a caller-supplied module: an explicit -mod=readonly keeps
+// GOFLAGS=-mod=mod from editing the caller's go.mod.
+func goBuild(dir, out string, readonly bool) error {
 	abs, err := filepath.Abs(out)
 	if err != nil {
 		return err
@@ -142,7 +164,11 @@ func goBuild(dir, out string) error {
 	if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
 		return fmt.Errorf("output %s is a directory; name the binary with -o", out)
 	}
-	cmd := exec.Command(gomod.GoToolPath(), "build", "-o", abs, ".")
+	args := []string{"build"}
+	if readonly {
+		args = append(args, "-mod=readonly")
+	}
+	cmd := exec.Command(gomod.GoToolPath(), append(args, "-o", abs, ".")...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

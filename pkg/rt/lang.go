@@ -575,6 +575,15 @@ func ClearNSNeedsLoad(name string) {
 	delete(nsNeedsLoad, name)
 }
 
+// NSNeedsLoad reports whether name is registered but still waiting for its
+// precompiled chunk to run — the state LoadCoreBundle leaves every
+// non-core, non-baseline bundled namespace in until it is required.
+func NSNeedsLoad(name string) bool {
+	nsMu.RLock()
+	defer nsMu.RUnlock()
+	return nsNeedsLoad[resolveNSAlias(name)]
+}
+
 // LookupNS returns a namespace if it exists, nil otherwise. Does not create.
 // lookupNSCached returns a namespace from the registry without invoking the loader.
 // Used by the VM's qualified symbol resolver to avoid triggering loads on every miss.
@@ -4999,6 +5008,10 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	installHostHashMap(ns)
 	installHostArrayDeque(ns)
 	installHostStringBuilder(ns)
+
+	// Last: the host-class namespaces the installers above filled get their
+	// clojure.core refers only now (see defStaticNS).
+	referStaticNamespaces()
 }
 
 func longCompatValue(v int64) vm.Value { return vm.MakeInt64(v) }

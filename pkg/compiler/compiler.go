@@ -47,10 +47,15 @@ type Context struct {
 	consts     *vm.Consts
 	chunk      *vm.CodeChunk
 	formalArgs map[vm.Symbol]int
-	argCount   int // total fixed-arity parameter slots, including `_`s
-	source     string
-	variadric  bool
-	locals     []map[vm.Symbol]int
+	// knownArgs marks the formal args whose host type is statically known
+	// (they carried a :tag hint); knownLocals mirrors locals the same way.
+	// Only the reflection warning consults them.
+	knownArgs   map[vm.Symbol]bool
+	argCount    int // total fixed-arity parameter slots, including `_`s
+	source      string
+	variadric   bool
+	locals      []map[vm.Symbol]int
+	knownLocals []map[vm.Symbol]bool
 	// localSlotCounts mirrors locals: each entry is the raw count of stack
 	// slots in that scope. We track this separately because shadowed bindings
 	// (e.g. `(let [[a w] ... [b w] ...])`) overwrite the symbol→slot map
@@ -407,6 +412,7 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 		consts:         c.consts,
 		chunk:          fchunk,
 		formalArgs:     make(map[vm.Symbol]int),
+		knownArgs:      make(map[vm.Symbol]bool),
 		locals:         []map[vm.Symbol]int{},
 		closedOvers:    make(map[vm.Symbol]*closureCell),
 		closedOversSeq: []vm.Symbol{},
@@ -415,15 +421,11 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 	}
 
 	for i := range args {
-		a := args[i]
 		// Strip metadata wrappers from arg symbols: `[^String s]` is read as
-		// `[(with-meta s {:tag String})]`. We don't yet attach meta to locals,
-		// just drop it so the symbol check below succeeds.
-		if lst, ok := a.(*vm.List); ok && lst.First() == vm.Symbol("with-meta") {
-			if rest := lst.Next(); rest != nil {
-				a = rest.First()
-			}
-		}
+		// `[(with-meta s {:tag String})]`. We don't yet attach meta to locals;
+		// a :tag only marks the arg as a known host target for the reflection
+		// warning, and dispatch stays dynamic.
+		a, tagged := stripBindingMeta(args[i])
 		s, ok := a.(vm.Symbol)
 		if !ok {
 			return nil, NewCompileError("all fn formal arguments must be symbols")
@@ -448,6 +450,7 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 		// including `_`s, for arity checks.
 		fc.argCount++
 		fc.formalArgs[s] = i
+		fc.knownArgs[s] = tagged
 	}
 	return fc, nil
 }
@@ -537,9 +540,36 @@ func compileErrorAt(msg string, form vm.Value) *CompileError {
 	return NewCompileErrorWithSource(msg, info)
 }
 
-func hostTargetStaticallyKnown(target vm.Value) bool {
+// stripBindingMeta unwraps a `(with-meta sym meta)` binding form, as the reader
+// produces for `^Tag sym`, and reports whether the metadata carried a :tag.
+func stripBindingMeta(form vm.Value) (vm.Value, bool) {
+	lst, ok := form.(*vm.List)
+	if !ok || lst.First() != vm.Symbol("with-meta") {
+		return form, false
+	}
+	rest := lst.Next()
+	if rest == nil {
+		return form, false
+	}
+	tagged := false
+	if metaForm := rest.Next(); metaForm != nil {
+		if meta, ok := metaForm.First().(vm.Lookup); ok {
+			tagged = meta.ValueAt(vm.Keyword("tag")) != vm.NIL
+		}
+	}
+	return rest.First(), tagged
+}
+
+// hostTargetStaticallyKnown reports whether the target of a host member call
+// has a type the compiler can name: a literal, a constructor or ->Record call,
+// a with-meta form, or a local whose nearest declaration is known (a :tag hint,
+// or a let/loop init that is itself known).
+func (c *Context) hostTargetStaticallyKnown(target vm.Value) bool {
+	if sym, ok := target.(vm.Symbol); ok {
+		return c.lexicalKnown(sym)
+	}
 	if target.Type() != vm.ListType {
-		return target.Type() != vm.SymbolType
+		return true
 	}
 	seq, ok := target.(vm.Seq)
 	if !ok || seq == nil {
@@ -550,7 +580,9 @@ func hostTargetStaticallyKnown(target vm.Value) bool {
 		return false
 	}
 	name := string(head)
-	return name == "with-meta" || strings.HasPrefix(name, "->") || strings.HasSuffix(name, ".")
+	// `->` and `->>` are the threading macros, not ->Record constructors.
+	isRecordCtor := strings.HasPrefix(name, "->") && name != "->" && name != "->>"
+	return name == "with-meta" || isRecordCtor || strings.HasSuffix(name, ".")
 }
 
 // compileError creates a CompileError with source info from the current form context.
@@ -565,6 +597,24 @@ func (c *Context) compileError(msg string) *CompileError {
 	return NewCompileError(msg)
 }
 
+// maxFormSeqLen bounds how many elements compileForm realizes from a non-list
+// seq. Lazy sequences have no cheap finiteness test, so this is the backstop
+// for the ones isUnboundedSeq cannot recognize, such as a cycle.
+const maxFormSeqLen = 1 << 20
+
+// isUnboundedSeq reports whether o is a seq known to never end: iterate, a
+// zero-argument range, or a one-argument repeat. Realizing one of these in
+// compileForm would never return.
+func isUnboundedSeq(o vm.Value) bool {
+	switch v := o.(type) {
+	case *vm.Iterate, *vm.InfiniteRange:
+		return true
+	case *vm.Repeat:
+		return v.RawCount() < 0
+	}
+	return false
+}
+
 func (c *Context) compileForm(o vm.Value) error {
 	// Track current form for error reporting
 	prevForm := c.currentForm
@@ -576,7 +626,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.chunk.AddSourceInfo(*info)
 	}
 	switch o.Type() {
-	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType:
+	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType, vm.TypeType:
 		n := c.constant(o)
 		c.emitWithArg(vm.OP_LOAD_CONST, n)
 		c.incSP(1)
@@ -654,13 +704,20 @@ func (c *Context) compileForm(o vm.Value) error {
 			return err
 		}
 		c.tailPosition = tp
-	case vm.MapType:
+	case vm.MapType, vm.SortedMapType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
+		ctor := "array-map"
+		if sm, ok := o.(*vm.SortedMap); ok {
+			if !sm.UsesDefaultComparator() {
+				return c.compileError("can't compile a sorted map with a custom comparator as a form: no literal can carry the comparator")
+			}
+			ctor = "sorted-map"
+		}
 		err := c.compileAggregateWithMeta(o, func() error {
-			arrayMap := c.constant(rt.CoreNS.Lookup("array-map"))
-			c.emitWithArg(vm.OP_LOAD_CONST, arrayMap)
+			mapCtor := c.constant(rt.CoreNS.Lookup(vm.Symbol(ctor)))
+			c.emitWithArg(vm.OP_LOAD_CONST, mapCtor)
 			c.incSP(1)
 
 			// Get entries via Seq for both Map and PersistentMap
@@ -694,13 +751,20 @@ func (c *Context) compileForm(o vm.Value) error {
 			return err
 		}
 		c.tailPosition = tp
-	case vm.SetType:
+	case vm.SetType, vm.SortedSetType:
 		tp := c.tailPosition
 		c.tailPosition = false
 
+		ctor := "hash-set"
+		if ss, ok := o.(*vm.SortedSet); ok {
+			if !ss.UsesDefaultComparator() {
+				return c.compileError("can't compile a sorted set with a custom comparator as a form: no literal can carry the comparator")
+			}
+			ctor = "sorted-set"
+		}
 		err := c.compileAggregateWithMeta(o, func() error {
-			hashSet := c.constant(rt.CoreNS.Lookup("hash-set"))
-			c.emitWithArg(vm.OP_LOAD_CONST, hashSet)
+			setCtor := c.constant(rt.CoreNS.Lookup(vm.Symbol(ctor)))
+			c.emitWithArg(vm.OP_LOAD_CONST, setCtor)
 			c.incSP(1)
 
 			count := 0
@@ -721,7 +785,7 @@ func (c *Context) compileForm(o vm.Value) error {
 			return err
 		}
 		c.tailPosition = tp
-	case vm.ListType:
+	case vm.ListType, vm.SequenceType, vm.RangeType, vm.RepeatType, vm.IterateType:
 		prevList := c.currentList
 		c.currentList = o
 		defer func() { c.currentList = prevList }()
@@ -733,8 +797,14 @@ func (c *Context) compileForm(o vm.Value) error {
 		lst, isList := o.(*vm.List)
 		if !isList {
 			if seq, ok := o.(vm.Seq); ok {
+				if isUnboundedSeq(o) {
+					return c.compileError("can't compile an unbounded sequence as a form")
+				}
 				var vals []vm.Value
 				for s := seq; s != nil; s = s.Next() {
+					if len(vals) >= maxFormSeqLen {
+						return c.compileError(fmt.Sprintf("can't compile a sequence of more than %d elements as a form; is it unbounded?", maxFormSeqLen))
+					}
 					vals = append(vals, s.First())
 				}
 				realized, _ := vm.ListType.Box(vals)
@@ -819,7 +889,7 @@ func (c *Context) compileForm(o vm.Value) error {
 					return c.compileForm(normalized)
 				}
 				args := lst.Next()
-				if args != nil && !hostTargetStaticallyKnown(args.First()) {
+				if args != nil && !c.hostTargetStaticallyKnown(args.First()) {
 					rt.EmitReflectionWarningForForm(o, "host-interop", "host target type is not statically known; using dynamic member dispatch")
 				}
 			}
@@ -1198,16 +1268,21 @@ func (c *Context) updatePlaceholderArg(placeholder int, arg int) {
 
 func (c *Context) pushLocals() {
 	c.locals = append(c.locals, map[vm.Symbol]int{})
+	c.knownLocals = append(c.knownLocals, map[vm.Symbol]bool{})
 	c.localSlotCounts = append(c.localSlotCounts, 0)
 }
 
 func (c *Context) popLocals() {
 	c.locals = c.locals[0 : len(c.locals)-1]
+	c.knownLocals = c.knownLocals[0 : len(c.knownLocals)-1]
 	c.localSlotCounts = c.localSlotCounts[0 : len(c.localSlotCounts)-1]
 }
 
 func (c *Context) addLocal(name vm.Symbol) {
 	c.locals[len(c.locals)-1][name] = c.sp - 1
+	// A new binding is unknown until the caller says otherwise, which also
+	// clears a known flag left by an earlier binding of the same name.
+	delete(c.knownLocals[len(c.knownLocals)-1], name)
 	// Record the source name for this slot as debug info (slot -> name), so it
 	// survives into the bundle and can name locals in crash traces.
 	if name != "_" {
@@ -1265,6 +1340,25 @@ func (c *Context) resolvesAsLexical(symbol vm.Symbol) bool {
 		}
 		if ctx.arg(symbol) >= 0 {
 			return true
+		}
+	}
+	return false
+}
+
+// lexicalKnown reports whether symbol's nearest lexical declaration is a
+// statically known host target. It walks scopes as resolvesAsLexical does and
+// stops at the first context that declares symbol, so an unhinted inner
+// binding masks a hinted outer one. A closed-over symbol is answered by the
+// enclosing context that declares it.
+func (c *Context) lexicalKnown(symbol vm.Symbol) bool {
+	for ctx := c; ctx != nil; ctx = ctx.parent {
+		for i := len(ctx.locals) - 1; i >= 0; i-- {
+			if _, ok := ctx.locals[i][symbol]; ok {
+				return ctx.knownLocals[i][symbol]
+			}
+		}
+		if _, ok := ctx.formalArgs[symbol]; ok {
+			return ctx.knownArgs[symbol]
 		}
 	}
 	return false
@@ -1705,16 +1799,12 @@ func parseBindingsVector(val vm.Value) ([]vm.Value, error) {
 func compileBindings(c *Context, binds []vm.Value, opName string) (int, error) {
 	bindn := 0
 	for i := 0; i < len(binds); i += 2 {
-		name := binds[i]
 		// Strip a metadata wrapper from the binding name: `^long x` is read as
 		// `(with-meta x {:tag long})`. As with fn params, we don't yet attach
-		// the tag to the local (a future hook for the IR typeinfer pass), just
-		// unwrap to the bare symbol so the check below succeeds.
-		if lst, ok := name.(*vm.List); ok && lst.First() == vm.Symbol("with-meta") {
-			if rest := lst.Next(); rest != nil {
-				name = rest.First()
-			}
-		}
+		// the tag to the local (a future hook for the IR typeinfer pass); the
+		// tag only marks the local as a known host target for the reflection
+		// warning.
+		name, tagged := stripBindingMeta(binds[i])
 		if name.Type() != vm.SymbolType {
 			return 0, c.compileError(fmt.Sprintf("%s binding name must be a symbol: %v", opName, name))
 		}
@@ -1722,11 +1812,19 @@ func compileBindings(c *Context, binds []vm.Value, opName string) (int, error) {
 			return 0, NewCompileError(fmt.Sprintf("%s bindings must have even number of forms", opName))
 		}
 		value := binds[i+1]
+		// Decided before addLocal so the init sees the enclosing bindings,
+		// not the name it is about to bind. Only let infers from the init: a
+		// loop local can be rebound to anything by recur, so only its hint
+		// counts.
+		known := tagged || (opName == "let" && c.hostTargetStaticallyKnown(value))
 		err := c.compileForm(value)
 		if err != nil {
 			return 0, NewCompileError(fmt.Sprintf("compiling %s binding", opName)).Wrap(err)
 		}
 		c.addLocal(name.(vm.Symbol))
+		if known {
+			c.knownLocals[len(c.knownLocals)-1][name.(vm.Symbol)] = true
+		}
 		bindn++
 	}
 	return bindn, nil

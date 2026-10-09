@@ -1002,14 +1002,28 @@
    as the bytecode compiler does for a literal: insertion-ordered up to the
    array-map size limit. Raw map values remain supported for callers that
    bypass expand-all. Literal-only entries fold to a Const. Metadata is kept as
-   build-coll-const and with-meta-call describe."
+   build-coll-const and with-meta-call describe.
+
+   A sorted map with a non-literal entry is declined rather than rebuilt: the
+   array-map call would keep the entries and drop the ordering, and there is no
+   form that can carry a sorted-map-by comparator. Declining hands the fn to the
+   bytecode compiler, which rebuilds sorted maps as sorted maps and refuses a
+   custom comparator outright. All-literal sorted maps take the Const arm and
+   carry the real collection, comparator included."
   (let [entries    (map-entries form)
         all-const? (every? (fn [[k v]]
                              (and (is-literal? k) (is-literal? v)))
                            entries)
         pairs      (vec (mapcat identity entries))]
-    (if all-const?
-      (build-coll-const form (apply array-map pairs) ctx)
+    (cond
+      all-const?
+      (build-coll-const form (if (sorted? form) form (apply array-map pairs)) ctx)
+
+      (sorted? form)
+      (throw (ex-info (str "build-map: can't rebuild a sorted map with non-literal entries " (pr-str form))
+                      {:fn :build-map :type (type form) :value form}))
+
+      :else
       (with-meta-call form ctx
         (fn [form ctx]
           (let [fn-id (add-inst! ctx (ctx-block ctx)
@@ -1117,15 +1131,10 @@
         locals-map (current-locals-flat ctx)
         all-caps   (vec (sort-by (fn [sym] (get locals-map sym))
                           (keys locals-map)))
-        ;; Separate cheap (function-scoped) from non-cheap captures.
-        ;; Cheap ops can be re-emitted at any use site; they never need
-        ;; block-arg threading across block edges.
-        non-cheap-caps (vec (remove (fn [sym]
-                                      (let [o (ir/op (get locals-map sym) f)]
-                                        ;; :load-var excluded — var roots are mutable; a set!
-                                        ;; between the load and a later use would let a re-emitted
-                                        ;; rt.LookupVar read the new value, so it must stay threaded.
-                                        (and (ir/op-cheap-load? o) (not= o :load-var))))
+        ;; Separate captures that can be re-emitted at any use site from
+        ;; those that must reach the branches as block args (see
+        ;; ir/reemittable-at-use?: var loads and fn literals are threaded).
+        non-cheap-caps (vec (remove (fn [sym] (ir/reemittable-at-use? (get locals-map sym) f))
                                     all-caps))
         ;; Create blocks for then, else, join.
         then-blk  (ir/add-block f)
@@ -1243,10 +1252,7 @@
         ;; Cheap-load captures (LoadArg/Var/Const/LoadClosed) don't need
         ;; block-arg threading in the loop header — the lowerer re-emits them
         ;; at use site as function-scoped locals.
-        non-cheap-body-caps (vec (remove (fn [sym]
-                                           (let [o (ir/op (lookup-local ctx sym) f)]
-                                             ;; :load-var excluded — mutable var root must stay threaded (P1).
-                                             (and (ir/op-cheap-load? o) (not= o :load-var))))
+        non-cheap-body-caps (vec (remove (fn [sym] (ir/reemittable-at-use? (lookup-local ctx sym) f))
                                          body-caps))
         n-non-cheap-caps    (count non-cheap-body-caps)
         ;; Total header param count = n-slots (loop vars) + n-non-cheap-caps.

@@ -179,7 +179,17 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 			return nil
 		}
 	}
-	return runChunk(unit.MainChunk)
+	if err := runChunk(unit.MainChunk); err != nil {
+		return err
+	}
+	// The chunk's ns form entered the namespace it defines, so *ns* names it;
+	// a single-file program has no namespace table to drain by. Only that
+	// namespace is drained: one that exists only as decode stubs still has its
+	// chunk to run, and that replay would overwrite drained overrides.
+	if ns, ok := CurrentNS.Deref().(*vm.Namespace); ok {
+		ApplyGoOverrides(ns)
+	}
+	return nil
 }
 
 // InvokeProgramEntry looks up name ("-main" or "main") in the given

@@ -250,9 +250,48 @@
    mirroring how the namespace is fully loaded before production lowering."
   (when (and parsed (seq? parsed))
     (doseq [f (rest parsed)]
+      ;; By name, so a qualified (clojure.core/require ...) runs too; a file
+      ;; that in-ns'es into a namespace without the refer writes it that way.
       (when (and (seq? f) (symbol? (first f))
-                 (let [h (str (first f))] (or (= h "require") (= h "use"))))
+                 (let [h (name (first f))] (or (= h "require") (= h "use"))))
         (try (eval f) (catch e nil))))))
+
+;; A file can switch namespaces part-way with a top-level (in-ns 'x); loading
+;; it defines the forms after that switch in x. The harness splits a file's
+;; forms at each switch and processes every segment in its own namespace, so a
+;; defn after (in-ns 'json) resolves json's names as it does when loaded.
+(defn in-ns-target [f]
+  "The namespace a top-level (in-ns 'x) form switches to, or nil."
+  (when (and (seq? f) (contains? #{'in-ns 'clojure.core/in-ns} (first f)))
+    (let [a (second f)]
+      (when (and (seq? a) (= 'quote (first a)) (symbol? (second a)))
+        (second a)))))
+
+(defn ns-segments [forms]
+  "Split a file's top-level forms at each (in-ns 'x) into [ns-sym forms]
+   pairs, in file order. The first segment's ns-sym is nil: it runs in the
+   namespace the file's own ns form set up."
+  (reduce (fn [segs f]
+            (if-let [target (in-ns-target f)]
+              (conj segs [target []])
+              (update-in segs [(dec (count segs)) 1] conj f)))
+          [[nil []]]
+          forms))
+
+(defn in-home-ns [f]
+  "Call f, then return to the namespace current before it. A file's ns form
+   and in-ns switches are the file's own business: without this, the next file
+   without an ns form ran in whatever namespace the last one ended in (a
+   host-class stub like TimeUnit, with no clojure.core)."
+  (let [home (ns-name *ns*)]
+    (try
+      (f)
+      (finally
+        (eval (list 'clojure.core/in-ns (list 'quote home)))))))
+
+(defn enter-segment! [seg-ns]
+  (when seg-ns
+    (try (eval (list 'clojure.core/in-ns (list 'quote seg-ns))) (catch e nil))))
 
 ;; Fixture enumeration is delegated to the lowering pipeline's canonical
 ;; `lowerable-fn-forms` (ir.passes.pipeline) — see stress-file. A `defn` is
@@ -614,8 +653,7 @@
           p95 (nth sorted p95-idx)]
       {:mean mean :median median :p95 p95})))
 
-(defn stress-file [path]
-  "Compile each defn in path, tracking times and error buckets."
+(defn- stress-file* [path]
   (let [parsed (read-all path)]
     (if (nil? parsed)
       {:file path :read-error true}
@@ -624,28 +662,36 @@
             ns-sym   (ns-name-from ns-form-)]
         (when ns-sym
           (try
-            (eval (list 'in-ns (list 'quote ns-sym)))
+            (eval (list 'clojure.core/in-ns (list 'quote ns-sym)))
             (catch e nil)))
         (require-deps! ns-form-)
-        (require-top-level! parsed)
-        ;; One expansion pass over the file (AFTER the requires, so the file's
-        ;; macros — defn, deftest, when-var-exists, ... — are available): yields
-        ;; both the lowerable fixtures and every name the ns defines.
-        (let [{defns :fixtures names :defined-names}
-              (ir.passes.pipeline/analyze-ns-forms (rest parsed))]
-          ;; Pre-declare every defined name (incl. macro-generated) that doesn't
-          ;; already resolve, so sibling/forward refs resolve at build time —
-          ;; mirroring a fully-loaded ns, without clobbering loaded vars
-          ;; (map/filter/...). Supersedes the defn-only declare-own-defns!.
-          (when-let [decl-names (seq (remove (fn [nm] (some? (resolve nm))) names))]
-            (try (eval (cons 'declare decl-names)) (catch e nil)))
-          (let [results (mapv (fn [d]
-                                (let [name (nth d 1)
-                                      [r ms] (try-ir-timed d)]
-                                  (log! path name r ms)
-                                  [name [r ms]]))
-                          defns)
-                ok     (count (filter (fn [[_ [r _]]] (= :ok r)) results))
+        (let [results
+              (reduce
+                (fn [acc [seg-ns forms]]
+                  (enter-segment! seg-ns)
+                  (require-top-level! (cons 'do forms))
+                  ;; One expansion pass over the segment (AFTER the requires, so
+                  ;; the file's macros — defn, deftest, when-var-exists, ... —
+                  ;; are available): yields both the lowerable fixtures and
+                  ;; every name the segment defines.
+                  (let [{defns :fixtures names :defined-names}
+                        (ir.passes.pipeline/analyze-ns-forms forms)]
+                    ;; Pre-declare every defined name (incl. macro-generated)
+                    ;; that doesn't already resolve, so sibling/forward refs
+                    ;; resolve at build time — mirroring a fully-loaded ns,
+                    ;; without clobbering loaded vars (map/filter/...).
+                    (when-let [decl-names (seq (remove (fn [nm] (some? (resolve nm))) names))]
+                      (try (eval (cons 'declare decl-names)) (catch e nil)))
+                    (into acc
+                          (mapv (fn [d]
+                                  (let [name (nth d 1)
+                                        [r ms] (try-ir-timed d)]
+                                    (log! path name r ms)
+                                    [name [r ms]]))
+                                defns))))
+                []
+                (ns-segments (rest parsed)))]
+          (let [ok     (count (filter (fn [[_ [r _]]] (= :ok r)) results))
                 errs   (filter (fn [[_ [r _]]] (not= :ok r)) results)
                 times  (map (fn [[_ [_ t]]] t) results)
                 ;; Normalize every failure through classify-error so the stored
@@ -657,9 +703,13 @@
                                            (str (ir.coverage/classify-error r)))
                                          errs)
                 error-buckets (frequencies (filter (fn [e] (not (nil? e))) err-classifications))]
-            {:file path :total (count defns) :ok ok :err (count errs)
+            {:file path :total (count results) :ok ok :err (count errs)
              :times times
              :error-buckets error-buckets}))))))
+
+(defn stress-file [path]
+  "Compile each defn in path, tracking times and error buckets."
+  (in-home-ns (fn [] (stress-file* path))))
 
 (defn trace-mode-run []
   "Drill into one defn. Loads the corpus file like the main harness so the
@@ -675,16 +725,26 @@
                                   (rest parsed)))
           ns-sym   (ns-name-from ns-form-)]
       (when ns-sym
-        (try (eval (list 'in-ns (list 'quote ns-sym))) (catch e nil)))
+        (try (eval (list 'clojure.core/in-ns (list 'quote ns-sym))) (catch e nil)))
       (require-deps! ns-form-)
-      (require-top-level! parsed)
       ;; Enumerate fixtures through the SAME canonical analyze-ns-forms the main
       ;; harness uses, so macro-generated fixtures (deftest bodies, etc.) are
       ;; traceable. The old literal `defn-forms` scanner only saw bare defn/defn-
       ;; and made `ir-stress trace ... and.cljc test-and` report a bogus
       ;; "no defn named 'test-and'" even though main mode reports that fixture.
-      (let [defns      (:fixtures (ir.passes.pipeline/analyze-ns-forms (rest parsed)))
-            target     (first (filter (fn [d] (= (nth d 1) trace-defn-name)) defns))]
+      ;; Each segment is entered in file order and searched in its own ns, so
+      ;; the traced defn is built where the file defines it.
+      (let [[defns target]
+            (reduce (fn [[seen found] [seg-ns forms]]
+                      (if found
+                        (reduced [seen found])
+                        (do (enter-segment! seg-ns)
+                            (require-top-level! (cons 'do forms))
+                            (let [ds (:fixtures (ir.passes.pipeline/analyze-ns-forms forms))]
+                              [(into seen ds)
+                               (first (filter (fn [d] (= (nth d 1) trace-defn-name)) ds))]))))
+                    [[] nil]
+                    (ns-segments (rest parsed)))]
         (when (nil? target)
           (println (str "no fixture named '" trace-defn-name "' in " path))
           (println "Available fixtures:")
@@ -704,15 +764,19 @@
   (let [t0 (System/nanoTime)]
     (doseq [f files]
       (try
-        (let [parsed (read-all (str corpus-dir f))
-              ns-form- (first (filter (fn [x] (and (seq? x) (= (first x) 'ns)))
-                                      (rest parsed)))
-              ns-sym (ns-name-from ns-form-)]
-          (when ns-sym
-            (eval (list 'in-ns (list 'quote ns-sym))))
-          (require-deps! ns-form-)
-          (require-top-level! parsed)
-          (declare-own-defns! parsed))
+        (in-home-ns
+          (fn []
+            (let [parsed (read-all (str corpus-dir f))
+                  ns-form- (first (filter (fn [x] (and (seq? x) (= (first x) 'ns)))
+                                          (rest parsed)))
+                  ns-sym (ns-name-from ns-form-)]
+              (when ns-sym
+                (eval (list 'clojure.core/in-ns (list 'quote ns-sym))))
+              (require-deps! ns-form-)
+              (doseq [[seg-ns forms] (ns-segments (rest parsed))]
+                (enter-segment! seg-ns)
+                (require-top-level! (cons 'do forms))
+                (declare-own-defns! (cons 'do forms))))))
         (catch e nil)))  ;; Silently skip load errors; we'll catch them per-fixture
     (let [t1 (System/nanoTime)
           ms (double (/ (- t1 t0) 1000000.0))]
@@ -842,7 +906,9 @@
               (nil? baseline)
               (do (println (str "GATE ERROR: cannot read baseline " gate-baseline-path))
                   (System/exit 2))
-              (empty? base-buckets)
+              ;; An absent :buckets is a pre-classification baseline; an empty
+              ;; one is a clean corpus, where every failure is a regression.
+              (not (contains? baseline :buckets))
               (do (println (str "GATE ERROR: baseline has no :buckets to ratchet against."))
                   (println "      Re-baseline with the classified failure set: make ir-stress-rebaseline")
                   (System/exit 2))
