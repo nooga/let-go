@@ -214,9 +214,9 @@ func InvokeValueEC(ec *vm.ExecContext, target vm.Value, args []vm.Value) (vm.Val
 	return inv.Invoke(args)
 }
 
-// BoxNativeFn wraps a Go function literal as a let-go callable.
-// Lowered Go closures use this at the runtime boundary after capturing
-// outer Go locals directly.
+// BoxNativeFn wraps a Go func as a let-go callable. Lowered Go uses it for a
+// capture-free fn literal that cannot be a closure struct (a Go signature that
+// is not uniformly vm.Value); a capturing literal is always a closure struct.
 func BoxNativeFn(fn any) vm.Value {
 	v, err := vm.NativeFnType.Box(fn)
 	if err != nil {
@@ -420,8 +420,12 @@ func UnsignedBitShiftRightValue(a, b vm.Value) vm.Value {
 
 // BoxRestArgs boxes a variadic rest-args slice into a vm.Value list.
 // Used by the Go lowering when lowering :load-arg for the rest arg of
-// a variadic function (where the Go param is ...vm.Value).
+// a variadic function (where the Go param is ...vm.Value). An empty rest
+// binds nil, as the bytecode VM and Clojure bind it: (fn [& xs] xs) => nil.
 func BoxRestArgs(args []vm.Value) vm.Value {
+	if len(args) == 0 {
+		return vm.NIL
+	}
 	v, _ := vm.ListType.Box(args)
 	return v
 }
