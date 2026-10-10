@@ -57,6 +57,20 @@ func TestSharedLiteralsStayIntact(t *testing.T) {
 	}
 }
 
+// A fn literal that closes over nothing is one object for every evaluation of
+// its form, multi-arity included; one whose arms capture is made per
+// evaluation, as in Clojure.
+func TestCaptureFreeFnLiteralsAreShared(t *testing.T) {
+	cases := []identityCase{
+		{"fixed arity", "(do (defn mk [] (fn [a] a)) (identical? (mk) (mk)))", true},
+		{"variadic", "(do (defn mk [] (fn [& r] r)) (identical? (mk) (mk)))", true},
+		{"multi-arity", "(do (defn mk [] (fn ([] 0) ([a] a))) (identical? (mk) (mk)))", true},
+		{"multi-arity with a rest arm", "(do (defn mk [] (fn ([] 0) ([a & r] r))) (identical? (mk) (mk)))", true},
+		{"multi-arity capturing", "(do (defn mk [x] (fn ([] x) ([a] a))) (identical? (mk 1) (mk 1)))", false},
+	}
+	checkIdentity(t, cases)
+}
+
 // identityCase evaluates src, an (identical? …) of two evaluations of a form,
 // and expects shared.
 type identityCase struct {

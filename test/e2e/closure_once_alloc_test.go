@@ -13,8 +13,9 @@ import (
 )
 
 // Creating a closure in lowered Go costs one allocation, the same as the one
-// Fn the bytecode VM allocates when the fn form is evaluated: lowered Go must
-// not allocate more than the bytecode it replaces. Each fixture fn below
+// Fn the bytecode VM allocates when the fn form is evaluated, and a literal
+// that closes over nothing costs none, as on the VM, where it is a constant:
+// lowered Go must not allocate more than the bytecode it replaces. Each fixture fn below
 // evaluates one fn form of a given shape and reads the value through an
 // `identical?` call, so whatever that call costs is measured separately and
 // subtracted; what remains is the closure's own cost. A multi-arity literal
@@ -121,7 +122,8 @@ func TestOneAllocationPerClosureForm(t *testing.T) {
 		{"CapMixed", CapMixed, 1},
 		{"CapMulti", CapMulti, 2 + multiArityCost},
 		{"CapNested", CapNested, 1},
-		{"FreeVariadic", func(ec *vm.ExecContext, _ vm.Value) (vm.Value, error) { return FreeVariadic(ec) }, 1},
+		// Closes over nothing: one shared fn, as the VM's fn constant.
+		{"FreeVariadic", func(ec *vm.ExecContext, _ vm.Value) (vm.Value, error) { return FreeVariadic(ec) }, 0},
 	}
 	for _, tc := range cases {
 		got := testing.AllocsPerRun(200, func() {

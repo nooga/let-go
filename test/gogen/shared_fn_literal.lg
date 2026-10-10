@@ -1,0 +1,45 @@
+;; Native-lowering trampoline fixture: a fn literal that closes over nothing is
+;; one object for the whole program, on every compile path.
+;;
+;; The bytecode VM keeps such a literal as a constant, so every evaluation of
+;; the fn form returns the same fn; lowered Go must too, for a variadic or
+;; multi-arity literal as for a fixed-arity one. Calls dispatch as the VM's do:
+;; an exact fixed arity first, then the rest arm, with the VM's arity errors.
+;; The trampoline compares (run) under the lowered Go against the bytecode VM.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.shared-fn-literal)
+
+(defn- arity-message [thunk]
+  (try (do (thunk) :no-error)
+       (catch e (clojure.string/replace (ex-message e) #"<[^>]*>" "<fn>"))))
+
+(defn variadic [] (fn [& xs] (count xs)))
+(defn fixed-and-rest [] (fn [a & more] [a more]))
+(defn multi [] (fn ([] :zero) ([a] [:one a]) ([a b & r] [:rest a b r])))
+(defn multi-fixed [] (fn ([a] :one) ([a b] :two)))
+
+(def ^:dynamic *depth* :root)
+(defn reads-dynamic [] (fn [& _] *depth*))
+
+;; A capture-free literal inside another: each is its own shared fn.
+(defn nested [] (fn [& xs] ((fn [& ys] (count ys)) 1 2 3)))
+(defn run-nested [] [((nested)) ((nested) 9)])
+
+(defn run []
+  (let [v (variadic) m (multi)]
+    [(identical? v v)
+     (identical? (variadic) (variadic))
+     (identical? (multi) (multi))
+     (identical? (fixed-and-rest) (fixed-and-rest))
+     (v) (v 1 2 3)
+     ((fixed-and-rest) 1) ((fixed-and-rest) 1 2 3)
+     (m) (m 1) (m 1 2) (m 1 2 3 4)
+     ((multi-fixed) 1) ((multi-fixed) 1 2)
+     (arity-message #((fixed-and-rest)))
+     (arity-message #((multi-fixed)))
+     (arity-message #((multi-fixed) 1 2 3))
+     (binding [*depth* :bound] ((reads-dynamic)))
+     (run-nested)]))
