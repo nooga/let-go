@@ -1,0 +1,35 @@
+;; Native-lowering trampoline fixture: a lowered fn sees a ^:redef or ^:dynamic
+;; sibling rebound (#990).
+;;
+;; Lowered Go links a plain sibling defn directly, Go func to Go func, as
+;; Clojure's direct linking does, so with-redefs on it reaches lowered callers
+;; only once they are recompiled. Clojure never direct-links a ^:redef or
+;; ^:dynamic fn, and neither does lowering: a lowered caller goes through the
+;; var, so it observes with-redefs and alter-var-root on the first and binding
+;; on the second, as the bytecode VM does. The trampoline compares (run) under
+;; the lowered Go against the bytecode VM.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.redef-sibling)
+
+(defn ^:redef f [x] (+ x 1))
+(defn g [x] (f x))
+(defn times-100 [x] (* x 100))
+
+(defn ^:dynamic h [x] (str "root " x))
+(defn calls-h [x] (h x))
+
+(defn redefined [] (with-redefs [f times-100] (g 1)))
+(defn bound [] (binding [h (fn [x] (str "bound " x))] (calls-h 1)))
+(defn altered []
+  (alter-var-root #'f (constantly times-100))
+  (g 2))
+
+(defn run []
+  (let [before (g 1)
+        during (redefined)
+        restored (g 1)
+        rebound (bound)]
+    [before during restored rebound (calls-h 1) (altered)]))
