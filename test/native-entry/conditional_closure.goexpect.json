@@ -6,7 +6,7 @@
   "lispFn": "both-branches",
   "goFn": "BothBranches",
   "lowering": "direct",
-  "functionFragment": "func BothBranches(ec *vm.ExecContext, arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) vm.Value {\n\tvar v12 vm.Value\n\tif vm.IsTruthy(arg0) {\n\t\tv12 = rt.BoxNativeFn(func() vm.Value {\n\t\t\treturn arg1\n\t\t})\n\t} else {\n\t\tv12 = rt.BoxNativeFn(func() vm.Value {\n\t\t\treturn arg2\n\t\t})\n\t}\n\treturn v12\n}",
+  "functionFragment": "func BothBranches(ec *vm.ExecContext, arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) vm.Value {\n\tvar v6 vm.Value\n\tvar v10 vm.Value\n\tvar v12 vm.Value\n\tif vm.IsTruthy(arg0) {\n\t\tv6 = rt.BoxNativeFn(func() vm.Value {\n\t\t\treturn arg1\n\t\t})\n\t\tv12 = v6\n\t} else {\n\t\tv10 = rt.BoxNativeFn(func() vm.Value {\n\t\t\treturn arg2\n\t\t})\n\t\tv12 = v10\n\t}\n\treturn v12\n}",
   "callFragment": "BothBranches(ec, vm.Boolean(false), vm.Int(1), vm.Int(2))",
   "semanticWrap": "rt.BoxNativeFn(func() vm.Value { _ = __EXPR__; return vm.Int(999) })"
 }
