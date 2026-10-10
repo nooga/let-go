@@ -19,7 +19,8 @@
      ;; Or run inline:
      (c/check (c/for-all [n (c/gen-int 0 1000)]
                 (>= n 0)))"
-  (:require [test]))
+  (:require
+   [test]))
 
 ;; ============================================================================
 ;; RNG — splittable linear congruential generator
@@ -199,10 +200,10 @@
           outer-v (rose-value outer)
           inner ((f outer-v) rf s)
           outer-shrunk-roses
-            (map (fn [outer-child]
-                   (let [[r-child _] (rng-split rf)]
-                     ((bind (fn [_r _s] outer-child) f) r-child s)))
-                 (rose-shrinks outer))
+          (map (fn [outer-child]
+                 (let [[r-child _] (rng-split rf)]
+                   ((bind (fn [_r _s] outer-child) f) r-child s)))
+               (rose-shrinks outer))
           inner-shrunk-roses (rose-shrinks inner)]
       {:value (rose-value inner)
        :shrinks (concat outer-shrunk-roses inner-shrunk-roses)})))
@@ -259,10 +260,10 @@
                          (filter #(and (>= % lo) (< % n))
                                  [lo (quot n 2) (dec n)]))
           length-shrinks
-            (map (fn [m]
-                   (let [[r-sub _] (rng-split r-elems)]
-                     ((gen-vector-of-len g m) r-sub s)))
-                 shorter-lens)
+          (map (fn [m]
+                 (let [[r-sub _] (rng-split r-elems)]
+                   ((gen-vector-of-len g m) r-sub s)))
+               shorter-lens)
           elem-shrinks (rose-shrinks base)]
       {:value base-val
        :shrinks (concat length-shrinks elem-shrinks)})))
@@ -408,7 +409,7 @@
 (def ^:private redact-array-threshold 8)
 
 (defn- array-like? [v]
-  (= "let-go.lang.Array" (str (type v))))
+  (= (type v) let-go.lang.Array))
 
 (defn- redact [v]
   (cond
