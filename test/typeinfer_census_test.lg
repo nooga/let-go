@@ -1,0 +1,136 @@
+;; test/typeinfer_census_test.lg
+;; scripts/typeinfer-census.lg against a fixture with known facts. The test
+;; runner's cwd is test/, so the fixture is at fixtures/typeinfer-census here.
+(ns test.typeinfer-census-test
+  (:require
+   [clojure.string :as str]
+   [ir.passes.typeinfer]
+   [typeinfer-census :as tcensus]
+   [test :refer :all]))
+
+(def ^:private fixture "fixtures/typeinfer-census/census_fixture.lg")
+
+;; main's exit code, with its report swallowed.
+(defn- exit-code [args]
+  (let [c (atom nil)]
+    (with-out-str (reset! c (tcensus/main args)))
+    @c))
+
+(defn- unit [r name]
+  (first (filter (fn [u] (= name (:name u))) (:units r))))
+
+(defn- types [u] (mapv second (:facts u)))
+
+;; The census with a var of ns-sym answering (f original) instead.
+(defn- census-with [ns-sym var-sym f]
+  (let [v    (get (ns-interns (find-ns ns-sym)) var-sym)
+        orig @v]
+    (alter-var-root v (fn [_] (f orig)))
+    (try
+      (tcensus/census-files [fixture])
+      (finally (alter-var-root v (fn [_] orig))))))
+
+(def ^:private base (delay (tcensus/census-files [fixture])))
+
+;; ir.passes.typeinfer's call-core-type answering nil, as a typeinfer that lost
+;; a fact source would.
+(def ^:private without-call-core-type
+  (delay (census-with 'ir.passes.typeinfer 'call-core-type (fn [_] (fn [& _] nil)))))
+
+(deftest records-the-emitted-facts-once-per-arity
+  (let [r @base]
+    (is (= 4 (:units (:totals r))))
+    (is (= [:int :int :int] (types (unit r "add1"))))
+    (is (= :float (last (types (unit r "root")))))
+    (is (some (fn [t] (= :transient-vector t)) (types (unit r "build"))))
+    (is (every? (fn [t] (= :unknown t)) (types (unit r "pick"))))
+    (is (= 18 (:insts (:totals r))))
+    (is (= 6 (:typed (:totals r))))
+    (is (= 12 (:unknown (:totals r))))))
+
+(deftest direction-follows-the-lattice
+  (is (= :tighter (tcensus/direction :unknown :int)))
+  (is (= :looser (tcensus/direction :int :unknown)))
+  (is (= :looser (tcensus/direction :int :number)))
+  (is (= :tighter (tcensus/direction :any :unknown)))
+  (is (= :incomparable (tcensus/direction :int :string)))
+  (is (= :looser (tcensus/direction :int :bottom)))
+  (is (= :tighter (tcensus/direction :bottom :int))))
+
+(deftest a-defn-that-falls-back-is-not-counted
+  (let [r (census-with 'ir.passes.pipeline 'lower-ns-to-go-result
+                       (fn [orig]
+                         (fn [& args]
+                           (update (apply orig args) :fns
+                                   (fn [fns] (vec (remove (fn [e] (= "pick" (:fn-name e))) fns)))))))]
+    (is (= 3 (:units (:totals r))))
+    (is (nil? (unit r "pick")))
+    (is (= ["fixture.typeinfer-census/pick/2"] (:only-base (tcensus/diff-censuses @base r))))))
+
+(deftest a-namespace-whose-lowering-throws-is-reported-not-dropped
+  (let [r (census-with 'ir.passes.pipeline 'lower-ns-to-go-result
+                       (fn [_] (fn [& _] (throw (Exception. "boom")))))]
+    (is (= ["fixture.typeinfer-census"] (:failed r)))
+    (is (= 0 (:units (:totals r))))
+    (is (= [[] ["fixture.typeinfer-census"]] (:failed (tcensus/diff-censuses @base r))))))
+
+(deftest follow-loads-a-file-named-twice-once
+  (is (= [fixture]
+         (tcensus/follow-requires "fixtures/typeinfer-census"
+                                 [fixture "fixtures/typeinfer-census/../typeinfer-census/census_fixture.lg"]))))
+
+(deftest a-census-diffed-with-itself-is-identical
+  (let [r @base
+        d (tcensus/diff-censuses r r)]
+    (is (= 4 (:common d)))
+    (is (= 4 (:identical d)))
+    (is (= {:tighter 0 :looser 0 :incomparable 0} (:facts d)))))
+
+(deftest losing-a-fact-source-shows-as-looser
+  (let [d (tcensus/diff-censuses @base @without-call-core-type)]
+    (is (= 2 (:identical d)))
+    (is (= {:tighter 0 :looser 2 :incomparable 0} (:facts d)))
+    (is (= #{"fixture.typeinfer-census/root/1" "fixture.typeinfer-census/build/1"}
+           (set (map :key (:facts-changed d)))))
+    (is (= {:tighter 2 :looser 0 :incomparable 0}
+           (:facts (tcensus/diff-censuses @without-call-core-type @base))))))
+
+(deftest the-same-facts-in-another-order-are-reordered-not-changed
+  (let [new (update @base :units
+                    (fn [us] (mapv (fn [u] (if (= "pick" (:name u)) (update u :facts (comp vec reverse)) u))
+                                   us)))
+        d   (tcensus/diff-censuses @base new)]
+    (is (= 1 (:reordered d)))
+    (is (= 3 (:identical d)))
+    (is (= [] (:ir-changed d)))))
+
+(deftest changed-ops-and-missing-functions-are-listed-apart
+  (let [new  (update @base :units
+                     (fn [us]
+                       (vec (keep (fn [u]
+                                    (case (:name u)
+                                      "pick" nil
+                                      "add1" (update u :facts conj [:add :int])
+                                      u))
+                                  us))))
+        d    (tcensus/diff-censuses @base new)]
+    (is (= ["fixture.typeinfer-census/add1/1"] (map :key (:ir-changed d))))
+    (is (= [[3 4] [3 4]] ((juxt :typed :insts) (first (:ir-changed d)))))
+    (is (= ["fixture.typeinfer-census/pick/2"] (:only-base d)))
+    (is (= [] (:only-new d)))))
+
+(deftest edn-snapshots-diff-from-the-command-line
+  (let [path (str (os/temp-dir) "/typeinfer-census-test.edn")]
+    (spit path (with-out-str (tcensus/main ["--edn" fixture])))
+    (try
+      (let [out (with-out-str (tcensus/main ["--diff" path path]))]
+        (is (str/includes? out "4 functions in both, 4 with identical facts"))
+        (is (str/includes? out "typed instructions: 6 of 18 (33.3%) -> 6 of 18 (33.3%)")))
+      (finally (os/delete-tree path)))))
+
+(deftest usage-errors-exit-2
+  (is (= 2 (exit-code [])))
+  (is (= 2 (exit-code ["--nope" fixture])))
+  (is (= 2 (exit-code ["--follow"])))
+  (is (= 2 (exit-code ["--diff" fixture])))
+  (is (= 2 (exit-code ["--diff" fixture fixture]))))

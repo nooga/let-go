@@ -1,0 +1,382 @@
+;; typeinfer-census — what type inference knows about a program, per live
+;; instruction, and how that changes between two lg builds.
+;;
+;;   lg scripts/typeinfer-census.lg <file.lg>...              table per ns + totals
+;;   lg scripts/typeinfer-census.lg --edn <file.lg>...        snapshot, one row per function
+;;   lg scripts/typeinfer-census.lg --follow <root> <entry.lg>...   also load the
+;;       namespaces the files require, resolved as <root>/<ns path>.lg
+;;   lg scripts/typeinfer-census.lg --diff <base.edn> <new.edn>      compare two snapshots
+;;
+;; The facts are the ones `lg compile` lowers from. The script runs the package
+;; pass lg compile runs (ir.passes.pipeline/lower-all-ns-to-go-result) with
+;; ir.passes.pipeline/optimize-fn wrapped, and keeps the IR each call leaves
+;; behind: every block param and instruction in block order, as [op type]. Only
+;; the defn sweep a namespace emits from counts; the package pass's
+;; cross-package collect phase and earlier sweeps optimize the same functions
+;; under a different context. As in lowering-census, the unit is one arity of a
+;; defn/defn-; deftype methods and defmethod bodies are not recorded.
+;;
+;; The facts come from the type inference of the lg binary that runs the script,
+;; so comparing two let-go trees means one lg build per tree:
+;;
+;;   lg-base scripts/typeinfer-census.lg --edn main.lg > base.edn
+;;   lg-new  scripts/typeinfer-census.lg --edn main.lg > new.edn
+;;   lg      scripts/typeinfer-census.lg --diff base.edn new.edn
+;;
+;; --diff matches functions by namespace, name and arity. A function with the
+;; same [op type] pairs in another order counts as reordered. One whose op
+;; sequence is unchanged is compared instruction by instruction, and each
+;; changed fact is tighter, looser or incomparable by ir.lattice/type-join. A
+;; function whose ops changed is listed with its typed counts only.
+;;
+;; Report-only: always exits 0 except for a usage error or an input that cannot
+;; be read or loaded (2). Like lg compile, it evaluates the definitional forms of
+;; the files (def, defn, defmacro, require, ...) and never runs other top-level
+;; forms.
+
+(ns typeinfer-census
+  (:require
+   [clojure.string :as str]
+   [ir.data :as d]
+   [ir.lattice :as lattice]
+   [ir.passes.pipeline :as pipeline]
+   [lg.compiler :as lgc]))
+
+(def ^:private usage
+  (str "usage: typeinfer-census [--edn] [--follow ROOT] <file.lg>...\n"
+       "       typeinfer-census --diff <base.edn> <new.edn>"))
+
+;; Facts that say nothing about the value. :bottom left after the fixpoint is an
+;; instruction typeinfer never reached.
+(def ^:private untyped #{:unknown :any :bottom})
+
+(defn typed? [t] (not (contains? untyped t)))
+
+;; --- recording -------------------------------------------------------------
+
+(defn- live-facts [f]
+  (mapv (fn [id] [(d/op id f) (d/type-of id f)])
+        (mapcat (fn [b] (concat (:params b) (:insts b))) (:blocks @f))))
+
+(defn- arity-label [f]
+  (str (d/fn-arity f) (when (d/fn-variadic? f) "+")))
+
+;; Run thunk with the given vars' roots replaced by (wrap original), restoring
+;; them afterwards.
+(defn- with-wrapped [wraps thunk]
+  (let [origs (mapv (fn [[v _]] @v) wraps)]
+    (doseq [[v wrap] wraps] (alter-var-root v wrap))
+    (try
+      (thunk)
+      (finally
+        (doseq [[[v _] orig] (map vector wraps origs)] (alter-var-root v (fn [_] orig)))))))
+
+(defn- pipeline-var [sym]
+  (or (get (ns-interns (find-ns 'ir.passes.pipeline)) sym)
+      (throw (Exception. (str "ir.passes.pipeline/" sym " not found")))))
+
+;; Run the package pass over specs and return {:units [{:ns :name :arity :facts}]
+;; :failed [ns-str]}: the defn arities whose IR it emitted as Go, in call order,
+;; and the namespaces whose lowering threw. A namespace lowers its defns in
+;; several sweeps of lower-defn-forms (pass 1, then pass 2 to a fixpoint as the
+;; sibling registry shrinks) and emits the last, so only the last sweep is kept,
+;; and of it only the arities the namespace's :fns lists; the rest fell back to
+;; the VM.
+(defn- record-package-pass [specs]
+  (let [units  (atom [])
+        failed (atom [])
+        state  (atom nil)] ; while a namespace emits: {:sweep [...] :in-sweep? bool}
+    (with-wrapped
+      [[(pipeline-var 'lower-ns-to-go-result)
+        (fn [orig]
+          (fn [& args]
+            (reset! state {:sweep [] :in-sweep? false})
+            (try
+              (let [res     (apply orig args)
+                    emitted (set (map (fn [e] [(:fn-name e) (:arity e)]) (:fns res)))]
+                (swap! units into (map (fn [u] (dissoc u :n))
+                                       (filter (fn [u] (contains? emitted [(:name u) (:n u)]))
+                                               (:sweep @state))))
+                res)
+              (catch Throwable e
+                (swap! failed conj (str (second args)))
+                (throw e))
+              (finally (reset! state nil)))))]
+       [(pipeline-var 'lower-defn-forms)
+        (fn [orig]
+          (fn [& args]
+            (if (nil? @state)
+              (apply orig args)
+              (do (reset! state {:sweep [] :in-sweep? true})
+                  (try (apply orig args)
+                       (finally (swap! state assoc :in-sweep? false)))))))]
+       [(pipeline-var 'optimize-fn)
+        (fn [orig]
+          (fn [f]
+            (let [r (orig f)]
+              (when (:in-sweep? @state)
+                (swap! state update :sweep conj
+                       {:ns (str (ns-name *ns*)) :name (str (d/fn-name r))
+                        :arity (arity-label r) :n (d/fn-arity r) :facts (live-facts r)}))
+              r)))]]
+      (fn []
+        (with-out-str
+          (binding [pipeline/*target* :go]
+            (pipeline/lower-all-ns-to-go-result
+             (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs))))))
+    {:units @units :failed @failed}))
+
+;; --- summarizing -----------------------------------------------------------
+
+(defn- tally [units]
+  (let [freqs (frequencies (mapcat (fn [u] (map second (:facts u))) units))
+        n     (reduce + 0 (vals freqs))
+        typed (reduce + 0 (keep (fn [[t c]] (when (typed? t) c)) freqs))]
+    {:units (count units)
+     :insts n
+     :typed typed
+     :unknown (get freqs :unknown 0)
+     :any (get freqs :any 0)
+     :bottom (get freqs :bottom 0)
+     :percent (when (pos? n) (/ (* 100.0 typed) n))}))
+
+(defn census-files
+  "Census of the given files: {:units [...] :namespaces [...] :totals {...}
+   :failed [...]}, :failed naming the namespaces whose lowering threw. Loads the
+   files' definitional forms first (as lg compile does), with their output
+   swallowed, so call it from a process that is happy to have them defined."
+  [files]
+  (let [specs  (mapv (fn [p] (lgc/parse-spec "census" p)) files)
+        _      (with-out-str (lgc/load-specs! specs))
+        {:keys [units failed]} (record-package-pass specs)
+        by-ns  (group-by :ns units)]
+    {:units units
+     :failed failed
+     :namespaces (vec (keep (fn [s]
+                              (let [n (str (:nsn s))]
+                                (when-let [us (get by-ns n)]
+                                  (assoc (tally us) :ns n))))
+                            specs))
+     :totals (tally units)}))
+
+;; --- comparing -------------------------------------------------------------
+
+;; "ns/name/arity", with #2, #3, ... on repeats, so a name a namespace defines
+;; twice stays two rows.
+(defn- keyed [units]
+  (loop [us units seen {} out {} order []]
+    (if (empty? us)
+      [out order]
+      (let [u   (first us)
+            k   (str (:ns u) "/" (:name u) "/" (:arity u))
+            n   (inc (get seen k 0))
+            key (if (= 1 n) k (str k "#" n))]
+        (recur (rest us) (assoc seen k n) (assoc out key u) (conj order key))))))
+
+(defn direction
+  "How fact `to` relates to fact `from` in the type lattice: :tighter when `to`
+   is below `from`, :looser when above, :incomparable otherwise. :bottom is the
+   lattice's least element, but after the fixpoint it means typeinfer never
+   reached the instruction, so losing a fact to :bottom counts as :looser and
+   gaining one from it as :tighter."
+  [from to]
+  (cond
+    (= to :bottom)                       :looser
+    (= from :bottom)                     :tighter
+    (= from (lattice/type-join to from)) :tighter
+    (= to (lattice/type-join from to))   :looser
+    :else                                :incomparable))
+
+(defn- typed-count [u] (count (filter typed? (map second (:facts u)))))
+
+(defn diff-censuses
+  "Compare two censuses (as census-files returns them, or read back from --edn)."
+  [base new]
+  (let [[bk border] (keyed (:units base))
+        [nk norder] (keyed (:units new))
+        common      (filter (fn [k] (contains? nk k)) border)
+        rows        (map (fn [k]
+                           (let [b (get bk k) n (get nk k)]
+                             (cond
+                               (= (:facts b) (:facts n))
+                               {:key k :kind :identical}
+
+                               ;; The same [op type] pairs in another order: a
+                               ;; shifted gensym counter can reorder a block.
+                               (= (frequencies (:facts b)) (frequencies (:facts n)))
+                               {:key k :kind :reordered}
+
+                               (not= (map first (:facts b)) (map first (:facts n)))
+                               {:key k :kind :ir-changed
+                                :typed [(typed-count b) (typed-count n)]
+                                :insts [(count (:facts b)) (count (:facts n))]}
+
+                               :else
+                               {:key k :kind :facts-changed
+                                :changes (vec (keep-indexed
+                                               (fn [i [[op from] [_ to]]]
+                                                 (when (not= from to)
+                                                   {:index i :op op :from from :to to
+                                                    :direction (direction from to)}))
+                                               (map vector (:facts b) (:facts n))))})))
+                         common)
+        changes     (mapcat :changes rows)
+        of-kind     (fn [kind] (vec (filter (fn [r] (= kind (:kind r))) rows)))
+        dirs        (frequencies (map :direction changes))]
+    {:common (count common)
+     :identical (count (of-kind :identical))
+     :reordered (count (of-kind :reordered))
+     :facts-changed (of-kind :facts-changed)
+     :ir-changed (of-kind :ir-changed)
+     :facts {:tighter (get dirs :tighter 0)
+             :looser (get dirs :looser 0)
+             :incomparable (get dirs :incomparable 0)}
+     :only-base (vec (remove (fn [k] (contains? nk k)) border))
+     :only-new (vec (remove (fn [k] (contains? bk k)) norder))
+     :totals [(:totals base) (:totals new)]
+     :failed [(:failed base []) (:failed new [])]}))
+
+;; --- following requires ----------------------------------------------------
+;; The rule scripts/lowering-census.lg follows: the given files plus every
+;; namespace they require that exists as a file under root, breadth first, each
+;; file once by its canonical path.
+
+(defn- ns->file [root ns-sym]
+  (str root "/" (str/replace (str/replace (str ns-sym) "." "/") "-" "_") ".lg"))
+
+(defn follow-requires [root files]
+  (loop [todo (vec files) seen []]
+    (if (empty? todo)
+      seen
+      (let [p (first todo)]
+        (if (some (fn [s] (= (os/canonical-path s) (os/canonical-path p))) seen)
+          (recur (vec (rest todo)) seen)
+          (let [deps (->> (lgc/spec-dep-syms (rest (lgc/read-all p)))
+                          (map (fn [dep] (ns->file root dep)))
+                          (filter os/stat))]
+            (recur (into (vec (rest todo)) deps) (conj seen p))))))))
+
+;; --- reports ---------------------------------------------------------------
+
+(defn- pct-str [p] (if (nil? p) "-" (format "%.1f%%" (double p))))
+
+(defn- pad [s n] (let [s (str s)] (str s (apply str (repeat (max 0 (- n (count s))) " ")))))
+(defn- lpad [s n] (let [s (str s)] (str (apply str (repeat (max 0 (- n (count s))) " ")) s)))
+
+(def ^:private columns
+  [[:units "fns" 5] [:insts "insts" 7] [:typed "typed" 7] [:unknown "unknown" 7]
+   [:any "any" 6] [:bottom "bottom" 6] [:percent "typed%" 7]])
+
+;; A namespace whose lowering threw has no rows; say so rather than let it read
+;; as a smaller program.
+(defn- print-failed [label nss]
+  (when (seq nss)
+    (println)
+    (println (str "lowering failed" label ", not counted: " (str/join ", " nss)))))
+
+(defn- print-table [r]
+  (let [rows  (conj (mapv (fn [n] [(:ns n) n]) (:namespaces r)) ["total" (:totals r)])
+        width (apply max 5 (map (fn [[label _]] (count label)) rows))
+        cell  (fn [row [k _ w]] (lpad (if (= :percent k) (pct-str (get row k)) (get row k)) w))]
+    (println (str (pad "ns" width) (apply str (map (fn [[_ h w]] (str "  " (lpad h w))) columns))))
+    (doseq [[label row] rows]
+      (println (str (pad label width) (apply str (map (fn [c] (str "  " (cell row c))) columns)))))
+    (print-failed "" (:failed r))))
+
+(defn- print-diff [r limit]
+  (let [{:keys [tighter looser incomparable]} (:facts r)
+        [tb tn] (:totals r)]
+    (print-failed " in base" (first (:failed r)))
+    (print-failed " in new" (second (:failed r)))
+    (println (str (:common r) " functions in both, " (:identical r) " with identical facts"))
+    (println (str "  same facts in another order: " (:reordered r)))
+    (println (str "  same ops, facts changed: " (count (:facts-changed r))
+                  " (instructions: " tighter " tighter, " looser " looser, "
+                  incomparable " incomparable)"))
+    (println (str "  ops changed: " (count (:ir-changed r))))
+    (println (str "  only in base: " (count (:only-base r)) ", only in new: " (count (:only-new r))))
+    (println (str "typed instructions: " (:typed tb) " of " (:insts tb) " (" (pct-str (:percent tb)) ") -> "
+                  (:typed tn) " of " (:insts tn) " (" (pct-str (:percent tn)) ")"))
+    (when (seq (:facts-changed r))
+      (println)
+      (println "facts changed")
+      (doseq [row (take limit (:facts-changed r))]
+        (println (str "  " (:key row)))
+        (doseq [c (take 3 (:changes row))]
+          (println (str "      " (name (:op c)) " " (pr-str (:from c)) " -> " (pr-str (:to c))
+                        "  " (name (:direction c)))))
+        (when (> (count (:changes row)) 3)
+          (println (str "      ... " (- (count (:changes row)) 3) " more")))))
+    (when (seq (:ir-changed r))
+      (println)
+      (println "ops changed (typed/insts, base -> new)")
+      (doseq [row (take limit (:ir-changed r))]
+        (println (str "  " (:key row) "  " (first (:typed row)) "/" (first (:insts row))
+                      " -> " (second (:typed row)) "/" (second (:insts row))))))
+    (doseq [[label ks] [["only in base" (:only-base r)] ["only in new" (:only-new r)]]]
+      (when (seq ks)
+        (println)
+        (println label)
+        (doseq [k (take limit ks)] (println (str "  " k)))))
+    (when (some (fn [xs] (> (count xs) limit)) [(:facts-changed r) (:ir-changed r) (:only-base r) (:only-new r)])
+      (println)
+      (println (str "lists are cut at " limit "; --edn prints every row")))))
+
+;; --- cli -------------------------------------------------------------------
+
+(defn parse-args [args]
+  (loop [args args opts {:files []}]
+    (if (empty? args)
+      opts
+      (let [a (first args)]
+        (cond
+          (= a "--edn")  (recur (rest args) (assoc opts :edn? true))
+          (= a "--diff") (recur (rest args) (assoc opts :diff? true))
+          (= a "--follow")
+          (if (empty? (rest args))
+            (throw (Exception. "--follow requires an argument"))
+            (recur (rest (rest args)) (assoc opts :follow (second args))))
+          (str/starts-with? a "--") (throw (Exception. (str "unknown flag " a)))
+          :else (recur (rest args) (update opts :files conj a)))))))
+
+(defn- read-snapshot [path]
+  (let [r (read-string (slurp path))]
+    (if (and (map? r) (vector? (:units r)) (map? (:totals r)))
+      r
+      (throw (Exception. (str path " is not a typeinfer-census --edn snapshot"))))))
+
+(defn- run [opts]
+  (if (:diff? opts)
+    (let [[b n] (map read-snapshot (:files opts))
+          r     (diff-censuses b n)]
+      (if (:edn? opts) (println (pr-str r)) (print-diff r 20)))
+    (let [files (if (:follow opts)
+                  (follow-requires (:follow opts) (:files opts))
+                  (:files opts))
+          r     (census-files files)]
+      (if (:edn? opts) (println (pr-str r)) (print-table r)))))
+
+(defn main
+  "Run the census for `args` and return the process exit code: 0, or 2 for a
+   usage error or when an input cannot be read or loaded."
+  [args]
+  (let [[opts err] (try [(parse-args args) nil] (catch Throwable e [nil e]))]
+    (cond
+      err
+      (do (println "typeinfer-census:" (ex-message err)) (println usage) 2)
+
+      (or (empty? (:files opts))
+          (and (:diff? opts) (or (not= 2 (count (:files opts))) (:follow opts))))
+      (do (println usage) 2)
+
+      :else
+      (let [err (try (run opts) nil (catch Throwable e e))]
+        (if err
+          (do (println "typeinfer-census: cannot load the input:" (ex-message err)) 2)
+          0)))))
+
+;; Entry guard: run only as a script, never when a test requires this namespace.
+;; os/args is [binary script user-arg...].
+(let [argv (vec (seq os/args))]
+  (when (str/ends-with? (or (get argv 1) "") "scripts/typeinfer-census.lg")
+    (os/exit (main (vec (drop 2 argv))))))
