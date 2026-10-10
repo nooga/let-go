@@ -42,17 +42,24 @@ func TestContext_Compile(t *testing.T) {
 	for k, v := range tests {
 		out, err := Eval(k)
 		assert.NoError(t, err)
+		// A pooled constant collection has had its hash computed by the
+		// constant pool, so a map is compared as a value, not field by field.
+		if want, ok := v.(vm.Value); ok {
+			assert.True(t, vm.ValueEquals(want, out), "%s: got %v, want %v", k, out, want)
+			continue
+		}
 		assert.Equal(t, v, out.Unbox())
 	}
 }
 
-// A map literal compiles to an array-map call, so small literals keep their
-// insertion order as Clojure's do (#764). hash-map here costs the ratchet's
-// IRCompile allocs bar and loses the ordering.
+// A map literal with a non-constant entry compiles to an array-map call, so
+// small literals keep their insertion order as Clojure's do (#764). hash-map
+// here costs the ratchet's IRCompile allocs bar and loses the ordering. (A
+// literal whose entries are all constants is pooled as one value instead.)
 func TestIntrinsicMapLiteralLoadsArrayMapConstructor(t *testing.T) {
 	consts := vm.NewConsts()
 	ctx := NewCompiler(consts, rt.NS(rt.NameCoreNS))
-	_, err := ctx.Compile(`{}`)
+	_, err := ctx.Compile(`(fn [x] {:a x})`)
 	assert.NoError(t, err)
 
 	hashMap := rt.CoreNS.Lookup("hash-map")

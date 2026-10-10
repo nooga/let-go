@@ -930,16 +930,54 @@
           (add-inst! ctx (ctx-block ctx) :def [var-nid val-nid] meta))
         (add-inst! ctx (ctx-block ctx) :def [var-nid] meta)))))
 
+(def ^:private literal-scalar-preds
+  [nil? integer? float? string? keyword? boolean? char? ratio? decimal? uuid?
+   (fn [v] (instance? java.util.regex.Pattern v))])
+
 (defn is-literal? [v]
-  "Check if v is a literal value (not a symbol or expression)."
-  (or (nil? v) (integer? v) (float? v) (string? v) (keyword? v) (boolean? v)))
+  "True for a self-evaluating scalar: the same set the bytecode compiler's
+   isConstantLiteral admits, so a collection of them is one shared value on
+   every path. An #inst literal is absent because the IR builder has no
+   Instant constant at all."
+  (boolean (some (fn [scalar?] (scalar? v)) literal-scalar-preds)))
+
+(defn constant-literal? [v]
+  "A collection literal that is a constant: every element is a literal or such
+   a collection, and no level carries metadata. Clojure compiles it to one
+   shared value, and so do all three let-go paths (bytecode compiler, IR
+   build, Go lowering)."
+  (or (is-literal? v)
+      (and (nil? (meta v))
+           (cond
+             (vector? v) (every? constant-literal? (seq v))
+             (set? v)    (every? constant-literal? (seq v))
+             (map? v)    (every? (fn [e] (and (constant-literal? (key e)) (constant-literal? (val e)))) (seq v))
+             ;; expand-all turns nested map/set literals into MapForm/SetForm
+             ;; records; their entries are the literal's elements.
+             (forms/set-form? v) (every? constant-literal? (forms/set-form-elements v))
+             (forms/map-form? v) (every? (fn [[k val]] (and (constant-literal? k) (constant-literal? val)))
+                                         (forms/map-form-entries v))
+             :else false))))
+
+(defn constant-value [v]
+  "The data value of a constant literal: MapForm/SetForm records (expand-all's
+   spelling of nested map and set literals) become the maps and sets they
+   denote, so the Const holds exactly what the literal evaluates to."
+  (cond
+    (forms/map-form? v) (apply array-map (mapcat (fn [[k val]] [(constant-value k) (constant-value val)])
+                                                 (forms/map-form-entries v)))
+    (forms/set-form? v) (apply hash-set (map constant-value (forms/set-form-elements v)))
+    (vector? v)         (vec (map constant-value v))
+    (map? v)            (apply array-map (mapcat (fn [e] [(constant-value (key e)) (constant-value (val e))]) (seq v)))
+    (set? v)            (apply hash-set (map constant-value (seq v)))
+    :else v))
 
 (defn build-vector [form ctx]
-  "[a b c] → (vector a b c). Empty vector → Const literal.
+  "[a b c] → (vector a b c). A constant vector (constant-literal?) → Const.
    Each element flows through build-form so sub-expressions IR-build
    correctly; build-args handles cross-block threading."
-  (if (zero? (count form))
-    (build-coll-const form (with-meta form nil) ctx)
+  (if (and (nil? (meta form)) (every? constant-literal? (seq form)))
+    (build-coll-const form (constant-value form) ctx)
     (with-meta-call form ctx
       (fn [form ctx]
         (let [fn-id (add-inst! ctx (ctx-block ctx)
@@ -957,32 +995,23 @@
    Literal-only elements fold to a Const. Metadata is kept as build-coll-const
    and with-meta-call describe."
   (let [elements (set-elements form)]
-    (if (every? is-literal? elements)
-      (build-coll-const form (apply hash-set elements) ctx)
+    (if (and (nil? (meta form)) (every? constant-literal? elements))
+      (build-coll-const form (apply hash-set (map constant-value elements)) ctx)
       (with-meta-call form ctx
         (fn [form ctx]
           (let [fn-id (add-inst! ctx (ctx-block ctx)
                         :load-var [] (resolve 'clojure.core/hash-set))]
             (build-call-with-head fn-id elements ctx)))))))
 
-(defn- literal-meta? [m]
-  "Metadata that is data already: literal keys and values, and a bare type
-   hint's symbol, which the bytecode compiler also keeps as a symbol."
-  (every? (fn [e]
-            (let [k (key e) v (val e)]
-              (and (is-literal? k)
-                   (or (is-literal? v) (and (= k :tag) (symbol? v))))))
-          (seq m)))
-
 (defn build-coll-const [form value ctx]
-  "A collection whose elements are all literals is the Const value. Literal
-   metadata on form stays attached to it; metadata holding expressions is
-   compiled instead. form is the source collection or its MapForm/SetForm."
-  (let [m (meta form)]
-    (cond
-      (nil? m) (add-inst! ctx (ctx-block ctx) :const [] value)
-      (literal-meta? m) (add-inst! ctx (ctx-block ctx) :const [] (with-meta value m))
-      :else (build-form (with-meta-form form) ctx))))
+  "A collection whose elements are all literals is the Const value. A literal
+   carrying metadata is not a constant — Clojure evaluates ^{:t 1} [1 2] to a
+   fresh vector each time, and the bytecode compiler applies with-meta per
+   evaluation — so it is compiled as the with-meta form. form is the source
+   collection or its MapForm/SetForm."
+  (if (nil? (meta form))
+    (add-inst! ctx (ctx-block ctx) :const [] value)
+    (build-form (with-meta-form form) ctx)))
 
 (defn with-meta-call [form ctx build-plain]
   "Build a collection that needs a constructor call. Metadata, if any, is
@@ -1011,13 +1040,14 @@
    custom comparator outright. All-literal sorted maps take the Const arm and
    carry the real collection, comparator included."
   (let [entries    (map-entries form)
-        all-const? (every? (fn [[k v]]
-                             (and (is-literal? k) (is-literal? v)))
-                           entries)
+        all-const? (and (nil? (meta form))
+                        (every? (fn [[k v]]
+                                  (and (constant-literal? k) (constant-literal? v)))
+                                entries))
         pairs      (vec (mapcat identity entries))]
     (cond
       all-const?
-      (build-coll-const form (if (sorted? form) form (apply array-map pairs)) ctx)
+      (build-coll-const form (if (sorted? form) form (apply array-map (map constant-value pairs))) ctx)
 
       (sorted? form)
       (throw (ex-info (str "build-map: can't rebuild a sorted map with non-literal entries " (pr-str form))
