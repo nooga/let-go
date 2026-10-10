@@ -1,0 +1,240 @@
+;; LICM on two loop shapes that used to fail ir.validate and send the whole
+;; function back to the VM (let-go#1026, #1027). Each case asserts that the
+;; Go target lowers the form (:status, not generated text) and that the same
+;; form, IR-compiled through the optimizing pipeline that includes LICM,
+;; returns what the plain bytecode compiler's version returns.
+(ns test.licm-loop-shapes-test
+  (:require
+   [ir.build :as build]
+   [ir.data :as ir]
+   [ir.dump :as dump]
+   [ir.lower :as lower]
+   [ir.passes.pipeline :as pipeline]
+   [ir.passes.typeinfer :as typeinfer]
+   [ir.validate :as validate]
+   [test :refer :all]))
+
+(def ^:private this-ns (find-ns 'test.licm-loop-shapes-test))
+
+;; Deterministic stand-in for an input read: each call returns the next key.
+;; Impure on purpose, so LICM must leave the call inside the loop.
+(def key-feed (atom []))
+(def key-reads (atom 0))
+(defn licm-read-key []
+  (swap! key-reads inc)
+  (let [k (first @key-feed)]
+    (swap! key-feed rest)
+    k))
+
+(defn- go-status [form]
+  (binding [pipeline/*target* :go
+            typeinfer/*typeinfer-max-drains* nil]
+    (:status (pipeline/compile-form form this-ns))))
+
+(defn- rename [form suffix]
+  (apply list (first form) (symbol (str (second form) suffix)) (drop 2 form)))
+
+;; Defines the form twice, as <name>-vm through the bytecode compiler and as
+;; <name>-ir through *ir-compile* in strict mode (a pipeline failure throws
+;; rather than falling back), and returns both fns.
+(defn- vm-and-ir [form]
+  (binding [*ns* this-ns]
+    (let [vm (binding [*ir-compile* false] (eval (rename form "-vm")))
+          ir (binding [*ir-compile* true *ir-compile-strict* true]
+               (eval (rename form "-ir")))]
+      [@vm @ir])))
+
+(defn- built-ir [form]
+  (binding [*ns* this-ns]
+    (build/build-fn (apply list (first form) (second form) (nth form 2)
+                           (map pipeline/expand-all (drop 3 form))))))
+
+(defn- optimized-ir [form]
+  (doto (built-ir form) pipeline/optimize-fn))
+
+(defn- entry-term [f]
+  (ir/block-term (ir/fn-entry f) f))
+
+(defn- validate-error [f]
+  (try (validate/validate-fn! f "test") nil
+       (catch Exception e (ex-message e))))
+
+(defn- lower-error [f]
+  (try (lower/lower f) nil
+       (catch Exception e (ex-message e))))
+
+(defn- run-with-keys [f ks & args]
+  (reset! key-feed ks)
+  (reset! key-reads 0)
+  (let [v (apply f args)]
+    [v @key-reads]))
+
+;; --- let-go#1026: a zero-binding loop -------------------------------------
+;; In a zero-arg fn the entry Branch to the loop is InstId 0.
+;; LICM hoists the loop's constant to the entry block and passes it on that
+;; Branch; the bytecode lowerer must emit the Branch's args, or the call
+;; indexes past its stack. The VM checks run in strict mode, so a fallback
+;; to the VM fails the test instead of hiding the shape.
+
+(def zero-binding-let
+  '(defn licm-zero-let []
+     (loop [] (let [k (licm-read-key)] (if (= k "7") (recur) k)))))
+
+(def zero-binding-test
+  '(defn licm-zero-test []
+     (loop [] (if (= (licm-read-key) "7") (recur) (licm-read-key)))))
+
+(def zero-binding-while
+  '(defn licm-zero-while []
+     (loop [] (when (= (licm-read-key) "7") (recur)))))
+
+(deftest zero-binding-loop-lowers
+  (testing "a zero-binding loop around an impure call lowers for the Go target"
+    (is (= :lowered (go-status zero-binding-let)))
+    (is (= :lowered (go-status zero-binding-test)))
+    (is (= :lowered (go-status zero-binding-while)))))
+
+(deftest zero-binding-loop-matches-vm
+  (testing "the IR-compiled loop returns what the VM returns, reading each key once"
+    (doseq [form [zero-binding-let zero-binding-test zero-binding-while]]
+      (let [[vm ir] (vm-and-ir form)
+            ks      ["7" "7" "3" "5" "9"]]
+        (is (= (run-with-keys vm ks) (run-with-keys ir ks)))))))
+
+(deftest zero-binding-loop-hoists
+  (testing "LICM hoists the constant and passes it on the entry Branch at InstId 0"
+    (doseq [form [zero-binding-let zero-binding-test zero-binding-while]]
+      (let [f    (optimized-ir form)
+            term (entry-term f)
+            args (ir/branch-target-args (ir/aux term f))]
+        (is (= 0 term) (second form))
+        (is (= :branch (ir/op term f)) (second form))
+        (is (= [[:const "7"]] (mapv (fn [a] [(ir/op a f) (ir/aux a f)]) args))
+            (second form))))))
+
+(deftest zero-binding-entry-dumps-its-branch
+  (testing "the dump shows an entry block whose only Inst is the Branch at InstId 0"
+    (let [f (built-ir zero-binding-while)]
+      (is (= 0 (entry-term f)))
+      (is (re-find #"entry b0\(\):\n    Branch -> b1" (dump/dump f))
+          (dump/dump f)))))
+
+;; The same loop in a fn with an arg: the entry terminator is not InstId 0,
+;; and the loop body jumps back to the header with the branch-if's junk still
+;; below its param. Strict mode used to reject it ("junk-below mismatch"),
+;; which the zero-binding loops reach once LICM no longer skips them.
+(def arg-while
+  '(defn licm-arg-while [n]
+     (loop [] (when (= (licm-read-key) "7") (recur)))))
+
+(deftest junk-carrying-back-edge-matches-vm
+  (testing "a back edge with junk below its args into a header entered clean"
+    (is (pos? (entry-term (optimized-ir arg-while))))
+    (let [[vm ir] (vm-and-ir arg-while)
+          ks      ["7" "7" "7" "3"]]
+      (is (= (run-with-keys vm ks 1) (run-with-keys ir ks 1))))))
+
+;; --- let-go#1029: a terminator at InstId 0, built by hand -----------------
+;; The terminator is created first, so it is InstId 0, and its arg is
+;; attached afterwards. Each check covers one reader that used to take 0 as
+;; "no terminator".
+
+;; The Branch passes its args in the reverse of the order they were
+;; computed in, so falling through into b1 without emitting the Branch
+;; leaves the wrong value in b1's first param.
+(deftest lower-emits-branch-args-at-inst-0
+  (testing "ir.lower emits a Branch at InstId 0 with its args"
+    (let [f  (ir/new-fn "entry-term-zero" 0 false)
+          b1 (ir/add-block f)
+          br (ir/add-terminator! f 0 :branch [] (ir/new-branch-target b1 []))
+          c1 (ir/add-inst f 0 :const [] 1)
+          c2 (ir/add-inst f 0 :const [] 2)
+          p0 (ir/add-inst f b1 :block-arg [] 0)
+          p1 (ir/add-inst f b1 :block-arg [] 1)]
+      (ir/add-block-param! f b1 p0)
+      (ir/add-block-param! f b1 p1)
+      (ir/set-aux! f br (ir/new-branch-target b1 [c2 c1]))
+      (ir/add-pred! f b1 0)
+      (ir/add-terminator! f b1 :return [p0] nil)
+      (is (= 0 br))
+      (is (nil? (validate-error f)))
+      (is (= 2 ((chunk->fn 0 false (lower/lower f))))))))
+
+(deftest lower-checks-branch-if-at-inst-0
+  (testing "the lowerer's symmetric-args check covers a BranchIf at InstId 0"
+    (let [f  (ir/new-fn "entry-branch-if-zero" 1 false)
+          b1 (ir/add-block f)
+          b2 (ir/add-block f)
+          br (ir/add-terminator! f 0 :branch-if []
+                                 (ir/new-cond-target (ir/new-branch-target b1 [])
+                                                     (ir/new-branch-target b2 [])))
+          x  (ir/add-inst f 0 :load-arg [] 0)
+          c  (ir/add-inst f 0 :const [] 1)
+          p1 (ir/add-inst f b1 :block-arg [] 0)
+          p2 (ir/add-inst f b2 :block-arg [] 0)]
+      (ir/set-refs! f br [x])
+      (ir/add-block-param! f b1 p1)
+      (ir/add-block-param! f b2 p2)
+      (ir/set-aux! f br (ir/new-cond-target (ir/new-branch-target b1 [x])
+                                            (ir/new-branch-target b2 [c])))
+      (ir/add-pred! f b1 0)
+      (ir/add-pred! f b2 0)
+      (ir/add-terminator! f b1 :return [p1] nil)
+      (ir/add-terminator! f b2 :return [p2] nil)
+      (is (= 0 br))
+      ;; Asymmetric args are the lowerer's precondition, not the IR's.
+      (is (nil? (validate-error f)))
+      (is (re-find #"block #0 :branch-if has asymmetric" (str (lower-error f)))))))
+
+;; --- let-go#1027: a hoisted call sharing its callee LoadVar ---------------
+;; CSE merges identical in-loop LoadVars, so `(vector 0 1)`, which LICM hoists,
+;; and `(vector i ...)`, which stays in the loop, call through one LoadVar.
+;; Hoisting must leave that LoadVar in place for the call that stays.
+
+(def shared-callee
+  '(defn licm-shared-callee [n]
+     (loop [i 0 acc []]
+       (if (< i n)
+         (recur (inc i) (conj acc (vector i (vector 0 1))))
+         acc))))
+
+;; The function the issue reports. The bytecode IR lowerer rejects it with or
+;; without LICM ("value not on stack"), so only its Go lowering is checked;
+;; shared-callee carries the value check for the same mechanism.
+(def bfs-path
+  '(defn licm-bfs-path [grid goal-fn]
+     (let [start [0 0]]
+       (loop [visited #{start} queue [[start nil]] found nil steps 0]
+         (if (or (empty? queue) found (>= steps 3000))
+           found
+           (let [[pos first-dir] (first queue)
+                 queue (subvec queue 1)
+                 [cx cy] pos
+                 state (reduce (fn [[visited queue found] [dx dy]]
+                                 (if found
+                                   [visited queue found]
+                                   (let [nx (+ cx dx) ny (+ cy dy)
+                                         npos [nx ny]
+                                         tile (get-in grid [ny nx])]
+                                     (if (and tile (not (contains? visited npos)))
+                                       (let [visited (conj visited npos)
+                                             step-dir (or first-dir [dx dy])]
+                                         (if (goal-fn npos tile)
+                                           [visited queue step-dir]
+                                           [visited (conj queue [npos step-dir]) found]))
+                                       [visited queue found]))))
+                               [visited queue found]
+                               [[0 -1] [0 1] [-1 0] [1 0]])]
+             (recur (first state) (second state) (nth state 2) (inc steps))))))))
+
+(deftest shared-callee-loop-lowers
+  (testing "a loop whose hoisted call shares its callee LoadVar lowers for the Go target"
+    (is (= :lowered (go-status shared-callee)))
+    (is (= :lowered (go-status bfs-path)))))
+
+(deftest shared-callee-loop-matches-vm
+  (testing "the IR-compiled loop returns what the VM returns"
+    (let [[vm ir] (vm-and-ir shared-callee)]
+      (is (= [[0 [0 1]] [1 [0 1]] [2 [0 1]]] (vm 3)))
+      (is (= (vm 3) (ir 3)))
+      (is (= (vm 0) (ir 0))))))

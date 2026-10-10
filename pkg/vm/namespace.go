@@ -327,12 +327,7 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	warnOnCoreShadow(n, s)
 	va := NewVar(n, n.name, name)
 	va.SetRoot(val)
-	if val.Type() == NativeFnType {
-		val.(*NativeFn).SetName(name)
-	}
-	if f, ok := val.(*Func); ok {
-		f.SetName(name)
-	}
+	nameDefValue(name, val)
 	n.mu.Lock()
 	// A re-def replaces the Var object; a guarded native-primitive root
 	// (see Var.GuardRoot) must carry over so the deviation counter still
@@ -341,6 +336,28 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	n.registry[s] = va
 	n.mu.Unlock()
 	return va
+}
+
+// Intern sets the root of name's local Var to val, interning the Var when the
+// namespace has none. Unlike Def it keeps an existing Var, so code already
+// compiled against that Var sees the new root, as with Clojure's intern and a
+// source-level (def name val). The Var's flags and metadata are left as they
+// are. LookupOrAdd rechecks the registry under the write lock, so concurrent
+// first-time calls for one name all get the same Var.
+func (n *Namespace) Intern(name string, val Value) *Var {
+	va := n.LookupOrAdd(Symbol(name)).(*Var)
+	nameDefValue(name, val)
+	return va.SetRoot(val)
+}
+
+// nameDefValue names a function value after the Var it is defined under.
+func nameDefValue(name string, val Value) {
+	if val.Type() == NativeFnType {
+		val.(*NativeFn).SetName(name)
+	}
+	if f, ok := val.(*Func); ok {
+		f.SetName(name)
+	}
 }
 
 // LookupLocal checks only the namespace's own registry, not refers or aliases.

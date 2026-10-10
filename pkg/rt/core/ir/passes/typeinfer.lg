@@ -37,7 +37,7 @@
 (def fact-from-type lat/fact-from-type)
 (def state-type lat/state-type)
 (def state-mask lat/state-mask)
-(def state-fact lat/state-fact)
+(def join-inst-fact! lat/join-inst-fact!)
 (def join-inst-type! lat/join-inst-type!)
 (def join-inst-mask! lat/join-inst-mask!)
 
@@ -304,11 +304,6 @@
 
 ;; --- fixpoint driver -------------------------------------------------
 
-(defn- join-state-type [state inst new-type]
-  (let [old (state-fact state inst)]
-    (join-inst-type! state inst new-type)
-    [state (not= old (state-fact state inst))]))
-
 (defn- build-deps
   "Return dependency maps for the sparse solver.
    Walks every reachable block once."
@@ -514,15 +509,13 @@
              :param
              (let [[bid param-pos] (second entry)
                    param-id (nth (ir/block-params bid f) param-pos)
-                   param-type (infer-block-param-from-deps deps bid param-pos f s)
-                   [s' changed?] (join-state-type s param-id param-type)]
-               (if changed?
-                 (recur (propagate-changed! param-id deps queue' queued0) s' (inc tick))
+                   param-type (infer-block-param-from-deps deps bid param-pos f s)]
+               (if (join-inst-fact! s param-id (fact-from-type param-type))
+                 (recur (propagate-changed! param-id deps queue' queued0) s (inc tick))
                  (recur queue' s (inc tick))))
              :inst
-             (let [nid (second entry)
-                   [s' changed?] (join-state-type s nid (infer-one nid f s))]
-               (if changed?
-                 (recur (propagate-changed! nid deps queue' queued0) s' (inc tick))
+             (let [nid (second entry)]
+               (if (join-inst-fact! s nid (fact-from-type (infer-one nid f s)))
+                 (recur (propagate-changed! nid deps queue' queued0) s (inc tick))
                  (recur queue' s (inc tick))))
              (recur queue' s (inc tick)))))))))

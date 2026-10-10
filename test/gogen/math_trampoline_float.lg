@@ -1,0 +1,28 @@
+;; Native-lowering fixture for #562: a math/* call lowers to a boxed runtime
+;; trampoline (ec.Invoke on a cached var, returning vm.Value), but typeinfer
+;; types its result :float, so the surrounding arithmetic lowers to native
+;; float64. Before the fix the trampoline result was assigned straight into the
+;; float64 slot and the generated Go did not build. The trampoline runs `run`
+;; under both the bytecode VM and generated Go and checks they agree.
+(ns examples.math-trampoline-float)
+
+;; A math result feeding float arithmetic (the path-tracer shape from #562).
+(defn hypot-minus [a b]
+  (let [d (math/sqrt (+ (* a a) (* b b)))]
+    (- d 1.0)))
+
+;; Float base, int exponent, as microgpt's autograd pow does.
+(defn pow-grad [d k]
+  (* k (math/pow d (- k 1))))
+
+;; Two math results combined, plus one inside a loop accumulator.
+(defn softplus-sum [xs]
+  (loop [xs xs acc 0.0]
+    (if (seq xs)
+      (recur (rest xs) (+ acc (math/log (+ 1.0 (math/exp (first xs))))))
+      acc)))
+
+(defn run []
+  [(hypot-minus 3.0 4.0)
+   (pow-grad 2.0 3)
+   (softplus-sum [0.0 1.0 -1.0])])

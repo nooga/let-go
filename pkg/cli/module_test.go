@@ -102,3 +102,40 @@ func TestPrepareGenDir(t *testing.T) {
 		}
 	})
 }
+
+func TestOpenCallerModuleImports(t *testing.T) {
+	dir := writeTestModule(t, "module example.com/host\n\ngo 1.26\n")
+	m, err := openCallerModule(dir, []string{"example.com/b", "example.com/a", "example.com/b"})
+	if err != nil {
+		t.Fatalf("openCallerModule: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(m.GenDir(), importsFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "import (\n\t_ \"example.com/a\"\n\t_ \"example.com/b\"\n)\n"
+	if !strings.HasSuffix(string(got), want) || !strings.Contains(string(got), "package main\n") {
+		t.Errorf("%s =\n%s\nwant sorted, deduplicated blank imports in package main", importsFileName, got)
+	}
+
+	// A rebuild without -import leaves no stale imports behind.
+	if _, err := openCallerModule(dir, nil); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(m.GenDir(), importsFileName)); !os.IsNotExist(err) {
+		t.Errorf("%s survived a build without -import: %v", importsFileName, err)
+	}
+
+	// A bad -import is refused before the previous build's directory goes.
+	if _, err := openCallerModule(dir, []string{"example.com/a"}); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	for _, bad := range []string{"", " ", " example.com/a"} {
+		if _, err := openCallerModule(dir, []string{bad}); err == nil || !strings.Contains(err.Error(), "not a package path") {
+			t.Errorf("-import %q: err = %v, want a bad-path error", bad, err)
+		}
+		if _, err := os.Stat(filepath.Join(m.GenDir(), importsFileName)); err != nil {
+			t.Errorf("-import %q removed the previous build's %s: %v", bad, importsFileName, err)
+		}
+	}
+}

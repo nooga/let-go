@@ -198,7 +198,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string, moduleDir string) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string, moduleDir string, imports []string) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	var chunk *vm.CodeChunk
@@ -270,7 +270,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		if useTinyGo {
 			return fmt.Errorf("-w-module does not support LETGO_USE_TINYGO yet")
 		}
-		m, err := openCallerModule(moduleDir)
+		m, err := openCallerModule(moduleDir, imports)
 		if err != nil {
 			return err
 		}

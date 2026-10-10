@@ -580,7 +580,15 @@
     (is (= 6 (s/last-index-of "éclairé" "é")))
     (is (nil? (s/last-index-of "ᚠabc" "z")))
     ;; from-index is also rune-indexed
-    (is (= 0 (s/last-index-of "ᚠabcᚠ" "ᚠ" 0)))))
+    (is (= 0 (s/last-index-of "ᚠabcᚠ" "ᚠ" 0))))
+  (testing "string/last-index-of — negative from finds nothing (Clojure/Java)"
+    (is (nil? (s/last-index-of "abc" "b" -3)))
+    (is (nil? (s/last-index-of "abc" "a" -1)))
+    (is (= 0 (s/last-index-of "abc" "" -1)))
+    (is (= 3 (s/last-index-of "abc" "" 10))))
+  (testing "U+FFFD needle keeps rune semantics"
+    (is (= 1 (s/index-of "a\uFFFDb" "\uFFFD")))
+    (is (= 1 (s/last-index-of "a\uFFFDb" "\uFFFD")))))
 (testing "string/last-index-of — complex Unicode"
   ;; combining: last occurrence of combining sequence
   (is (= 10 (s/last-index-of "xcaféycafé" "é")))
