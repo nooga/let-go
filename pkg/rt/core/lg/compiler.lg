@@ -128,15 +128,49 @@
      :go-pkg (str import-prefix "/" reldir)
      :entry (ir.passes.entry-frame/find-program-entry forms)}))
 
+;; A top-level form is classified after splicing `do` and expanding macro calls,
+;; so a defn that a macro emits, or one wrapped in do, is interned and lowered
+;; like a literal one (#1049). Expansion stops at a definitional head: defn is
+;; itself a macro, and lowering wants it unexpanded. Each definitional form is
+;; evaluated as it is found, so a macro an earlier form defines can expand a
+;; later one. A form that expands to anything else stays unevaluated; if it
+;; still holds a definition, as (when c (defn f ...)) or (let [x 1] (defn f ...))
+;; do, that definition won't exist at compile time, so say which form it was.
+(defn- holds-definition? [f]
+  (and (coll? f)
+       (not (and (seq? f) (= 'quote (first f))))
+       (or (definitional? f) (boolean (some holds-definition? f)))))
+
+(defn- definitional-forms!
+  ([f] (definitional-forms! f f))
+  ([f written]
+   (cond
+     (definitional? f) (do (eval f) [f])
+     (and (seq? f) (= 'do (first f))) (into [] (mapcat definitional-forms! (rest f)))
+     :else (let [e (if (seq? f) (macroexpand-1 f) f)]
+             (if (not= e f)
+               (recur e written)
+               (do (when (holds-definition? e)
+                     (binding [*out* *err*]
+                       (println (str "lg compile: warning: a definition inside this top-level form "
+                                     "is not loaded at compile time, so lowered code can't refer to it: "
+                                     (let [w (pr-str written)]
+                                       (if (> (count w) 100) (str (subs w 0 100) "...") w))))))
+                   []))))))
+
 ;; Load every ns first, in dependency order, evaluating ONLY definitional forms,
 ;; so cross-ns refers resolve when lower-all-ns-to-go lowers them — regardless of
 ;; input order, and without running top-level user code at compile time. This is
-;; the call that switches the global current ns.
+;; the call that switches the global current ns. Returns specs with :lf
+;; recomputed from the expanded forms.
 (defn load-specs! [specs]
-  (doseq [s (topo-order-specs specs)]
-    (when-not (:ns-sym s) (eval (list 'ns (:nsn s))))
-    (doseq [f (:forms s)]
-      (when (definitional? f) (eval f)))))
+  (let [lfs (reduce (fn [m s]
+                      (when-not (:ns-sym s) (eval (list 'ns (:nsn s))))
+                      (let [defs (into [] (mapcat definitional-forms! (:forms s)))]
+                        (assoc m (:path s) (vec (filter lowerable? defs)))))
+                    {}
+                    (topo-order-specs specs))]
+    (mapv (fn [s] (assoc s :lf (get lfs (:path s)))) specs)))
 
 (defn write-packages!
   "Writes each emitted package to disk. Returns the number of EMIT-FAILs so the
@@ -202,8 +236,7 @@
    instead of exiting, so a Go caller can decide what to do. Printing is kept
    for the scripts/lg-compile shim's stdout contract."
   [out-dir import-prefix files entry-frame?]
-  (let [specs (mapv (fn [p] (parse-spec import-prefix p)) files)]
-    (load-specs! specs)
+  (let [specs (load-specs! (mapv (fn [p] (parse-spec import-prefix p)) files))]
     (let [results    (binding [ir.passes.pipeline/*target* :go]
                        (ir.passes.pipeline/lower-all-ns-to-go-result
                          (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)))

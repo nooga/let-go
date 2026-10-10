@@ -71,7 +71,7 @@ This document proposes a second backend that compiles let-go code to Go, preserv
 
 ### Driving lowering: `lg.compiler` and the `lg-compile` shim
 
-Whole-program lowering is driven by `lg.compiler` (`pkg/rt/core/lg/compiler.lg`): it parses each input into a lowering spec, orders the specs by their requires, evaluates only definitional forms so cross-namespace references resolve, hands the set to `ir.passes.pipeline/lower-all-ns-to-go-result`, and writes the emitted packages. Entry-frame emission is opt-in.
+Whole-program lowering is driven by `lg.compiler` (`pkg/rt/core/lg/compiler.lg`): it parses each input into a lowering spec, orders the specs by their requires, evaluates only definitional forms (after splicing `do` and expanding macro calls, so a macro-emitted `defn` counts) so cross-namespace references resolve, hands the set to `ir.passes.pipeline/lower-all-ns-to-go-result`, and writes the emitted packages. Entry-frame emission is opt-in.
 
 It is an ordinary embedded core namespace, so a released binary drives AOT lowering with no let-go checkout on disk, and edits to it churn `pkg/rt/generated.sums` like any other core source.
 
