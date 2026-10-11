@@ -968,10 +968,9 @@ func (c *Context) compileForm(o vm.Value) error {
 					}
 				}
 				c.emit(fastOp)
-				if argc == 2 {
-					c.decSP(1) // binary: 2 args -> 1 result
-				}
-				// unary (inc/dec): 1 arg -> 1 result, no SP change
+				// argc args -> 1 result: no SP change for unary inc/dec, one
+				// slot for a binary op, two for aset.
+				c.decSP(argc - 1)
 				c.tailPosition = tp
 				return nil
 			}
@@ -1174,19 +1173,11 @@ func normalizeDotForm(lst *vm.List) vm.Value {
 }
 
 // tryFastOpcode returns a specialized opcode for known core builtins,
-// or 0 if no fast path is available. Only emits for binary (arity 2)
-// and unary (arity 1) cases with known symbols.
-func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
-	// Only optimize unqualified symbols that resolve to core vars
-	if sym.Namespace() != vm.NIL {
-		return 0
-	}
-	// Check that the symbol resolves to a core var (not a local binding)
-	if c.symbolLookup(sym) != nil {
-		return 0 // local binding shadows the core var
-	}
-	v := c.CurrentNS().Lookup(sym)
-	if v == vm.NIL {
+// or 0 if no fast path is available. Only emits for fixed arities with
+// known symbols: unary inc/dec, the binary ops, and 3-arg aset.
+func (c *Context) tryFastOpcode(head vm.Symbol, argc int) int32 {
+	sym := c.fastOpcodeCoreName(head)
+	if sym == "" {
 		return 0
 	}
 	// Under *unchecked-math* the arithmetic ops are rewritten to their
@@ -1200,8 +1191,14 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 	}
 
 	switch argc {
+	case 3:
+		if sym == "aset" {
+			return vm.OP_ASET
+		}
 	case 2:
 		switch sym {
+		case "aget":
+			return vm.OP_AGET
 		case "+":
 			return vm.OP_ADD
 		case "-":
@@ -1250,6 +1247,46 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 		}
 	}
 	return 0
+}
+
+// fastOpcodeCoreName returns the clojure.core name a call head stands for
+// when the head resolves to that core var itself, or "" when it does not.
+//
+// A fast opcode binds the core semantics at compile time, so it may only
+// replace a head that really is the core var: not a local that shadows it,
+// and not a same-named var the current namespace defines or refers from
+// elsewhere. The identity check against the core ns covers both, where a
+// bare "does it resolve" test used to accept any var of that name.
+//
+// A head qualified to the core ns is what syntax-quote produces, so every
+// macro-emitted `+` or `<` arrives this way (#1045). It cannot be lexically
+// shadowed, and it resolves the same way the qualified-symbol path in
+// compileForm does, aliases included, so it only needs the identity check.
+func (c *Context) fastOpcodeCoreName(head vm.Symbol) vm.Symbol {
+	core := rt.NS(rt.NameCoreNS)
+	if core == nil {
+		return ""
+	}
+	sns, inner := head.Namespaced()
+	name := head
+	if sns != vm.NIL {
+		name = inner.(vm.Symbol)
+	} else if c.symbolLookup(head) != nil {
+		return "" // a local binding shadows the core var
+	}
+	coreVar := core.Lookup(name)
+	if coreVar == vm.NIL {
+		return ""
+	}
+	resolved := c.CurrentNS().Lookup(head)
+	if resolved == vm.NIL && sns != vm.NIL && string(sns.(vm.Symbol)) == rt.NameCoreNS {
+		// Same fallback compileForm applies to core/* before refers exist.
+		resolved = coreVar
+	}
+	if resolved != coreVar {
+		return ""
+	}
+	return name
 }
 
 func (c *Context) emitWithArgPlaceholder(inst int32) int {

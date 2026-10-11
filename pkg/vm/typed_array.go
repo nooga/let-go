@@ -466,3 +466,59 @@ func (a *TypedArray) SetValue(i int64, v Value) error {
 	a.objs[i] = v
 	return nil
 }
+
+// --- OP_AGET / OP_ASET ---
+//
+// The two-arg aget and three-arg aset semantics, for the VM's specialized
+// opcodes. clojure.core/aget and aset live in pkg/rt, which the VM cannot
+// import, so the checks and the error text are repeated here and must stay
+// identical to CoreAgetf and CoreAsetf: a program must not be able to tell
+// which path ran.
+
+func agetValue(arr, idx Value) (Value, error) {
+	a, ok := arr.(*TypedArray)
+	if !ok {
+		return NIL, errArrayOpNotArray("aget", arr)
+	}
+	i, ok := idx.(Int)
+	if !ok {
+		return NIL, errArrayIndexNotInt("aget")
+	}
+	if uint64(i) >= uint64(a.Len()) {
+		return NIL, errArrayIndexOutOfBounds(int(i), a.Len())
+	}
+	return a.Get(int(i)), nil
+}
+
+func asetValue(arr, idx, val Value) error {
+	a, ok := arr.(*TypedArray)
+	if !ok {
+		return errArrayOpNotArray("aset", arr)
+	}
+	i, ok := idx.(Int)
+	if !ok {
+		return errArrayIndexNotInt("aset")
+	}
+	if uint64(i) >= uint64(a.Len()) {
+		return errArrayIndexOutOfBounds(int(i), a.Len())
+	}
+	return a.Set(int(i), val)
+}
+
+// The error constructors stay out of line so the happy path above inlines
+// into the dispatch loop.
+
+//go:noinline
+func errArrayOpNotArray(op string, v Value) error {
+	return fmt.Errorf("%s expects array, got %s", op, v.Type().Name())
+}
+
+//go:noinline
+func errArrayIndexNotInt(op string) error {
+	return fmt.Errorf("%s index must be Int", op)
+}
+
+//go:noinline
+func errArrayIndexOutOfBounds(i, n int) error {
+	return fmt.Errorf("array index %d out of bounds for length %d", i, n)
+}
