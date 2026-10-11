@@ -94,9 +94,24 @@
     ;; produced *HyphenBox, which didn't match the generated `type Hyphenbox`.
     (str "*" (go-export-name (nth t 1)))))
 
+;; [:array K] (ir.lattice/array-type?, mirrored locally like the collection
+;; set below): every element kind lowers to the one runtime type
+;; *vm.TypedArray. The kind is not in the Go type; it picks the typed accessor
+;; in array-intrinsic-call-stmts, and the accessor re-checks it at runtime.
+(def ^:private typed-array-spec "*vm.TypedArray")
+
+;; element kind -> the vm.ArrayKind constant a runtime kind check compares to
+(def ^:private array-kind-consts
+  {:float "ArrayFloat" :int "ArrayInt" :byte "ArrayByte" :object "ArrayObject"})
+
+(defn- array-elem-kind [t]
+  (when (and (vector? t) (= :array (first t)) (= 2 (count t)))
+    (nth t 1)))
+
 (defn- go-type-spec [t]
   (cond
     (dtype-go-type-spec t)                         (dtype-go-type-spec t)
+    (array-elem-kind t)                            typed-array-spec
     (or (= t :int) (= t [:const :int 0]))        "int64"
     (or (= t :float) (= t [:const :float 0.0]))  "float64"
     (or (= t :bool) (= t :true) (= t :false))    "bool"
@@ -1475,6 +1490,14 @@
     (let [target-spec (param-go-spec f i)
           arg-spec    (go-type-spec (ir/type-of nid f))]
       (cond
+        ;; A recur back-edge bypasses coerce-arg-to-type's call-site guard.
+        ;; All array kinds share a Go pointer type, but the next iteration
+        ;; still uses the hinted accessor. Refuse the whole lowering unless
+        ;; the operand proves the same kind, including on boxed operands.
+        (= target-spec typed-array-spec)
+        (when (= (array-elem-kind (param-inferred-type f i))
+                 (array-elem-kind (ir/type-of nid f)))
+          (value-expr f closed-exprs nid))
         (= target-spec arg-spec)   (value-expr f closed-exprs nid)
         (= target-spec "vm.Value") (box-as-value f closed-exprs nid)
         (= arg-spec "vm.Value")    (let [raw (value-expr f closed-exprs nid)]
@@ -1554,7 +1577,7 @@
 (def ^:dynamic *lowered-registry* {})
 
 (def ^:private coercion-supported-types
-  #{"vm.Value" "string" "int" "int64" "bool" "float64"})
+  #{"vm.Value" "string" "int" "int64" "bool" "float64" "*vm.TypedArray"})
 
 (defn- supported-coercion-type? [t]
   (contains? coercion-supported-types t))
@@ -1675,6 +1698,7 @@
        {:go-name (:go-name result) :arity (:arity result)
         :needs-error? (:needs-error? result)
         :param-specs (vec (:param-specs result))
+        :param-types (vec (:param-types result))
         :result-spec (:result-spec result) :native? false :go-pkg nil}})))
 
 (defn native-registry
@@ -1797,7 +1821,9 @@
                   bytecode path's dynamic semantics)
      nil          whole-call bail; call-assign-stmts falls back to
                   the trampoline as before."
-  [f closed-exprs rid target-type]
+  ([f closed-exprs rid target-type]
+   (coerce-arg-to-type f closed-exprs rid target-type nil))
+  ([f closed-exprs rid target-type target-lat]
   (let [src-spec (go-type-spec (ir/type-of rid f))
         bare     (value-expr f closed-exprs rid)
         boxed    (box-as-value f closed-exprs rid)]
@@ -1805,6 +1831,31 @@
       (nil? bare) nil
       (= target-type "vm.Value")
       {:expr boxed}
+      ;; Typed-array param (#1055). The Go spec *vm.TypedArray does not carry
+      ;; the element kind, so the LATTICE types decide (target-lat is the
+      ;; callee's declared param type, from the registry entry; nil when the
+      ;; entry predates it). A proven array of the same kind passes through.
+      ;; A different kind, or a proven non-array, bails the whole call to the
+      ;; trampoline, which is bytecode semantics: the hint is ignored there and
+      ;; aget works on any array. An unproven vm.Value gets a guarded assert
+      ;; whose condition also checks Kind(), falling to the trampoline
+      ;; otherwise, so lowered and bytecode agree on every input.
+      (= target-type typed-array-spec)
+      (let [src-kind (array-elem-kind (ir/type-of rid f))
+            want     (array-elem-kind target-lat)]
+        (cond
+          (and src-kind (or (nil? want) (= src-kind want))) {:expr bare}
+          src-kind nil
+          (= src-spec "vm.Value")
+          ;; The comma-ok assert is legal Go only on an interface, and the
+          ;; boxed expr can be concrete even when the lattice says vm.Value: a
+          ;; :const boxes to a literal, and a captured outer local keeps its
+          ;; outer Go type (*vm.TypedArray) while the closure's :load-closed is
+          ;; :unknown. vm.Value(x) is a no-op on an interface, so widen always.
+          {:guard {:boxed (vm-call "Value" [boxed])
+                   :assert-spec typed-array-spec :conv nil
+                   :kind (when want (get array-kind-consts want))}}
+          :else nil))
       (= src-spec target-type)
       ;; typeinfer landed on the same Go type already — pass through.
       {:expr bare}
@@ -1832,7 +1883,7 @@
                           boxed)]
         {:guard {:boxed guard-boxed :assert-spec assert-spec :conv conv}})
       ;; Proven-mismatched scalars etc.: fall back to the trampoline.
-      :else nil)))
+      :else nil))))
 
 (defn- box-result-from-type
   "Wrap a typed Go expression in the right vm.* constructor so the
@@ -1846,6 +1897,8 @@
     (or (= result-type "int") (= result-type "int64"))
     (gogen/call (gogen/field-sel (gogen/ident "vm") "Int")     [result-expr])
     (= result-type "float64") (gogen/call (gogen/field-sel (gogen/ident "vm") "Float")   [result-expr])
+    ;; *vm.TypedArray already implements vm.Value.
+    (= result-type typed-array-spec) result-expr
     :else nil))
 
 ;; Set to an atom per-fn by lower-body; the call lowerings that emit a `callErr`
@@ -2035,10 +2088,13 @@
   [f closed-exprs nid target refs entry]
   (let [arg-rids    (rest refs)
         param-specs (vec (:param-specs entry))
-        descs       (mapv (fn [rid spec]
-                            (coerce-arg-to-type f closed-exprs rid spec))
-                          arg-rids
-                          param-specs)
+        param-types (vec (:param-types entry))
+        descs       (vec (map-indexed
+                           (fn [i rid]
+                             (coerce-arg-to-type f closed-exprs rid
+                                                 (nth param-specs i)
+                                                 (nth param-types i nil)))
+                           arg-rids))
         tmp-name    (fn [i] (str "tg" nid "_" i))
         ok-name     (fn [i] (str "tk" nid "_" i))
         stmts
@@ -2048,8 +2104,12 @@
                 arg-exprs (vec (map-indexed
                                  (fn [i d]
                                    (if-let [g (:guard d)]
-                                     (gogen/call (gogen/ident (:conv g))
-                                                 [(gogen/ident (tmp-name i))])
+                                     ;; A nil :conv (typed array) passes the
+                                     ;; asserted temp through unconverted.
+                                     (if-let [c (:conv g)]
+                                       (gogen/call (gogen/ident c)
+                                                   [(gogen/ident (tmp-name i))])
+                                       (gogen/ident (tmp-name i)))
                                      (:expr d)))
                                  descs))
                 ;; A native-module callee bypasses its Var entirely, so the
@@ -2102,12 +2162,23 @@
                                            (:boxed g)
                                            (gogen/type (:assert-spec g)))])))
                                   guard-idx)
+                            ;; tkN_i, plus `&& tgN_i.Kind() == vm.ArrayX` for a
+                            ;; typed-array guard that knows the wanted kind.
+                            guard-cond
+                            (fn [i]
+                              (let [g  (:guard (nth descs i))
+                                    ok (gogen/ident (ok-name i))]
+                                (if-let [k (:kind g)]
+                                  (gogen/binary "&&" ok
+                                    (gogen/binary "=="
+                                      (gogen/call (gogen/field-sel
+                                                    (gogen/ident (tmp-name i)) "Kind") [])
+                                      (vm-sel k)))
+                                  ok)))
                             type-cond
                             (when (seq guard-idx)
-                              (reduce (fn [a i]
-                                        (gogen/binary
-                                          "&&" a (gogen/ident (ok-name i))))
-                                      (gogen/ident (ok-name (first guard-idx)))
+                              (reduce (fn [a i] (gogen/binary "&&" a (guard-cond i)))
+                                      (guard-cond (first guard-idx))
                                       (rest guard-idx)))
                             cond-e
                             (cond
@@ -2286,7 +2357,8 @@
                     "int64"   ["vm.Int"     "int64"   "IntType"]
                     "string"  ["vm.String"  "string"  "StringType"]
                     "bool"    ["vm.Boolean" "bool"    "BooleanType"]
-                    "vm.Char" ["vm.Char"    nil       "CharType"]}
+                    "vm.Char" ["vm.Char"    nil       "CharType"]
+                    "*vm.TypedArray" ["*vm.TypedArray" nil "TypedArrayType"]}
                    spec)]
     (if (and unbox (live? f nid))
       (let [[assert-spec conv vtype] unbox
@@ -2495,8 +2567,102 @@
                                (reverse arg-exprs))]
             [(gogen/assign "=" target chain)]))))))
 
+;; aget/aset/alength on a statically typed array (#1055). The lattice's
+;; [:array K] is declared (a constructor, or a ^doubles-style hint), so the
+;; element kind picks a typed accessor on *vm.TypedArray and the index and the
+;; element stay native: `v, callErr = arr.AtFloat64(i)` instead of
+;; rt.CoreAgetf(arr, vm.Int(i)) returning a boxed element that drags the
+;; arithmetic around it back onto rt.AddValue. The accessors re-check the kind
+;; and the bounds and return an error, so a wrong kind fact degrades to the
+;; error the bytecode path raises, never a panic. Root-guarded on
+;; rt.NativePrimsIntact like the other native primitives, with the ordinary
+;; trampoline as the else branch.
+(def ^:private array-accessors
+  ;; element kind -> [aget method, aset method, Go element type]
+  {:float  ["AtFloat64" "SetFloat64" "float64"]
+   :int    ["AtInt64"   "SetInt64"   "int64"]
+   :byte   ["AtByte"    "SetByte"    "int64"]
+   :object ["AtValue"   "SetValue"   "vm.Value"]})
+
+(defn- array-elem-arg-expr
+  "The value arg of an aset as the accessor's Go element type, or nil when it
+   cannot be converted statically. An int into a double-array widens, as
+   TypedArray.Set coerces it; anything else is left to the trampoline."
+  [f closed-exprs rid elem-spec]
+  (let [spec (go-type-spec (ir/type-of rid f))]
+    (cond
+      (= elem-spec "vm.Value") (box-as-value f closed-exprs rid)
+      (= spec elem-spec)       (value-expr f closed-exprs rid)
+      (and (= elem-spec "float64") (= spec "int64"))
+      (when-let [x (value-expr f closed-exprs rid)]
+        (gogen/call (gogen/ident "float64") [x]))
+      :else nil)))
+
+(defn- array-intrinsic-call-stmts [f closed-exprs nid]
+  ;; Returns nil (fall through to the ordinary paths) unless the callee, the
+  ;; array kind, the index type and the result slot all line up.
+  (let [refs (ir/refs nid f)
+        nn   (load-var-ns+name f (first refs))
+        args (vec (rest refs))
+        name (second nn)]
+    (when (and (not *direct-calls-disabled?*)
+               nn (= "clojure.core" (first nn))
+               (contains? #{"aget" "aset" "alength"} name)
+               (seq args))
+      (let [arr-id   (nth args 0)
+            kind     (array-elem-kind (ir/type-of arr-id f))
+            acc      (get array-accessors kind)
+            at-m     (when acc (nth acc 0))
+            set-m    (when acc (nth acc 1))
+            elem-spec (when acc (nth acc 2))
+            arr-x    (when acc (value-expr f closed-exprs arr-id))
+            live     (live? f nid)
+            target   (if live (value-ident f nid) (gogen/ident "_"))
+            res-spec (go-type-spec (ir/type-of nid f))
+            idx-x    (when (and (> (count args) 1)
+                                (= "int64" (go-type-spec (ir/type-of (nth args 1) f))))
+                       (value-expr f closed-exprs (nth args 1)))
+            method   (fn [m xs] (gogen/call (gogen/field-sel arr-x m) xs))
+            typed
+            (when arr-x
+              (cond
+                (and (= name "alength") (= 1 (count args)) (= res-spec "int64"))
+                [(gogen/assign "=" target
+                   (gogen/call (gogen/ident "int64") [(method "Len" [])]))]
+
+                (and (= name "aget") (= 2 (count args)) idx-x
+                     (or (not live) (= res-spec elem-spec)))
+                (emit-call-stmts f target (method at-m [idx-x]))
+
+                (and (= name "aset") (= 3 (count args)) idx-x)
+                (let [val-id (nth args 2)
+                      val-x  (array-elem-arg-expr f closed-exprs val-id elem-spec)
+                      ;; aset's value IS its result (typeinfer types the call
+                      ;; as the value), so a live result re-reads the value.
+                      res-x  (when live (value-expr f closed-exprs val-id))
+                      err    (gogen/ident "callErr")]
+                  (when (and val-x
+                             (or (not live)
+                                 (and res-x
+                                      (= res-spec (go-type-spec (ir/type-of val-id f))))))
+                    (mark-call-err-used!)
+                    (cond-> [(gogen/assign "=" err (method set-m [idx-x val-x]))
+                             (gogen/if-stmt nil
+                               (gogen/binary "!=" err (gogen/ident "nil"))
+                               [(gogen/return-stmt [(error-return-zero f) err])]
+                               nil)]
+                      live (conj (gogen/assign "=" target res-x)))))
+
+                :else nil))]
+        (when typed
+          (when-let [fallback (trampoline-call-stmts f closed-exprs nid target refs)]
+            [(gogen/if-stmt nil
+               (gogen/call (gogen/field-sel (gogen/ident "rt") "NativePrimsIntact") [])
+               typed fallback)]))))))
+
 (defn- call-assign-stmts [f closed-exprs nid]
   (or
+    (array-intrinsic-call-stmts f closed-exprs nid)
     (list-intrinsic-call-stmts f closed-exprs nid)
     (ctor-call-stmts f closed-exprs nid)
     (devirtual-call-stmts f closed-exprs nid)
@@ -3633,6 +3799,23 @@
               (conj results (gogen/result (gogen/type "error")))
               results)))))))
 
+(defn- function-param-types [f]
+  ;; Lattice type for each fixed param, resolved as function-param-specs
+  ;; resolves it. Carried on the direct-call registry entry so a caller can
+  ;; compare what the Go spec alone does not distinguish: the element kind of
+  ;; a typed array (#1055).
+  (let [arity       (ir/fn-arity f)
+        variadic?   (ir/fn-variadic? f)
+        fixed-arity (if variadic? (dec arity) arity)
+        arg-types   (or (ir/fn-arg-types f) [])]
+    (loop [i 0 out []]
+      (if (>= i fixed-arity)
+        out
+        (let [load-arg-t (ir/fn-load-arg-type f i)
+              meta-t     (if (< i (count arg-types)) (nth arg-types i) :unknown)
+              t          (if (not= :unknown load-arg-t) load-arg-t meta-t)]
+          (recur (inc i) (conj out t)))))))
+
 (defn- function-param-specs [f]
   ;; Go type-spec string ("vm.Value"/"int64"/"bool"/…) for each fixed
   ;; (non-variadic) param, mirroring params-for's type resolution.
@@ -3830,6 +4013,7 @@
        ;; func f(ec, x int) int) is direct-callable but NOT override-eligible.
        :direct-callable? (override-coercible? f)
        :param-specs (function-param-specs f)
+       :param-types (function-param-types f)
        :result-spec (function-return-spec f)
        ;; Prepend the ExecContext param: every top-level lowered fn is
        ;; `func name(ec *vm.ExecContext, arg0 …)`. Inline lambdas (lower-fn-lit)

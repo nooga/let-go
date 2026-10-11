@@ -1476,6 +1476,9 @@
     (if (and (seq? t) (= 'quote (first t))) (second t) t)))
 
 ;; Numeric hint -> lattice type. double/float -> :float, long/int -> :int.
+;; Array hints (Clojure's ^doubles/^longs/… ) -> [:array K] (#1055); the
+;; 32-bit names follow the constructors they alias (float-array is a
+;; double-array, int-array a long-array).
 ;; A recognized hint that isn't numeric (a class hint like ^String) returns nil:
 ;; it has no native param type, so the param stays vm.Value. The routing site
 ;; warns rather than dropping it silently (#530 review) — see the routing site.
@@ -1487,6 +1490,10 @@
     (cond
       (contains? #{"double" "float"} n) :float
       (contains? #{"long" "int"} n)     :int
+      (contains? #{"doubles" "floats"} n) [:array :float]
+      (contains? #{"longs" "ints"} n)     [:array :int]
+      (= n "bytes")                       [:array :byte]
+      (= n "objects")                     [:array :object]
       :else                              nil)))
 
 (defn- expand-fn-args [args-vec body-forms]
@@ -1733,8 +1740,9 @@
                                  (do (println (str "WARNING: " name-sym
                                                    ": ignoring unsupported param type hint ^"
                                                    (pr-str t)
-                                                   " (only ^double/^float/^long/^int lower to a"
-                                                   " native param; left as vm.Value)"))
+                                                   " (only ^double/^float/^long/^int and the array"
+                                                   " hints ^doubles/^floats/^longs/^ints/^bytes/^objects"
+                                                   " lower to a native param; left as vm.Value)"))
                                      :unknown))))
                          (take arity tags)))))
         f)
