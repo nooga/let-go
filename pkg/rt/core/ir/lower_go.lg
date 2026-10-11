@@ -1490,6 +1490,14 @@
     (let [target-spec (param-go-spec f i)
           arg-spec    (go-type-spec (ir/type-of nid f))]
       (cond
+        ;; A recur back-edge bypasses coerce-arg-to-type's call-site guard.
+        ;; All array kinds share a Go pointer type, but the next iteration
+        ;; still uses the hinted accessor. Refuse the whole lowering unless
+        ;; the operand proves the same kind, including on boxed operands.
+        (= target-spec typed-array-spec)
+        (when (= (array-elem-kind (param-inferred-type f i))
+                 (array-elem-kind (ir/type-of nid f)))
+          (value-expr f closed-exprs nid))
         (= target-spec arg-spec)   (value-expr f closed-exprs nid)
         (= target-spec "vm.Value") (box-as-value f closed-exprs nid)
         (= arg-spec "vm.Value")    (let [raw (value-expr f closed-exprs nid)]
