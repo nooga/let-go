@@ -131,6 +131,18 @@
     "ceil" "floor" "rint" "sqrt" "cbrt" "hypot" "IEEE-remainder"
     "copy-sign" "next-after"})
 
+;; Typed-array constructors -> element kind (#1055). let-go aliases long-array
+;; to int-array and float-array to double-array (pkg/rt/lang.go), so the
+;; 32-bit names type as the 64-bit kinds they construct.
+(def ^:private array-ctor-kind
+  {"double-array" :float "float-array" :float
+   "int-array"    :int   "long-array"  :int
+   "byte-array"   :byte  "object-array" :object})
+
+;; What aget returns per element kind. A byte-array element reads back as an
+;; Int (TypedArray.Get widens it); an object-array element is anything.
+(def ^:private array-elem-type {:float :float :int :int :byte :int :object :unknown})
+
 (defn- call-core-type
   "Infer result type for a small set of builtins whose result kind is
    structurally known from operand kinds (clojure.core) or fixed (math)."
@@ -156,6 +168,33 @@
                 (let [t (normalize-type (state-type state (first args)))]
                   (when (contains? #{:transient-vector :transient-map :transient-set} t)
                     t)))
+
+              (contains? array-ctor-kind name)
+              [:array (get array-ctor-kind name)]
+
+              (= name "aclone")
+              (when (= 1 (count args))
+                (let [t (normalize-type (state-type state (first args)))]
+                  (when (lat/array-type? t) t)))
+
+              ;; CoreAlengthf errors on a non-array, so when it returns at all
+              ;; the result is an Int.
+              (= name "alength")
+              (when (= 1 (count args)) :int)
+
+              ;; Only the 2-arg form: a nested (aget a i j) walks inner arrays
+              ;; whose kinds are not tracked.
+              (= name "aget")
+              (when (= 2 (count args))
+                (let [t (normalize-type (state-type state (first args)))]
+                  (when (lat/array-type? t) (get array-elem-type (nth t 1)))))
+
+              ;; aset returns the value it was given, as passed (CoreAsetf
+              ;; returns vs[2], before any element coercion), so its type is
+              ;; the value's, whatever the array is.
+              (= name "aset")
+              (when (= 3 (count args))
+                (normalize-type (state-type state (nth args 2))))
 
               :else nil)
 

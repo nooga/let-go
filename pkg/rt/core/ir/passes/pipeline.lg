@@ -1416,7 +1416,7 @@
       :ns     string
       :pkg    string
       :fns    [{:fn-name :go-name :arity :needs-error?
-                :param-specs :result-spec} …]}
+                :param-specs :param-types :result-spec} …]}
 
    :fns lists every successfully lowered top-level fn (those that emitted a
    :decl), keyed by the SOURCE name (:fn-name) with the actual
@@ -1723,6 +1723,7 @@
                          :arity (:arity r)
                          :needs-error? (:needs-error? r)
                          :param-specs (vec (:param-specs r))
+                         :param-types (vec (:param-types r))
                          :result-spec (:result-spec r)})
                       (filterv :fn-name valid-results))]
         {:source (gogen/render file-ast)
