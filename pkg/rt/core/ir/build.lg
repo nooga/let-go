@@ -570,17 +570,20 @@
    seams must stay on the ordinary var/call path.
 
    A head qualified to the core ns is what syntax-quote produces, so every
-   macro-emitted `<` or `inc` (dotimes included) arrives this way (#1045). A
-   qualified symbol cannot be shadowed by a local, so only the identity check
-   applies; resolve follows aliases, and a qualified head naming some other
-   ns's var of that name fails the check."
+   macro-emitted `<` or `inc` (dotimes included) arrives this way as core/<
+   (#1045). A qualified symbol cannot be shadowed by a local, so only the
+   identity check applies; resolve follows aliases, and a qualified head
+   naming some other ns's var of that name fails the check. A core/ head that
+   does not resolve falls back to the core var, as the bytecode gate does."
   (when (and (symbol? head)
              (or (some? (namespace head))
                  (nil? (lookup-local ctx head))))
-    (let [sym      (symbol (name head))
+    (let [sym      (if (namespace head) (symbol (name head)) head)
           op       (get builtin-ops sym)
-          resolved (when op (resolve head))
-          core-var (when op (ns-resolve 'clojure.core sym))]
+          core-var (when op (ns-resolve 'clojure.core sym))
+          resolved (when op
+                     (or (resolve head)
+                         (when (= "core" (namespace head)) core-var)))]
       (when (and op resolved core-var (= resolved core-var))
         op))))
 

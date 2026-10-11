@@ -17,9 +17,10 @@ import (
 )
 
 // #1045: syntax-quote qualifies every symbol a macro emits, so dotimes and
-// friends hand the IR clojure.core/< and clojure.core/inc. Those heads must
-// get the same builtin ops as the unqualified ones, or the loop's locals fall
-// back to vm.Value and every op becomes a var call.
+// friends hand the IR core/< and core/inc (clojure.core is an alias of the
+// core ns). Those heads must get the same builtin ops as the unqualified
+// ones, or the loop's locals fall back to vm.Value and every op becomes a var
+// call.
 
 // buildLispIRInNS builds src in the namespace nsName after evaluating setup
 // there, so a test can define same-named vars or aliases the gate must see.
@@ -58,6 +59,16 @@ func TestLowerGoQualifiedCoreHeadsGetBuiltinOps(t *testing.T) {
 	mustNotContain(t, rendered, "CachedVarFn", "j vm.Value")
 }
 
+// core/ is the spelling syntax-quote actually emits.
+func TestLowerGoCoreNsHeadsGetBuiltinOps(t *testing.T) {
+	ensureLoader()
+	rendered := lowerArrayFn(t, `(defn qual [n]
+	  (loop [j 0 acc 0]
+	    (if (core/< j n) (recur (core/inc j) (core/+ acc j)) acc)))`)
+	mustContain(t, rendered, "j int64", "acc int64", "j < arg0")
+	mustNotContain(t, rendered, "CachedVarFn", "j vm.Value")
+}
+
 // An alias to clojure.core resolves to the same var, so it passes too.
 func TestLowerGoAliasedCoreHeadGetsBuiltinOp(t *testing.T) {
 	ensureLoader()
@@ -78,7 +89,8 @@ func TestLowerGoDotimesCounterIsNative(t *testing.T) {
 		     (intern (quote qgatedotimes1045) (quote spin))
 		     (ir.passes.pipeline/lower-ns-to-go "qgatedotimes1045" (quote qgatedotimes1045)
 		       [(quote (defn spin [n] (dotimes [j n] (identity j)) n))]))`)
-	mustNotContain(t, rendered, `"clojure.core", "<"`, `"clojure.core", "inc"`)
+	mustContain(t, rendered, "func Spin", "j int64", "j < ")
+	mustNotContain(t, rendered, `"clojure.core", "<"`, `"clojure.core", "inc"`, "j vm.Value")
 }
 
 // A qualified head that resolves to some other namespace's inc is that var,
@@ -89,5 +101,17 @@ func TestLowerGoQualifiedNonCoreHeadStaysCall(t *testing.T) {
 		`(defn f [n] (loop [j 0] (if (< j n) (recur (qgateother1045/inc j)) j)))`)
 	rendered := lowerBuiltFn(t, fn)
 	mustContain(t, rendered, `"qgateother1045", "inc"`)
+	mustNotContain(t, rendered, "j = j + 1")
+}
+
+// An alias named core that points at a user ns wins over the core ns, so
+// core/inc there is the user's inc and stays a call.
+func TestLowerGoCoreAliasToUserNsStaysCall(t *testing.T) {
+	ensureLoader()
+	buildLispIRInNS(t, "qgateuser1045", "(def inc (fn* [x] x))", `(fn* [] nil)`)
+	fn := buildLispIRInNS(t, "qgatealiascore1045", "(alias (quote core) (quote qgateuser1045))",
+		`(defn f [n] (loop [j 0] (if (< j n) (recur (core/inc j)) j)))`)
+	rendered := lowerBuiltFn(t, fn)
+	mustContain(t, rendered, `"qgateuser1045", "inc"`)
 	mustNotContain(t, rendered, "j = j + 1")
 }
