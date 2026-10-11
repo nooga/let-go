@@ -36,35 +36,44 @@ var TypedArrayType *theTypedArrayType = &theTypedArrayType{}
 
 // TypedArray is a mutable, typed array backed by a native Go slice.
 // Unlike persistent collections, arrays support in-place mutation via Set.
+//
+// One typed field per kind rather than a single `data any`: the typed
+// accessors for lowered code (AtFloat64 and friends, below) must stay under
+// the Go inliner's budget to be worth emitting, and an interface assertion
+// per access put them over it (cost 88 against a budget of 80). Exactly one
+// field is live, the one `kind` names; the others stay nil.
 type TypedArray struct {
-	kind ArrayKind
-	data any // one of: []byte, []int64, []float64, []Value
+	kind   ArrayKind
+	bytes  []byte
+	ints   []int64
+	floats []float64
+	objs   []Value
 }
 
 // --- Constructors ---
 
 func NewByteArray(size int) *TypedArray {
-	return &TypedArray{kind: ArrayByte, data: make([]byte, size)}
+	return &TypedArray{kind: ArrayByte, bytes: make([]byte, size)}
 }
 
 func NewByteArrayFrom(data []byte) *TypedArray {
-	return &TypedArray{kind: ArrayByte, data: data}
+	return &TypedArray{kind: ArrayByte, bytes: data}
 }
 
 func NewIntArray(size int) *TypedArray {
-	return &TypedArray{kind: ArrayInt, data: make([]int64, size)}
+	return &TypedArray{kind: ArrayInt, ints: make([]int64, size)}
 }
 
 func NewIntArrayFrom(data []int64) *TypedArray {
-	return &TypedArray{kind: ArrayInt, data: data}
+	return &TypedArray{kind: ArrayInt, ints: data}
 }
 
 func NewFloatArray(size int) *TypedArray {
-	return &TypedArray{kind: ArrayFloat, data: make([]float64, size)}
+	return &TypedArray{kind: ArrayFloat, floats: make([]float64, size)}
 }
 
 func NewFloatArrayFrom(data []float64) *TypedArray {
-	return &TypedArray{kind: ArrayFloat, data: data}
+	return &TypedArray{kind: ArrayFloat, floats: data}
 }
 
 func NewObjectArray(size int) *TypedArray {
@@ -72,19 +81,32 @@ func NewObjectArray(size int) *TypedArray {
 	for i := range d {
 		d[i] = NIL
 	}
-	return &TypedArray{kind: ArrayObject, data: d}
+	return &TypedArray{kind: ArrayObject, objs: d}
 }
 
 func NewObjectArrayFrom(data []Value) *TypedArray {
-	return &TypedArray{kind: ArrayObject, data: data}
+	return &TypedArray{kind: ArrayObject, objs: data}
 }
 
 // --- Value interface ---
 
 func (a *TypedArray) Type() ValueType { return TypedArrayType }
 
-// Unbox returns the underlying Go slice directly for interop.
-func (a *TypedArray) Unbox() any { return a.data }
+// Unbox returns the underlying Go slice directly for interop: one of []byte,
+// []int64, []float64, []Value, per Kind.
+func (a *TypedArray) Unbox() any {
+	switch a.kind {
+	case ArrayByte:
+		return a.bytes
+	case ArrayInt:
+		return a.ints
+	case ArrayFloat:
+		return a.floats
+	case ArrayObject:
+		return a.objs
+	}
+	return nil
+}
 
 // Kind returns the element kind.
 func (a *TypedArray) Kind() ArrayKind { return a.kind }
@@ -92,16 +114,7 @@ func (a *TypedArray) Kind() ArrayKind { return a.kind }
 func (a *TypedArray) String() string {
 	b := &strings.Builder{}
 	n := a.Len()
-	switch a.kind {
-	case ArrayByte:
-		b.WriteString("#byte-array[")
-	case ArrayInt:
-		b.WriteString("#int-array[")
-	case ArrayFloat:
-		b.WriteString("#double-array[")
-	case ArrayObject:
-		b.WriteString("#object-array[")
-	}
+	b.WriteString("#" + a.kindName() + "[")
 	for i := range n {
 		if i > 0 {
 			b.WriteRune(' ')
@@ -110,6 +123,20 @@ func (a *TypedArray) String() string {
 	}
 	b.WriteRune(']')
 	return b.String()
+}
+
+func (a *TypedArray) kindName() string {
+	switch a.kind {
+	case ArrayByte:
+		return "byte-array"
+	case ArrayInt:
+		return "int-array"
+	case ArrayFloat:
+		return "double-array"
+	case ArrayObject:
+		return "object-array"
+	}
+	return "array"
 }
 
 // Meta implements IMeta — arrays don't carry metadata.
@@ -123,13 +150,13 @@ func (a *TypedArray) WithMeta(_ Value) Value { return a }
 func (a *TypedArray) Len() int {
 	switch a.kind {
 	case ArrayByte:
-		return len(a.data.([]byte))
+		return len(a.bytes)
 	case ArrayInt:
-		return len(a.data.([]int64))
+		return len(a.ints)
 	case ArrayFloat:
-		return len(a.data.([]float64))
+		return len(a.floats)
 	case ArrayObject:
-		return len(a.data.([]Value))
+		return len(a.objs)
 	}
 	return 0
 }
@@ -138,13 +165,13 @@ func (a *TypedArray) Len() int {
 func (a *TypedArray) Get(i int) Value {
 	switch a.kind {
 	case ArrayByte:
-		return MakeInt(int(a.data.([]byte)[i]))
+		return MakeInt(int(a.bytes[i]))
 	case ArrayInt:
-		return MakeInt64(a.data.([]int64)[i])
+		return MakeInt64(a.ints[i])
 	case ArrayFloat:
-		return Float(a.data.([]float64)[i])
+		return Float(a.floats[i])
 	case ArrayObject:
-		return a.data.([]Value)[i]
+		return a.objs[i]
 	}
 	return NIL
 }
@@ -157,17 +184,17 @@ func (a *TypedArray) Set(i int, v Value) error {
 		if !ok {
 			return fmt.Errorf("byte-array expects Int, got %s", v.Type().Name())
 		}
-		a.data.([]byte)[i] = byte(n)
+		a.bytes[i] = byte(n)
 	case ArrayInt:
 		switch n := v.(type) {
 		case Int:
-			a.data.([]int64)[i] = int64(n)
+			a.ints[i] = int64(n)
 		case *BigInt:
 			v64, ok := n.ToInt64()
 			if !ok {
 				return fmt.Errorf("bigint too large for int-array")
 			}
-			a.data.([]int64)[i] = v64
+			a.ints[i] = v64
 		default:
 			return fmt.Errorf("int-array expects Int, got %s", v.Type().Name())
 		}
@@ -176,9 +203,9 @@ func (a *TypedArray) Set(i int, v Value) error {
 		if !ok {
 			return fmt.Errorf("double-array expects numeric, got %s", v.Type().Name())
 		}
-		a.data.([]float64)[i] = f
+		a.floats[i] = f
 	case ArrayObject:
-		a.data.([]Value)[i] = v
+		a.objs[i] = v
 	}
 	return nil
 }
@@ -187,25 +214,21 @@ func (a *TypedArray) Set(i int, v Value) error {
 func (a *TypedArray) Clone() *TypedArray {
 	switch a.kind {
 	case ArrayByte:
-		src := a.data.([]byte)
-		dst := make([]byte, len(src))
-		copy(dst, src)
-		return &TypedArray{kind: ArrayByte, data: dst}
+		dst := make([]byte, len(a.bytes))
+		copy(dst, a.bytes)
+		return &TypedArray{kind: ArrayByte, bytes: dst}
 	case ArrayInt:
-		src := a.data.([]int64)
-		dst := make([]int64, len(src))
-		copy(dst, src)
-		return &TypedArray{kind: ArrayInt, data: dst}
+		dst := make([]int64, len(a.ints))
+		copy(dst, a.ints)
+		return &TypedArray{kind: ArrayInt, ints: dst}
 	case ArrayFloat:
-		src := a.data.([]float64)
-		dst := make([]float64, len(src))
-		copy(dst, src)
-		return &TypedArray{kind: ArrayFloat, data: dst}
+		dst := make([]float64, len(a.floats))
+		copy(dst, a.floats)
+		return &TypedArray{kind: ArrayFloat, floats: dst}
 	case ArrayObject:
-		src := a.data.([]Value)
-		dst := make([]Value, len(src))
-		copy(dst, src)
-		return &TypedArray{kind: ArrayObject, data: dst}
+		dst := make([]Value, len(a.objs))
+		copy(dst, a.objs)
+		return &TypedArray{kind: ArrayObject, objs: dst}
 	}
 	return nil
 }
@@ -349,4 +372,97 @@ func (s *TypedArraySeq) String() string {
 	}
 	b.WriteRune(')')
 	return b.String()
+}
+
+// --- Typed element access for lowered code ---
+//
+// ir.lower-go emits these where the array kind is known statically (a
+// ^doubles/^longs param hint, or a double-array/int-array constructor in the
+// same function), so an aget/aset is one bounds check and the access, with no
+// boxing of the index or the element. The kind is still checked rather than
+// trusted: the static kind is an inference, and a mismatch must surface as an
+// error the lowered function returns, never a panic. A wrong kind finds its
+// field nil (length 0), takes the cold path, and accessError names the kind.
+//
+// Each accessor keeps its hot path inlinable: one unsigned bounds compare and
+// the access. Check with `go build -gcflags=-m=2 ./pkg/vm | grep AtFloat64`
+// after editing.
+
+// accessError is the cold path shared by the typed accessors: a kind mismatch
+// (the array is not of kind `want`) or, for the right kind, an index out of
+// bounds, worded as CoreAgetf/CoreAsetf word it.
+func (a *TypedArray) accessError(i int64, want ArrayKind) error {
+	if a.kind != want {
+		return fmt.Errorf("%s expected, got %s", (&TypedArray{kind: want}).kindName(), a.kindName())
+	}
+	return fmt.Errorf("array index %d out of bounds for length %d", i, a.Len())
+}
+
+// AtFloat64 reads element i of a double-array.
+func (a *TypedArray) AtFloat64(i int64) (float64, error) {
+	if uint64(i) >= uint64(len(a.floats)) {
+		return 0, a.accessError(i, ArrayFloat)
+	}
+	return a.floats[i], nil
+}
+
+// SetFloat64 writes element i of a double-array.
+func (a *TypedArray) SetFloat64(i int64, v float64) error {
+	if uint64(i) >= uint64(len(a.floats)) {
+		return a.accessError(i, ArrayFloat)
+	}
+	a.floats[i] = v
+	return nil
+}
+
+// AtInt64 reads element i of an int-array.
+func (a *TypedArray) AtInt64(i int64) (int64, error) {
+	if uint64(i) >= uint64(len(a.ints)) {
+		return 0, a.accessError(i, ArrayInt)
+	}
+	return a.ints[i], nil
+}
+
+// SetInt64 writes element i of an int-array.
+func (a *TypedArray) SetInt64(i int64, v int64) error {
+	if uint64(i) >= uint64(len(a.ints)) {
+		return a.accessError(i, ArrayInt)
+	}
+	a.ints[i] = v
+	return nil
+}
+
+// AtByte reads element i of a byte-array, widened to int64 (aget on a
+// byte-array returns an Int).
+func (a *TypedArray) AtByte(i int64) (int64, error) {
+	if uint64(i) >= uint64(len(a.bytes)) {
+		return 0, a.accessError(i, ArrayByte)
+	}
+	return int64(a.bytes[i]), nil
+}
+
+// SetByte writes element i of a byte-array, truncating as Set does.
+func (a *TypedArray) SetByte(i int64, v int64) error {
+	if uint64(i) >= uint64(len(a.bytes)) {
+		return a.accessError(i, ArrayByte)
+	}
+	a.bytes[i] = byte(v)
+	return nil
+}
+
+// AtValue reads element i of an object-array.
+func (a *TypedArray) AtValue(i int64) (Value, error) {
+	if uint64(i) >= uint64(len(a.objs)) {
+		return NIL, a.accessError(i, ArrayObject)
+	}
+	return a.objs[i], nil
+}
+
+// SetValue writes element i of an object-array.
+func (a *TypedArray) SetValue(i int64, v Value) error {
+	if uint64(i) >= uint64(len(a.objs)) {
+		return a.accessError(i, ArrayObject)
+	}
+	a.objs[i] = v
+	return nil
 }
