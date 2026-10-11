@@ -14,6 +14,12 @@ type DecodeStats struct {
 	VarRefHits    uint64
 	VarRefMisses  uint64
 	VarRefCreates uint64
+	// Chunks and CodeWords count the code chunks materialized into live
+	// vm.CodeChunk objects and their instruction words. A chunk whose decode a
+	// bundle defers (see DecodeBundle) is counted when it is materialized, not
+	// when it is skipped.
+	Chunks    uint64
+	CodeWords uint64
 }
 
 type decodeTagCount struct {
@@ -30,6 +36,11 @@ func (s *DecodeStats) addTag(id byte) {
 func (s *DecodeStats) addString(n int) {
 	s.StringEntries++
 	s.StringBytes += uint64(n)
+}
+
+func (s *DecodeStats) addChunk(codeWords int) {
+	s.Chunks++
+	s.CodeWords += uint64(codeWords)
 }
 
 func (s *DecodeStats) addVarRefHit() {
@@ -55,6 +66,8 @@ func (s *DecodeStats) mergeFrom(other *DecodeStats) {
 	s.VarRefHits += other.VarRefHits
 	s.VarRefMisses += other.VarRefMisses
 	s.VarRefCreates += other.VarRefCreates
+	s.Chunks += other.Chunks
+	s.CodeWords += other.CodeWords
 }
 
 func (s DecodeStats) Summary() string {
@@ -79,6 +92,7 @@ func (s DecodeStats) Summary() string {
 	for _, c := range counts {
 		fmt.Fprintf(&b, "[decode] tag %s count=%d\n", tagName(c.id), c.count)
 	}
+	fmt.Fprintf(&b, "[decode] chunks=%d code-words=%d\n", s.Chunks, s.CodeWords)
 	return b.String()
 }
 

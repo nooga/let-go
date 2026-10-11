@@ -29,6 +29,13 @@ const (
 	// FlagDebugSplit marks an artifact whose source maps and local-variable
 	// tables live in an external, digest-bound debug companion.
 	FlagDebugSplit
+	// FlagNSRanges: a bundle section after the string table lists, per
+	// namespace the encoder proved self-contained, the chunk range only that
+	// namespace's code reaches (Module.NSRanges). A decoder may leave those
+	// chunks and the function constants that own them undecoded until the
+	// namespace is required (DecodeBundle). Emitted only by the core bundle
+	// generator; a plain compilation never sets it.
+	FlagNSRanges
 
 	flagsEnd // first unused bit; keep last
 )
@@ -42,7 +49,7 @@ const knownFlags = flagsEnd - 1
 // silently widen what older versions accept.
 const (
 	v1Flags uint16 = FlagConstsBase | FlagCapabilities
-	v2Flags uint16 = v1Flags | FlagLocalVars
+	v2Flags uint16 = v1Flags | FlagLocalVars | FlagNSRanges
 	v3Flags uint16 = v2Flags | FlagCompressed | FlagDebugSplit
 )
 

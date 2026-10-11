@@ -18,6 +18,28 @@ type Module struct {
 	ConstsBase int
 	// NSTable maps namespace names to their main chunk indices (for bundles).
 	NSTable map[string]int
+	// NSRanges lists, under FlagNSRanges, the namespaces whose main chunk and
+	// function chunks no other namespace's code reaches, so a decoder can
+	// defer them (see NSRange). Sorted by name.
+	NSRanges []NSRange
+}
+
+// NSRange marks one bundle namespace as self-contained: MainChunk is its
+// NSTable entry, ConstRuns are the const-pool index runs of the constants only
+// its code reaches (functions, def metadata, literals, var references), and
+// [ChunkLo, ChunkHi) are the chunks of the functions among them — everything a
+// decoder skips while the namespace is deferred. ChunkLo == ChunkHi means the
+// namespace has no function chunks of its own. The encoder emits an entry only
+// after proving, by walking every namespace's code, that no other namespace's
+// code loads any of those constants or a function whose chunk lies in the
+// range. A constant two namespaces share (values dedupe across compilations)
+// is never in a run.
+type NSRange struct {
+	Name      string
+	MainChunk int
+	ChunkLo   int
+	ChunkHi   int
+	ConstRuns []ConstRange
 }
 
 // ChunkData holds the data for a single code chunk.

@@ -113,13 +113,14 @@ const (
 	// Startup cost: the compiler's bundle-boot path — decode the precompiled
 	// core bundle, run clojure.core, the lg baseline and the hybrid
 	// namespaces, and mark the rest needs-load — exactly what `lg -e nil`
-	// does minus process spawn. Decode covers every bundled chunk, so growth
-	// in a lazily loaded namespace still moves B/op: a real process pays that
-	// decode too. This is the guard for startup regressions (the
-	// per-instruction source-map / local-var realloc churn that doubled
-	// cold-start). Its B/op and allocs/op are deterministic and
-	// machine-independent, so the ratchet catches a reintroduction even when
-	// ns/op is noisy.
+	// does minus process spawn. A namespace left needs-load keeps its chunks
+	// undecoded until its first require (bytecode.DecodeBundle), so code
+	// added there does not move this gate; code added to core, a baseline or
+	// a hybrid does, as a real process pays for it. This is the guard for
+	// startup regressions (the per-instruction source-map / local-var realloc
+	// churn that doubled cold-start). Its B/op and allocs/op are deterministic
+	// and machine-independent, so the ratchet catches a reintroduction even
+	// when ns/op is noisy.
 	initPackage = "github.com/nooga/let-go/pkg/compiler"
 	initFilter  = "^BenchmarkInitFromLGB$"
 )
