@@ -74,6 +74,9 @@ const (
 
 	OP_FINALLY_END // end of a finally block (finallyOffset int32, negative): rethrow the pending error after an abnormal entry
 
+	OP_AGET // aget on a typed array (2 args: array, index)
+	OP_ASET // aset on a typed array (3 args: array, index, value); leaves the value
+
 	OP_COUNT // sentinel — keep last; must equal len(opcodeNames) (enforced at init)
 )
 
@@ -129,6 +132,8 @@ var opcodeNames = []string{
 	"UNCHECKED_SUB",
 	"UNCHECKED_MUL",
 	"FINALLY_END",
+	"AGET",
+	"ASET",
 }
 
 // A new opcode must land in both the const block and opcodeNames; the
@@ -1945,6 +1950,41 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				return NIL, err
 			}
 			f.stack[f.sp-1] = r
+			f.ip++
+
+		case OP_AGET:
+			// (aget arr i) without LOAD_VAR, INVOKE, or the variadic
+			// argument slice. The helper carries the core fn's exact
+			// checks and error text, so the opcode is never stricter than
+			// the var it replaces; the compiler only emits it for two args,
+			// so nested aget stays an ordinary call.
+			idx := f.stack[f.sp-1]
+			arr := f.stack[f.sp-2]
+			r, err := agetValue(arr, idx)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = r
+			f.sp--
+			f.ip++
+
+		case OP_ASET:
+			// (aset arr i v): like aset, the result is v as given, not the
+			// coerced element.
+			val := f.stack[f.sp-1]
+			idx := f.stack[f.sp-2]
+			arr := f.stack[f.sp-3]
+			if err := asetValue(arr, idx, val); err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-3] = val
+			f.sp -= 2
 			f.ip++
 
 		default:
