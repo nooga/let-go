@@ -1,0 +1,66 @@
+;; A sorted collection built with a custom comparator keeps it through every
+;; operation that rebuilds the collection, as Clojure's does. `empty` used to
+;; return the default-ordered singleton, so anything written as
+;; (into (empty coll) ...) silently re-sorted a descending collection.
+(ns test.sorted-comparator-test
+  (:require
+   [clojure.walk :as walk]
+   [test :refer :all]))
+
+(deftest empty-keeps-the-comparator
+  (testing "sorted-map-by"
+    (let [e (empty (sorted-map-by > 1 :a 2 :b))]
+      (is (= {} e))
+      (is (sorted? e))
+      (is (= [7 5] (keys (into e [[5 :x] [7 :y]]))))))
+  (testing "sorted-set-by"
+    (let [e (empty (sorted-set-by > 1 2 3))]
+      (is (= #{} e))
+      (is (sorted? e))
+      (is (= [9 4 1] (seq (into e [4 9 1])))))))
+
+(deftest default-ordered-empty-is-unchanged
+  (is (= [1 2 3] (keys (into (empty (sorted-map 3 :c)) [[2 :b] [1 :a] [3 :c]]))))
+  (is (= [1 2 3] (seq (into (empty (sorted-set 3)) [2 1 3])))))
+
+(deftest rebuilding-through-empty-keeps-the-order
+  (testing "clojure.walk rebuilds collections with (into (empty form) ...)"
+    (is (= [3 2 1] (keys (walk/postwalk identity (sorted-map-by > 1 :a 2 :b 3 :c)))))
+    (is (= [3 2 1] (seq (walk/postwalk identity (sorted-set-by > 1 2 3)))))))
+
+;; The collection also keeps the comparator FUNCTION, not only the Go ordering
+;; built from it, so (.comparator coll) returns it and the collection can be
+;; rebuilt with (sorted-map-by (.comparator coll) ...).
+(deftest comparator-returns-the-function-it-was-built-with
+  (is (= > (.comparator (sorted-map-by > 1 :a))))
+  (is (= > (.comparator (sorted-set-by > 1)))))
+
+(deftest every-rebuilt-collection-keeps-the-comparator-function
+  (let [m (sorted-map-by > 1 :a 2 :b)]
+    (doseq [[label m2] [["assoc" (assoc m 3 :c)]
+                        ["dissoc" (dissoc m 1)]
+                        ["conj" (conj m [4 :d])]
+                        ["into" (into m [[5 :e]])]
+                        ["empty" (empty m)]
+                        ["with-meta" (with-meta m {:x 1})]]]
+      (testing (str "sorted-map-by through " label)
+        (is (= > (.comparator m2))))))
+  (let [s (sorted-set-by > 1 2)]
+    (doseq [[label s2] [["conj" (conj s 3)]
+                        ["disj" (disj s 1)]
+                        ["into" (into s [4])]
+                        ["empty" (empty s)]
+                        ["with-meta" (with-meta s {:x 1})]]]
+      (testing (str "sorted-set-by through " label)
+        (is (= > (.comparator s2)))))))
+
+(deftest default-ordered-collections-report-compare
+  (is (= compare (.comparator (sorted-map 1 :a))))
+  (is (= compare (.comparator (sorted-set 1))))
+  (is (= compare (.comparator (empty (sorted-map 1 :a))))))
+
+(deftest the-comparator-rebuilds-the-collection
+  (let [m (sorted-map-by > 1 :a 2 :b 3 :c)
+        s (sorted-set-by > 1 2 3)]
+    (is (= [3 2 1] (keys (apply sorted-map-by (.comparator m) (mapcat identity m)))))
+    (is (= [3 2 1] (seq (apply sorted-set-by (.comparator s) s))))))
