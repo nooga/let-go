@@ -270,6 +270,17 @@ jobs:
         run: tinygo build -target=wasi -o /tmp/lg-ro-tinygo.wasm ./cmd/lg-runtime
       - name: Boot past the reflect shim (must not trap)
         run: wasmtime run /tmp/lg-ro-tinygo.wasm -v
+      # Boxed Go methods resolve under TinyGo only through the hand-written table
+      # in pkg/vm/boxed_reflect_tinygo.go. Core's inst-ms calls (.UnixMilli inst)
+      # on the time.Time that now returns, so read the clock both ways.
+      - name: Read the clock under TinyGo (time.Time method shims)
+        run: |
+          mkdir -p /tmp/tinygo-clock
+          printf '%s\n' '(println (pos? (inst-ms (now))) (int? (.Sub (now) (now))))' > /tmp/tinygo-clock/clock.lg
+          go run . -c /tmp/tinygo-clock/clock.lgb /tmp/tinygo-clock/clock.lg
+          out=$(wasmtime run --dir=/tmp/tinygo-clock /tmp/lg-ro-tinygo.wasm /tmp/tinygo-clock/clock.lgb)
+          echo "$out"
+          [ "$(printf '%s\n' "$out" | tail -n 1)" = "true true" ]
 
   # Differential gold check against a LIVE Clojure. The everyday `build` job is
   # clojure-free (it compares let-go to the committed test/gold/*.out goldens);
