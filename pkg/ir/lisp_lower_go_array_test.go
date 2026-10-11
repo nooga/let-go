@@ -183,3 +183,62 @@ func TestLowerGoUnhintedArrayParamStaysBoxed(t *testing.T) {
 	mustContain(t, rendered, "arg0 vm.Value", `rt.LookupVar("clojure.core", "aget")`)
 	mustNotContain(t, rendered, "AtFloat64", "AtValue")
 }
+
+// Function-level recur bypasses the ordinary direct-call kind guard. A
+// changing or unproven kind must keep the function on bytecode, rather than
+// feed the next iteration's typed accessor or emit an invalid assignment.
+func TestLowerGoArrayRecurMismatchFallsBack(t *testing.T) {
+	ensureLoader()
+	for _, operand := range []string{`(long-array 3)`, `"x"`, `x`} {
+		t.Run(operand, func(t *testing.T) {
+			fn := buildLispIR(t, fmt.Sprintf(`(defn array-recur [^doubles a n x]
+     (if (< n 1) (aget a 0) (recur %s (dec n) x)))`, operand))
+			optimizeLispIR(t, fn)
+			result := lowerGo(t, fn, ":bridge")
+			if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("fallback") {
+				t.Fatalf("expected bytecode fallback, got %v", result)
+			}
+			if decl := result.ValueAt(vm.Keyword("decl")); decl != vm.NIL {
+				t.Fatalf("fallback emitted a declaration: %v", decl)
+			}
+		})
+	}
+}
+
+func TestLowerGoArrayRecurSameKindStaysNative(t *testing.T) {
+	ensureLoader()
+	for _, operand := range []string{`a`, `(double-array 3)`} {
+		t.Run(operand, func(t *testing.T) {
+			rendered := lowerArrayFn(t, fmt.Sprintf(`(defn array-recur [^doubles a n]
+     (if (< n 1) (aget a 0) (recur %s (dec n))))`, operand))
+			mustContain(t, rendered, "a0 *vm.TypedArray", "a0.AtFloat64(0)")
+		})
+	}
+}
+
+// A rejected sibling must disappear from the direct-call registry too, so
+// callers execute its original bytecode body and ignore the array hint.
+func TestLowerGoArrayRecurFallbackCallerUsesTrampoline(t *testing.T) {
+	ensureLoader()
+	rendered := runLispExpr(t, `(do
+   (create-ns (quote arrayrecur))
+   (intern (quote arrayrecur) (quote changing))
+   (intern (quote arrayrecur) (quote caller))
+   (ir.passes.pipeline/lower-ns-to-go "arrayrecur" (quote arrayrecur)
+    [(quote (defn changing [^doubles a n]
+       (if (< n 1) (aget a 0) (recur (long-array 3) (dec n)))))
+     (quote (defn caller [] (changing (double-array 3) 1)))]))`)
+	source, ok := rendered.(vm.String)
+	if !ok {
+		t.Fatalf("expected rendered Go, got %T", rendered)
+	}
+	mustContain(t, string(source), `rt.CachedVarFn(&__v_arrayrecur_changing, "arrayrecur", "changing")`)
+	mustNotContain(t, string(source), "func Changing(", "Changing(ec")
+	got := runLispExpr(t, `(do
+   (defn review-array-recur [^doubles a n]
+     (if (< n 1) (aget a 0) (recur (long-array 3) (dec n))))
+   (review-array-recur (double-array 3) 1))`)
+	if got != vm.Int(0) {
+		t.Fatalf("bytecode fallback = %v, want 0", got)
+	}
+}
