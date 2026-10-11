@@ -564,16 +564,23 @@
 (def binary-only-ops #{:unchecked-add :unchecked-sub :unchecked-mul})
 
 (defn- intrinsic-builtin-op [head ctx]
-  "Return the builtin op keyword only when HEAD is an unqualified symbol,
-   not lexically shadowed, and resolves to the core var of the same name.
-   This matches the bytecode compiler's fast-opcode gate: shadowing or runtime
-   rebinding seams must stay on the ordinary var/call path."
+  "Return the builtin op keyword only when HEAD resolves to the core var of
+   the same name and, if unqualified, is not lexically shadowed. This matches
+   the bytecode compiler's fast-opcode gate: shadowing or runtime rebinding
+   seams must stay on the ordinary var/call path.
+
+   A head qualified to the core ns is what syntax-quote produces, so every
+   macro-emitted `<` or `inc` (dotimes included) arrives this way (#1045). A
+   qualified symbol cannot be shadowed by a local, so only the identity check
+   applies; resolve follows aliases, and a qualified head naming some other
+   ns's var of that name fails the check."
   (when (and (symbol? head)
-             (nil? (namespace head))
-             (nil? (lookup-local ctx head)))
-    (let [op       (get builtin-ops head)
+             (or (some? (namespace head))
+                 (nil? (lookup-local ctx head))))
+    (let [sym      (symbol (name head))
+          op       (get builtin-ops sym)
           resolved (when op (resolve head))
-          core-var (when op (ns-resolve 'clojure.core head))]
+          core-var (when op (ns-resolve 'clojure.core sym))]
       (when (and op resolved core-var (= resolved core-var))
         op))))
 
