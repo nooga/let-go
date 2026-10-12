@@ -19,51 +19,107 @@ func (t *theNativeFnType) Unbox() any      { return reflect.TypeFor[*theNativeFn
 
 func (t *theNativeFnType) Name() string { return "let-go.lang.NativeFn" }
 
-// fastValueProxy returns a non-reflection proxy for the signatures the
-// IR-lowered code boxes most often: func(Value…N) (Value, error), all args and
-// the result already let-go Values. A direct typed call skips the per-invocation
-// []reflect.Value allocation, per-arg reflect boxing, and reflect.Call (whose
-// reflect.unsafe_New dominated the native optimize-pass alloc profile). Returns
-// (nil, 0) for any other signature, so Box falls through to the reflect proxy.
-func fastValueProxy(fn any) (func([]Value) (Value, error), int) {
-	switch f := fn.(type) {
-	case func() (Value, error):
-		return func(a []Value) (Value, error) {
-			if len(a) != 0 {
-				return NIL, fmt.Errorf("wrong number of args (%d), expected 0", len(a))
-			}
-			return f()
-		}, 0
-	case func(Value) (Value, error):
-		return func(a []Value) (Value, error) {
-			if len(a) != 1 {
-				return NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(a))
-			}
-			return f(a[0])
-		}, 1
-	case func(Value, Value) (Value, error):
-		return func(a []Value) (Value, error) {
-			if len(a) != 2 {
-				return NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(a))
-			}
-			return f(a[0], a[1])
-		}, 2
-	case func(Value, Value, Value) (Value, error):
-		return func(a []Value) (Value, error) {
-			if len(a) != 3 {
-				return NIL, fmt.Errorf("wrong number of args (%d), expected 3", len(a))
-			}
-			return f(a[0], a[1], a[2])
-		}, 3
-	case func(Value, Value, Value, Value) (Value, error):
-		return func(a []Value) (Value, error) {
-			if len(a) != 4 {
-				return NIL, fmt.Errorf("wrong number of args (%d), expected 4", len(a))
-			}
-			return f(a[0], a[1], a[2], a[3])
-		}, 4
+// fastArity reports the arity of a Go func whose shape call dispatches
+// directly, without reflection: Values in, a Value out, with or without a
+// trailing error. Variadic shapes report -1. ok is false for any other shape.
+func fastArity(fn any) (arity int, variadic bool, ok bool) {
+	switch fn.(type) {
+	case func() (Value, error), func() Value:
+		return 0, false, true
+	case func(Value) (Value, error), func(Value) Value:
+		return 1, false, true
+	case func(Value, Value) (Value, error), func(Value, Value) Value:
+		return 2, false, true
+	case func(Value, Value, Value) (Value, error), func(Value, Value, Value) Value:
+		return 3, false, true
+	case func(Value, Value, Value, Value) (Value, error), func(Value, Value, Value, Value) Value:
+		return 4, false, true
+	case func(...Value) (Value, error):
+		return -1, true, true
 	}
-	return nil, 0
+	return 0, false, false
+}
+
+// WrongArgCount is the error a fixed-arity native fn returns when called with
+// the wrong number of arguments: the ExecutionError the bytecode VM raises for
+// a bytecode fn of that arity, naming fn as the VM prints it.
+func WrongArgCount(fn Value, got, want int) error {
+	return NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", fn, want, got))
+}
+
+// orNIL maps the nil interface a Go func may return in place of NIL to NIL,
+// as the reflect path's BoxValue does, so no fast shape hands nil to callers.
+func orNIL(v Value) Value {
+	if v == nil {
+		return NIL
+	}
+	return v
+}
+
+// orNILErr is orNIL for a (Value, error) result.
+func orNILErr(v Value, err error) (Value, error) {
+	return orNIL(v), err
+}
+
+// callFast invokes l's func, which has a fastArity shape. A type switch on the
+// stored func replaces a per-box adapter closure, so boxing costs one
+// allocation. The trailing error case is a guard: Box admits only these shapes.
+func (l *NativeFn) callFast(a []Value) (Value, error) {
+	switch f := l.fn.(type) {
+	case func() (Value, error):
+		if len(a) != 0 {
+			return NIL, WrongArgCount(l, len(a), 0)
+		}
+		return orNILErr(f())
+	case func(Value) (Value, error):
+		if len(a) != 1 {
+			return NIL, WrongArgCount(l, len(a), 1)
+		}
+		return orNILErr(f(a[0]))
+	case func(Value, Value) (Value, error):
+		if len(a) != 2 {
+			return NIL, WrongArgCount(l, len(a), 2)
+		}
+		return orNILErr(f(a[0], a[1]))
+	case func(Value, Value, Value) (Value, error):
+		if len(a) != 3 {
+			return NIL, WrongArgCount(l, len(a), 3)
+		}
+		return orNILErr(f(a[0], a[1], a[2]))
+	case func(Value, Value, Value, Value) (Value, error):
+		if len(a) != 4 {
+			return NIL, WrongArgCount(l, len(a), 4)
+		}
+		return orNILErr(f(a[0], a[1], a[2], a[3]))
+	case func() Value:
+		if len(a) != 0 {
+			return NIL, WrongArgCount(l, len(a), 0)
+		}
+		return orNIL(f()), nil
+	case func(Value) Value:
+		if len(a) != 1 {
+			return NIL, WrongArgCount(l, len(a), 1)
+		}
+		return orNIL(f(a[0])), nil
+	case func(Value, Value) Value:
+		if len(a) != 2 {
+			return NIL, WrongArgCount(l, len(a), 2)
+		}
+		return orNIL(f(a[0], a[1])), nil
+	case func(Value, Value, Value) Value:
+		if len(a) != 3 {
+			return NIL, WrongArgCount(l, len(a), 3)
+		}
+		return orNIL(f(a[0], a[1], a[2])), nil
+	case func(Value, Value, Value, Value) Value:
+		if len(a) != 4 {
+			return NIL, WrongArgCount(l, len(a), 4)
+		}
+		return orNIL(f(a[0], a[1], a[2], a[3])), nil
+	case func(...Value) (Value, error):
+		return orNILErr(f(a...))
+	}
+	return NIL, fmt.Errorf("callFast: unsupported shape %T", l.fn)
 }
 
 func (t *theNativeFnType) Box(fn any) (Value, error) {
@@ -72,10 +128,12 @@ func (t *theNativeFnType) Box(fn any) (Value, error) {
 		return NIL, NewTypeError(fn, "can't be boxed into", t)
 	}
 
-	// Fast path: exact func(Value…N) (Value, error) shapes dispatch directly,
-	// no reflection. Everything else uses the reflect proxy below.
-	if fp, arity := fastValueProxy(fn); fp != nil {
-		return &NativeFn{arity: arity, isVariadric: false, fn: fn, proxy: fp}, nil
+	// Fast path: the fastArity shapes — func(Value…N) returning Value or
+	// (Value, error), and func(...Value) (Value, error) — dispatch directly
+	// through callFast, no reflection. Everything else uses the reflect proxy
+	// below.
+	if arity, variadic, ok := fastArity(fn); ok {
+		return &NativeFn{arity: arity, isVariadric: variadic, fn: fn}, nil
 	}
 
 	// Signature inspection + reflect.Call dispatch live in a build-tagged
@@ -268,7 +326,17 @@ func (l *NativeFn) Arity() int {
 
 func (l *NativeFn) Invoke(args []Value) (ret Value, err error) {
 	defer RecoverPanic(&err)
-	return l.proxy(args)
+	return l.call(args)
+}
+
+// call runs the native without panic recovery: through its proxy when it has
+// one (reflected and context-aware natives), else straight to its fast-shape
+// Go func.
+func (l *NativeFn) call(args []Value) (Value, error) {
+	if l.proxy != nil {
+		return l.proxy(args)
+	}
+	return l.callFast(args)
 }
 
 func (l *NativeFn) String() string {
