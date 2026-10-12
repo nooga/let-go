@@ -18,6 +18,16 @@ type Hashable interface {
 // HashValue computes a 32-bit hash for any Value type (exported for builtins).
 func HashValue(v Value) uint32 { return hashValue(v) }
 
+// Prehash computes v's hash once and returns v. A collection caches its hash
+// on first use without synchronization, so a value that goroutines share from
+// the start, such as a constant lowered Go holds in a package-level var, is
+// hashed in its initializer, as the bytecode constant pool hashes its values
+// at compile time.
+func Prehash(v Value) Value {
+	hashValue(v)
+	return v
+}
+
 // hashValue computes a 32-bit hash for any Value type.
 // Checks for Hashable first (cached hash), then falls back to computing.
 func hashValue(v Value) uint32 {
