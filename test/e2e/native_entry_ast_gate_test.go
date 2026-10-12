@@ -461,7 +461,8 @@ func directCallsTo(scope ast.Node, name string) []*ast.CallExpr {
 
 // vmTrampolinesFor returns every `ec.Invoke(…)` call inside scope whose
 // argument tree mentions the fixture's lisp-level function name — i.e. the
-// VM trampoline for that defn.
+// VM trampoline for that defn. A call of one to four arguments is spelled
+// ec.Invoke1(…) … ec.Invoke4(…), with the arguments as parameters.
 func vmTrampolinesFor(scope ast.Node, lispName string) []*ast.CallExpr {
 	quoted := strconv.Quote(lispName)
 	var calls []*ast.CallExpr
@@ -471,7 +472,7 @@ func vmTrampolinesFor(scope ast.Node, lispName string) []*ast.CallExpr {
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Invoke" {
+		if !ok || !isTrampolineInvoke(sel.Sel.Name) {
 			return true
 		}
 		if ident, ok := sel.X.(*ast.Ident); !ok || ident.Name != "ec" {
@@ -731,4 +732,12 @@ func renderNativeEntryFile(t *testing.T, fset *token.FileSet, file *ast.File) []
 		t.Fatalf("render mutated generated file: %v", err)
 	}
 	return out.Bytes()
+}
+
+func isTrampolineInvoke(name string) bool {
+	switch name {
+	case "Invoke", "Invoke1", "Invoke2", "Invoke3", "Invoke4":
+		return true
+	}
+	return false
 }

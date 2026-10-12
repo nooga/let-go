@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-05
+last-verified: 2026-10-03
 authoritative-for:
   - benchmark-ratchet
 human-verified:
@@ -67,15 +67,11 @@ mutate shared runtime state and are too noisy for a blocking timing bar.
 
 > **Reading the `gogen_ir` / `aot_native` numbers.** These exercise the
 > natively-lowered IR passes (the dispatch is guarded by
-> `TestIRBenchDispatchesNativeUnderTag`), but the lowered Go currently
-> *boxes* most cross-namespace and `clojure.core` calls — runtime
-> `LookupVar`/`Deref` + a fresh `[]vm.Value` arg slice per call — rather
-> than emitting direct calls. So the `gogen_ir` variant can allocate
-> **more** than `bytecode` (e.g. IRCompile ~1.7×) and is only marginally
-> faster. Treat these as "native dispatch works, codegen not yet
-> optimized" — not "native is fast." Direct-call lowering (cross-ns +
-> IFn-typed + `clojure.core`) is the lever that would push them below the
-> bytecode line.
+> `TestIRBenchDispatchesNativeUnderTag`). The lowered Go reaches a
+> cross-namespace or `clojure.core` callee through a cached var
+> (`rt.CachedVarFn`) and passes one to four arguments as parameters, so a
+> call builds no argument slice. A call of five or more arguments still
+> builds one, and is the remaining per-call allocation in lowered calls.
 
 Deliberately out of scope: `pkg/compiler` (compile time — measured by
 parity scripts) and `pkg/bytecode` (decode time — measured at `make

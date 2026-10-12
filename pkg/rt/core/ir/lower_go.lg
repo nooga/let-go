@@ -951,12 +951,16 @@
      type closure_<owner>__<path> struct { vm.NativeFn; ec *vm.ExecContext; c0 vm.Value … }
      func newClosure_<owner>__<path>(ec, c0 …) vm.Value   // one allocation
      func (self *closure_…) CallNative(argv []vm.Value) (vm.Value, error)
+     func (self *closure_…) Invoke<N>(_ *vm.ExecContext, a0 … vm.Value) (vm.Value, error)
 
-   CallNative checks the arity exactly as a boxed Go func of that shape does,
-   then applies the lowered literal — its own func-lit, called in place with
-   ec, the captures and the arguments as parameters, so it closes over nothing
-   and a call allocates nothing. Returns the constructor's name, or nil when
-   the literal cannot be lowered (the enclosing fn then falls back)."
+   The literal's body is its own func-lit, applied in place with ec, the
+   captures and the arguments as parameters, so it closes over nothing and a
+   call allocates nothing. A fixed arity of one to four puts that application
+   in Invoke<N> (vm.Invoker<N>), which ec.Invoke<N> reaches with no argument
+   slice; CallNative checks the arity exactly as a boxed Go func of that shape
+   does and delegates to it. The caller's ec is ignored in favor of the
+   lexically captured one. Returns the constructor's name, or nil
+   when the literal cannot be lowered (the enclosing fn then falls back)."
   [f ncaps cid path]
   (let [tname     (closure-type-name path)
         ctor      (closure-ctor-name path)
@@ -1008,22 +1012,43 @@
                                          [(arity-err "TooFewArgs")] nil))
                         (gogen/if-stmt nil (gogen/binary "!=" len-argv (gogen/int-lit fixed))
                                        [(arity-err "WrongArgCount")] nil))
+            typed?    (and (not variadic?) (<= 1 fixed 4))
+            arg-name  (fn [i] (str "a" i))
+            arg-ref   (fn [i] (if typed?
+                                (gogen/ident (arg-name i))
+                                (gogen/index argv (gogen/int-lit i))))
             call-args (-> [(gogen/field-sel self "ec")]
                           (into (mapv (fn [i] (gogen/field-sel self (field i))) (range ncaps)))
-                          (into (mapv (fn [i] (gogen/index argv (gogen/int-lit i))) (range fixed))))
+                          (into (mapv arg-ref (range fixed))))
             call      (if variadic?
                         (gogen/call-variadic lit (conj call-args (gogen/slice-expr argv (gogen/int-lit fixed) nil)))
                         (gogen/call lit call-args))
             ret       (if needs-error?
                         (gogen/return-stmt [call])
                         (gogen/return-stmt [call (gogen/ident "nil")]))
+            results   [(gogen/result value-t) (gogen/result (gogen/type "error"))]
+            recv      [(gogen/field-decl "self" (gogen/type (str "*" tname)) "")]
+            invoke-n  (when typed?
+                        (gogen/method-decl
+                          recv (str "Invoke" fixed)
+                          (into [(gogen/param "_" ec-t)]
+                                (mapv (fn [i] (gogen/param (arg-name i) value-t)) (range fixed)))
+                          results
+                          [ret]))
+            delegate  (when typed?
+                        (gogen/return-stmt
+                          [(gogen/call (gogen/field-sel self (str "Invoke" fixed))
+                                       (into [(gogen/ident "nil")]
+                                             (mapv (fn [i] (gogen/index argv (gogen/int-lit i))) (range fixed))))]))
             method    (gogen/method-decl
-                        [(gogen/field-decl "self" (gogen/type (str "*" tname)) "")]
-                        "CallNative"
+                        recv "CallNative"
                         [(gogen/param "argv" (gogen/type "[]vm.Value"))]
-                        [(gogen/result value-t) (gogen/result (gogen/type "error"))]
-                        (if check [check ret] [ret]))]
-        (register-closure-decls! tname [type-decl ctor-decl method])
+                        results
+                        (let [body (or delegate ret)]
+                          (if check [check body] [body])))]
+        (register-closure-decls! tname (if invoke-n
+                                         [type-decl ctor-decl method invoke-n]
+                                         [type-decl ctor-decl method]))
         ctor))))
 
 (defn- boxed-closure-arm [f capture-exprs cid]
@@ -2537,7 +2562,14 @@
          base       (when nn (record-cross-ns-var! (first nn) (second nn)))
          arg-exprs  (or prepared-args
                         (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))
-         args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
+         args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)
+         ;; One to four arguments go as parameters (ec.InvokeN,
+         ;; rt.InvokeValueECN): no slice is built at the site, matching the
+         ;; bytecode VM, which lends a callee a window of its operand stack.
+         ;; Zero arguments keep the empty slice literal, which Go does not
+         ;; allocate; wider calls keep the slice.
+         n-args     (count arg-exprs)
+         typed?     (<= 1 n-args 4)]
      (when (every? identity arg-exprs)
        (if base
          ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
@@ -2555,15 +2587,22 @@
                ;; Dispatch through ec so the callee (and any dynamic vars it
                ;; reads, or goroutines it spawns) sees the running context:
                ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
-               invoke    (gogen/call
-                           (gogen/field-sel (gogen/ident "ec") "Invoke")
-                           [cached-fn args-slice])]
+               invoke    (if typed?
+                           (gogen/call
+                             (gogen/field-sel (gogen/ident "ec") (str "Invoke" n-args))
+                             (into [cached-fn] arg-exprs))
+                           (gogen/call
+                             (gogen/field-sel (gogen/ident "ec") "Invoke")
+                             [cached-fn args-slice]))]
            (boxed-call-stmts f nid target invoke))
          ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
          ;; which threads ec into the dynamic invocation path.
          (let [callee (box-as-value f closed-exprs (first refs))
-               invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
-                                  [(gogen/ident "ec") callee args-slice])]
+               invoke (if typed?
+                        (gogen/call (gogen/field-sel (gogen/ident "rt") (str "InvokeValueEC" n-args))
+                                    (into [(gogen/ident "ec") callee] arg-exprs))
+                        (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
+                                    [(gogen/ident "ec") callee args-slice]))]
            (when callee
              (if (keyword-callee-total? f refs)
                ;; Total keyword lookup: the error is always nil at arity
@@ -2773,12 +2812,13 @@
         ;; finally invocation + error check (used when has-finally?)
         invoke-fin  (gogen/multi-assign ":=" [blank finE] [(invoke finally-x empty-args)])
         fin-check   (gogen/if-stmt nil (gogen/binary "!=" finE nilx) [(ret-err finE)] nil)
-        ;; handler invocation: hV, hE := rt.InvokeValueEC(ec, <handler>,
-        ;;   []vm.Value{vm.ErrorToValue(bodyE)})
+        ;; handler invocation: hV, hE := rt.InvokeValueEC1(ec, <handler>,
+        ;;   vm.ErrorToValue(bodyE))
         caught      (gogen/call (gogen/field-sel (gogen/ident "vm") "ErrorToValue") [bodyE])
-        handler-args (gogen/composite-lit (gogen/type "[]vm.Value") [caught])
         invoke-handler (when handler-x
-                         (gogen/multi-assign ":=" [hV hE] [(invoke handler-x handler-args)]))]
+                         (gogen/multi-assign ":=" [hV hE]
+                                             [(gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC1")
+                                                          [(gogen/ident "ec") handler-x caught])]))]
     (when (and body-x
                (or (not has-handler?) handler-x)
                (or (not has-finally?) finally-x))

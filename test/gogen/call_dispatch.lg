@@ -1,0 +1,57 @@
+;; Native-lowering trampoline fixture: a lowered call passes its arguments
+;; like the bytecode VM.
+;;
+;; A call through a value or a var hands the callee its one to four arguments
+;; without building a slice. Every kind of callee the lowered code dispatches
+;; to dynamically — a fn literal, a bytecode fn, a multi-arity fn, a keyword,
+;; a fn carrying metadata, a map, a var-bound fn — must see the same
+;; arguments and return the same value as on the bytecode VM, and a call of
+;; the wrong arity must raise the same error. The trampoline compares (run)
+;; under the lowered Go against the bytecode VM.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.call-dispatch)
+
+(defn call1 [f x] (f x))
+(defn call2 [f x y] (f x y))
+(defn call3 [f x y z] (f x y z))
+(defn call4 [f x y z w] (f x y z w))
+
+(defn caught [thunk]
+  (try (do (thunk) :no-error) (catch e :arity-error)))
+
+(defn ^:redef pair [x y] [x y])
+
+(defn run []
+  (let [lit1 (fn [a] [:lit a])
+        lit2 (fn [a b] [:lit a b])
+        lit4 (fn [a b c d] [:lit a b c d])
+        multi (fn ([a] [:m1 a]) ([a b] [:m2 a b]) ([a b & r] [:mr a b r]))
+        tagged (with-meta (fn [a b] [:tagged a b]) {:t 1})
+        m {:k 1}]
+    [(call1 lit1 1)
+     (call2 lit2 1 2)
+     (call4 lit4 1 2 3 4)
+     (call1 multi 1)
+     (call2 multi 1 2)
+     (call3 multi 1 2 3)
+     (call4 multi 1 2 3 4)
+     (call2 tagged 1 2)
+     (call1 :k m)
+     (call2 :z m 9)
+     (call1 m :k)
+     (call2 m :z 8)
+     (call2 pair 1 2)
+     (call2 #'pair 1 2)
+     (call1 inc 41)
+     (call2 + 1 2)
+     (call3 assoc m :a 1)
+     (caught (fn [] (call2 lit1 1 2)))
+     (caught (fn [] (call1 lit2 1)))
+     (caught (fn [] (call3 lit2 1 2 3)))
+     (caught (fn [] (call3 :k m 1 2)))
+     (caught (fn [] (call3 pair 1 2 3)))
+     (caught (fn [] (call1 tagged 1)))
+     (caught (fn [] (call1 nil 1)))]))

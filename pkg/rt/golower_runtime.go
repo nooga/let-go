@@ -214,6 +214,39 @@ func InvokeValueEC(ec *vm.ExecContext, target vm.Value, args []vm.Value) (vm.Val
 	return inv.Invoke(args)
 }
 
+// InvokeValueEC1 through InvokeValueEC4 are InvokeValueEC with the arguments
+// as parameters: a lowered call of one to four arguments reaches the callee
+// through ec.InvokeN, so the bytecode VM's rule that a callee borrows its
+// arguments and never retains them holds here too, with no slice built at
+// the site. A value that is not a vm.Fn still takes the slice path.
+func InvokeValueEC1(ec *vm.ExecContext, target vm.Value, a vm.Value) (vm.Value, error) {
+	if fn, ok := target.(vm.Fn); ok {
+		return ec.Invoke1(fn, a)
+	}
+	return InvokeValueEC(ec, target, []vm.Value{a})
+}
+
+func InvokeValueEC2(ec *vm.ExecContext, target vm.Value, a, b vm.Value) (vm.Value, error) {
+	if fn, ok := target.(vm.Fn); ok {
+		return ec.Invoke2(fn, a, b)
+	}
+	return InvokeValueEC(ec, target, []vm.Value{a, b})
+}
+
+func InvokeValueEC3(ec *vm.ExecContext, target vm.Value, a, b, c vm.Value) (vm.Value, error) {
+	if fn, ok := target.(vm.Fn); ok {
+		return ec.Invoke3(fn, a, b, c)
+	}
+	return InvokeValueEC(ec, target, []vm.Value{a, b, c})
+}
+
+func InvokeValueEC4(ec *vm.ExecContext, target vm.Value, a, b, c, d vm.Value) (vm.Value, error) {
+	if fn, ok := target.(vm.Fn); ok {
+		return ec.Invoke4(fn, a, b, c, d)
+	}
+	return InvokeValueEC(ec, target, []vm.Value{a, b, c, d})
+}
+
 // BoxNativeFn wraps a Go func as a let-go callable. Lowered Go uses it for a
 // capture-free fn literal that cannot be a closure struct (a Go signature that
 // is not uniformly vm.Value); a capturing literal is always a closure struct.
