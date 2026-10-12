@@ -3,7 +3,8 @@
 Proves the AOT native-entry path end-to-end: `lg-compile --entry-frame`
 lowers `fib` + `-main`, emits a `main.go` frame keyed off the recognized
 entry, the build script places `program.lgb` beside it, and `go build`
-produces a binary that boots via `rt.BootCore`, loads the program namespaces
+produces a binary that boots core through `pkg/compiler` (so `eval`,
+`load-string` and a run-time `require` work), loads the program namespaces
 (with override drain), then enters natively at `prog.Main`.
 
 Frame emission is opt-in (`--entry-frame`) so package-only callers such as
@@ -24,8 +25,8 @@ On a typical machine fib(34) is ~0.07–0.08s native vs ~1.1–1.4s on the lg VM
 ## What lg-compile emits
 
 - `out/fib/fib.go` — lowered `Fib` / `Main`
-- `out/main.go` — the #425 frame (`BootCore` → `LoadProgramNamespaces` →
-  `prog.Main(ec, argv...)`)
+- `out/main.go` — the #425 frame (core boot through `pkg/compiler` →
+  `LoadProgramNamespaces` → `prog.Main(ec, argv...)`)
 - summary line: `2 fns lowered; native entry: Main ✓`
 
 `program.lgb` is owned by the orchestrator (this `build.sh`, or gloat) — not

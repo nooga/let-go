@@ -172,12 +172,11 @@ func TestNativeEntryMatrix(t *testing.T) {
 			name: "typed no-error direct call shape",
 			files: map[string]string{
 				// Constant long return: lowerer sets :needs-error? false, so the
-				// frame must call prog.Main(ec) without an err binding and
-				// without importing unused pkg/vm.
+				// frame must call prog.Main(ec) without an err binding.
 				"app.lg": "(ns app)\n(defn -main ^long [] 0)\n",
 			},
 			mainContains:   []string{"prog.Main(ec)"},
-			mainNotContain: []string{"if _, err := prog.Main(", "github.com/nooga/let-go/pkg/vm"},
+			mainNotContain: []string{"if _, err := prog.Main("},
 		},
 		{
 			name: "return-hinted unsupported arity rejected",

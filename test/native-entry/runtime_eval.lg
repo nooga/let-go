@@ -1,0 +1,19 @@
+;; Regression fixture for #992: an entry-frame binary must evaluate code at run
+;; time exactly as the VM does. eval, load-string, and a require of a lazily
+;; loaded embedded namespace all need the compiler, which the frame used to
+;; leave out: eval was unbound and the lowered call panicked.
+(ns runtimeeval)
+
+(defn bump [a]
+  (+ a 41))
+
+(defn -main []
+  (println (bump 1))
+  (println (eval '(+ 1 2)))
+  ;; The form is built at run time: the gate reads an ec.Invoke whose
+  ;; arguments carry the literal "bump" as a VM trampoline for bump, which a
+  ;; quoted '(bump 2) constant would be.
+  (println (eval (list 'bump 2)))
+  (println (load-string "(* 6 7)"))
+  (require 'clojure.walk)
+  (println ((resolve 'clojure.walk/postwalk) identity [1 2])))
