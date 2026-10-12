@@ -1,0 +1,43 @@
+;; Native-lowering trampoline fixture: the core type predicates compare type
+;; objects.
+;;
+;; vector? and reduce-kv's vector and transient-map arms compare (type x) to
+;; the type object rather than its printed name, and must answer the same on
+;; both backends for every kind of value: array vectors,
+;; persistent vectors built past the array threshold, transient maps,
+;; vectors with metadata, and everything that is not a vector. The trampoline
+;; compares (run) under the lowered Go against the bytecode VM.
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.type-predicates)
+
+(def big (into [] (range 100)))
+
+(defn run []
+  [(vector? [])
+   (vector? [1 2 3])
+   (vector? big)
+   (vector? (subvec big 1 50))
+   (vector? (with-meta [1] {:t 1}))
+   (vector? (conj big 100))
+   (vector? (transient [1 2]))
+   (vector? (list 1 2))
+   (vector? (seq [1 2]))
+   (vector? {:a 1})
+   (vector? #{1})
+   (vector? "abc")
+   (vector? nil)
+   (vector? 1)
+   (type big)
+   (type [1 2])
+   (type (vec (range 100)))
+   (reduce-kv (fn [acc k v] (+ acc (* k v))) 0 [1 2 3])
+   (reduce-kv (fn [acc k v] (+ acc (* k v))) 0 big)
+   (reduce-kv (fn [acc k v] (conj acc [k v])) [] {:a 1 :b 2})
+   (reduce-kv (fn [acc k v] (conj acc [k v])) [] (transient {:a 1}))
+   (= (type (transient {:a 1})) let-go.lang.TransientMap)
+   (= (type big) let-go.lang.PersistentVector)
+   (= (type []) let-go.lang.ArrayVector)
+   (= (type (transient {:a 1})) let-go.lang.PersistentVector)])
