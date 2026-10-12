@@ -42,9 +42,17 @@ func fastArity(fn any) (arity int, variadic bool, ok bool) {
 
 // WrongArgCount is the error a fixed-arity native fn returns when called with
 // the wrong number of arguments: the ExecutionError the bytecode VM raises for
-// a bytecode fn of that arity, naming fn as the VM prints it.
+// a bytecode fn of that arity, naming fn as the VM prints it. Lowered Go
+// closures (NativeBody) and typed override wrappers report their own arity
+// check through it.
 func WrongArgCount(fn Value, got, want int) error {
 	return NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", fn, want, got))
+}
+
+// TooFewArgs is the error a variadic native fn returns when called with fewer
+// arguments than its fixed parameters, as the bytecode VM reports it.
+func TooFewArgs(fn Value, got, min int) error {
+	return NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", fn, min, got))
 }
 
 // orNIL maps the nil interface a Go func may return in place of NIL to NIL,
@@ -61,11 +69,34 @@ func orNILErr(v Value, err error) (Value, error) {
 	return orNIL(v), err
 }
 
-// callFast invokes l's func, which has a fastArity shape. A type switch on the
-// stored func replaces a per-box adapter closure, so boxing costs one
-// allocation. The trailing error case is a guard: Box admits only these shapes.
+// NativeBody is a callable that lives inside a larger Go struct, so that one
+// struct allocation holds the NativeFn, the body and everything the body
+// closes over. Lowered Go emits one such struct per fn literal: the captured
+// values are its fields and CallNative is the lowered body.
+type NativeBody interface {
+	CallNative(args []Value) (Value, error)
+}
+
+// InitNativeFn sets up n in place, without allocating, to dispatch to body
+// with the declared arity. n is normally the NativeFn embedded in the struct
+// that implements body, so the caller returns &n as the let-go value and the
+// whole closure is one allocation. arity counts the fixed parameters; for a
+// variadic body it is the minimum call width, which is what multi-arity
+// dispatch (MakeMultiArity) reads off a variadic native.
+func InitNativeFn(n *NativeFn, arity int, variadic bool, body NativeBody) {
+	n.arity = arity
+	n.isVariadric = variadic
+	n.fn = body
+}
+
+// callFast invokes l's func, which has a fastArity shape or is the NativeBody
+// of a lowered closure. A type switch on the stored func replaces a per-box
+// adapter closure, so boxing costs one allocation. The trailing error case is
+// a guard: Box admits only these shapes.
 func (l *NativeFn) callFast(a []Value) (Value, error) {
 	switch f := l.fn.(type) {
+	case NativeBody:
+		return f.CallNative(a)
 	case func() (Value, error):
 		if len(a) != 0 {
 			return NIL, WrongArgCount(l, len(a), 0)
@@ -330,8 +361,8 @@ func (l *NativeFn) Invoke(args []Value) (ret Value, err error) {
 }
 
 // call runs the native without panic recovery: through its proxy when it has
-// one (reflected and context-aware natives), else straight to its fast-shape
-// Go func.
+// one (reflected and context-aware natives), else straight to its Go func — a
+// fast shape, or the NativeBody a lowered closure embeds this NativeFn in.
 func (l *NativeFn) call(args []Value) (Value, error) {
 	if l.proxy != nil {
 		return l.proxy(args)
