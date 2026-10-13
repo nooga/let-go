@@ -2403,7 +2403,9 @@
         fieldset      (set bare-fields)
         mutset        (set (map -dt-field-name (filter -dt-mutable? fields)))
         quoted-fields (map (fn [f] (list 'quote f)) bare-fields)
-        type-def      (cons 'make-deftype (cons (str tname) quoted-fields))
+        ;; The defining namespace names the type for a compiled constant to
+        ;; resolve back to it (vm.DefineDType).
+        type-def      (cons 'make-deftype (cons (str (ns-name *ns*)) (cons (str tname) quoted-fields)))
         pos-ctor-name (symbol (str "->" tname))
         pos-ctor-body (cons 'make-deftype-instance (cons tname bare-fields))
         pos-ctor      (list 'def pos-ctor-name
@@ -2421,7 +2423,7 @@
         bare-fields (map -dt-field-name fields)
         fieldset (set bare-fields)
         field-keywords (map keyword bare-fields)
-        type-def (cons 'make-record-type (cons (str name) field-keywords))
+        type-def (cons 'make-record-type (cons (str (ns-name *ns*)) (cons (str name) field-keywords)))
         ;; Positional constructor: (->Point x y) → (make-record Point {:x x :y y})
         pos-ctor-name (symbol (str "->" name))
         pos-ctor-body (list 'make-record name

@@ -65,6 +65,10 @@ func forEachFunc(v vm.Value, fn func(*vm.Func)) {
 			}
 		}
 		forEachFunc(val.Extra(), fn)
+	case *vm.DTypeInstance:
+		for _, fv := range val.Fields() {
+			forEachFunc(fv, fn)
+		}
 	case *vm.Atom:
 		forEachFunc(val.Deref(), fn)
 	}

@@ -61,6 +61,7 @@ type deferredBundle struct {
 	consts  *vm.Consts
 	chunks  []*vm.CodeChunk
 	resolve VarResolver
+	types   *vm.TypeScope
 	ns      map[string]*deferredNS
 	byChunk []*deferredNS // sorted by ChunkLo; the runs are disjoint
 	runs    []deferredRun // every deferred const run, ascending
@@ -127,6 +128,7 @@ func (d *decoder) selectDeferred(ranges []NSRange, chunkCount, constCount int) e
 		strings: d.strings,
 		flags:   d.flags,
 		resolve: d.resolve,
+		types:   d.types,
 		ns:      make(map[string]*deferredNS, len(picked)),
 		byChunk: picked,
 	}
@@ -186,6 +188,7 @@ func (b *deferredBundle) materialize(name string) (*vm.CodeChunk, error) {
 		flags:   b.flags,
 		chunks:  b.chunks,
 		resolve: b.resolve,
+		types:   b.types,
 		stats:   decoderStats(),
 	}
 	defer recordDecodeStats(d.stats)

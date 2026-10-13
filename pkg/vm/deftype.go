@@ -16,6 +16,7 @@ import (
 // Unlike RecordType, instances of a DType do NOT implement map behavior
 // (no Associative, Lookup, Seqable, or Collection interfaces).
 type DType struct {
+	ns       string // defining namespace; empty for types no deftype made
 	typeName string
 	fields   []Symbol
 	fieldIdx map[Symbol]int
@@ -42,6 +43,10 @@ func (t *DType) Type() ValueType  { return TypeType }
 func (t *DType) Unbox() any       { return t }
 func (t *DType) Name() string     { return t.typeName }
 func (t *DType) Fields() []Symbol { return t.fields }
+
+// NS returns the namespace whose deftype made the type, or "" for a type made
+// outside deftype.
+func (t *DType) NS() string { return t.ns }
 
 func (t *DType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)

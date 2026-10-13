@@ -1184,7 +1184,7 @@ func TestUnsupportedCapabilityMask(t *testing.T) {
 	w.WriteBytes(Magic[:])
 	w.WriteUint16(2)
 	w.WriteUint16(FlagCapabilities)
-	w.WriteUint32(0x00000002) // bit 1 set — no such capability defined
+	w.WriteUint32(0x80000000) // bit 31 set — no such capability defined
 	w.Flush()
 
 	_, err := Decode(&buf)
@@ -1194,7 +1194,7 @@ func TestUnsupportedCapabilityMask(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{
 		"unsupported capabilities",
-		"unknown bit 1",
+		"unknown bit 31",
 		"CapOpcodeSet",
 		"recompile the bundle with a matching lg",
 	} {

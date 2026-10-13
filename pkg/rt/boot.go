@@ -57,7 +57,7 @@ func (bytecodeNSLoader) Load(name string) *vm.Namespace {
 		return nil // not in the bundle; source loading is disabled
 	}
 	if err == nil {
-		err = runChunk(chunk)
+		err = runUnitChunk(precompiledCore, chunk)
 	}
 	if err != nil {
 		// NSLoader has no error channel: report, restore the needs-load marker,

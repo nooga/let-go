@@ -80,24 +80,28 @@ func main() {
 		return
 	}
 
+	// The unit's TypeScope is active while its chunks run, so its defrecord
+	// and deftype forms adopt the types its constants decoded to.
+	run := func(chunk *vm.CodeChunk) error {
+		return vm.WithTypeScope(unit.Types, func() error {
+			f := vm.NewFrame(chunk, nil)
+			_, err := f.RunProtected()
+			vm.ReleaseFrame(f)
+			return err
+		})
+	}
 	for _, name := range unit.NSOrder {
 		chunk := unit.NSChunks[name]
 		if chunk == nil || chunk == unit.MainChunk {
 			continue
 		}
-		f := vm.NewFrame(chunk, nil)
-		_, err := f.RunProtected()
-		vm.ReleaseFrame(f)
-		if err != nil {
+		if err := run(chunk); err != nil {
 			fmt.Fprintf(os.Stderr, "error loading %%s: %%v\n", name, err)
 			return
 		}
 	}
 
-	f := vm.NewFrame(unit.MainChunk, nil)
-	_, err = f.RunProtected()
-	vm.ReleaseFrame(f)
-	if err != nil {
+	if err := run(unit.MainChunk); err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
 	}
 __LG_HOST_EVAL_BODY__
