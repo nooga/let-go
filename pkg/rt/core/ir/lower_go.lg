@@ -703,7 +703,7 @@
 
 (defn- callee-only-use? [f nid uid]
   "True when nid is used by uid ONLY as the callee (ref 0) of a call. Such a
-   load is re-resolved at call time (CachedVarFn / re-emit), not rendered into a
+   load is re-resolved at call time (CachedVarFnEC / re-emit), not rendered into a
    value local, so materialising it across an effect would leave a dead local
    and doesn't reflect the value-load semantics this snapshot guards."
   (and (contains? #{:call :tail-call} (ir/op uid f))
@@ -1176,35 +1176,35 @@
                                                 (every? true? (map identical? fns (:fns e)))))
                                @*hoisted-consts*))]
     (gogen/ident (first seen))
-  (let [argv (gogen/ident "argv")
-        arms (if (= 1 (count fns))
-               [(shared-fn-literal-arm (first fns) argv path)]
-               (vec (map-indexed (fn [i f] (shared-fn-literal-arm f argv (str path "a" i))) fns)))]
-    (when (every? identity arms)
-      (let [fixed-arms (filterv (complement :variadic?) arms)
-            rest-arm   (first (filter :variadic? arms))
-            body       (if (and (nil? rest-arm) (= 1 (count fixed-arms)))
-                         [(:ret (first fixed-arms))]
-                         (let [cases (mapv (fn [a] (gogen/case-clause [(gogen/int-lit (:fixed a))] [(:ret a)]))
-                                           fixed-arms)
-                               dflt  (gogen/case-clause nil [(if rest-arm
-                                                               (:ret rest-arm)
-                                                               (gogen/return-stmt [(vm-sel "NIL") (gogen/ident "nil")]))])]
-                           [(gogen/switch-stmt nil (gogen/call (gogen/ident "len") [argv]) (conj cases dflt))]))
-            dispatch   (gogen/func-lit
-                         [(gogen/param "ec" (gogen/type "*vm.ExecContext"))
-                          (gogen/param "argv" (gogen/type "[]vm.Value"))]
-                         [(gogen/result (gogen/type "vm.Value")) (gogen/result (gogen/type "error"))]
-                         body)
-            expr       (vm-call "NewCheckedCtxNativeFn"
-                                [(gogen/string-lit "")
-                                 (gogen/composite-lit (gogen/type "[]int")
-                                                      (mapv (fn [a] (gogen/int-lit (:fixed a))) fixed-arms))
-                                 (gogen/int-lit (if rest-arm (:fixed rest-arm) -1))
-                                 dispatch])
-            nm         (str "__fnlit_" *closure-owner* "__" path)]
-        (swap! *hoisted-consts* assoc nm {:src nil :fns fns :expr expr :late? true})
-        (gogen/ident nm))))))
+    (let [argv (gogen/ident "argv")
+          arms (if (= 1 (count fns))
+                 [(shared-fn-literal-arm (first fns) argv path)]
+                 (vec (map-indexed (fn [i f] (shared-fn-literal-arm f argv (str path "a" i))) fns)))]
+      (when (every? identity arms)
+        (let [fixed-arms (filterv (complement :variadic?) arms)
+              rest-arm   (first (filter :variadic? arms))
+              body       (if (and (nil? rest-arm) (= 1 (count fixed-arms)))
+                           [(:ret (first fixed-arms))]
+                           (let [cases (mapv (fn [a] (gogen/case-clause [(gogen/int-lit (:fixed a))] [(:ret a)]))
+                                             fixed-arms)
+                                 dflt  (gogen/case-clause nil [(if rest-arm
+                                                                 (:ret rest-arm)
+                                                                 (gogen/return-stmt [(vm-sel "NIL") (gogen/ident "nil")]))])]
+                             [(gogen/switch-stmt nil (gogen/call (gogen/ident "len") [argv]) (conj cases dflt))]))
+              dispatch   (gogen/func-lit
+                           [(gogen/param "ec" (gogen/type "*vm.ExecContext"))
+                            (gogen/param "argv" (gogen/type "[]vm.Value"))]
+                           [(gogen/result (gogen/type "vm.Value")) (gogen/result (gogen/type "error"))]
+                           body)
+              expr       (vm-call "NewCheckedCtxNativeFn"
+                                  [(gogen/string-lit "")
+                                   (gogen/composite-lit (gogen/type "[]int")
+                                                        (mapv (fn [a] (gogen/int-lit (:fixed a))) fixed-arms))
+                                   (gogen/int-lit (if rest-arm (:fixed rest-arm) -1))
+                                   dispatch])
+              nm         (str "__fnlit_" *closure-owner* "__" path)]
+          (swap! *hoisted-consts* assoc nm {:src nil :fns fns :expr expr :late? true})
+          (gogen/ident nm))))))
 
 (defn- template-arm-fns [template]
   ;; The arms' Functions of a fn or multi-fn template, or nil for anything else.
@@ -1998,7 +1998,7 @@
 (defn- record-cross-ns-var!
   "Record a trampoline-reaching load-var callee for memoized resolution and
    return its cached-var base name (the package-level *vm.Var the call site
-   passes to rt.CachedVarFn). No-op (returns nil) when *cross-ns-vars-used* is
+   passes to rt.CachedVarFnEC). No-op (returns nil) when *cross-ns-vars-used* is
    unbound."
   [ns-str name-str]
   (when *cross-ns-vars-used*
@@ -2012,7 +2012,7 @@
 (defn cross-ns-var-decls
   "Build the package-level cached `var __v_* *vm.Var` decls for the recorded
    callees in vars-map ({[ns name] base}). One decl per callee; resolution +
-   memoization happen at the call site via the shared rt.CachedVarFn helper, so
+   memoization happen at the call site via the shared rt.CachedVarFnEC helper, so
    no per-callee accessor function is emitted. Sorted by base name for
    deterministic output. Throws on a base-name collision (distinct callees
    munging to one Go name)."
@@ -2061,8 +2061,10 @@
   ;; so callers passing a proven-int arg emit `f(ec, intval)` with no boxing.
   ;; coerce-arg-to-type keeps it sound — a typed param is only direct-called
   ;; when the arg is proven that type, else the whole call falls back.
+  ;; A ^:dynamic or ^:redef fn is never recorded: callers reach it through
+  ;; its var, as Clojure's direct linking leaves both.
   (when-let [fn-name (:fn-name result)]
-    (when (:direct-callable? result)
+    (when (and (:direct-callable? result) (not (:var-called? result)))
       {(registry-key (internal-ns-sym (str ns-sym)) fn-name (:arity result))
        {:go-name (:go-name result) :arity (:arity result)
         :needs-error? (:needs-error? result)
@@ -2743,21 +2745,21 @@
                         (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs)))]
      (when (every? identity arg-exprs)
        (if base
-         ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
+         ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFnEC resolves the
          ;; callee var ONCE (memoized through the package-level __v_* pointer)
-         ;; and re-reads its fn root each call, so per call:
-         ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
-         ;; Caching the *Var (not the fn) keeps the var as the override seam
-         ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
-         ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
+         ;; and dereferences it through ec on each call, so a ^:dynamic
+         ;; binding in the running context (a future's included) picks the
+         ;; callee. Caching the *Var (not the fn) keeps the var as the
+         ;; override seam (^:dynamic / ^:redef / alter-var-root).
          (let [cached-fn (gogen/call
-                           (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
-                           [(gogen/unary "&" (gogen/ident base))
+                           (gogen/field-sel (gogen/ident "rt") "CachedVarFnEC")
+                           [(gogen/ident "ec")
+                            (gogen/unary "&" (gogen/ident base))
                             (gogen/string-lit (first nn))
                             (gogen/string-lit (second nn))])
                ;; Dispatch through ec so the callee (and any dynamic vars it
                ;; reads, or goroutines it spawns) sees the running context:
-               ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
+               ;;   ec.Invoke(rt.CachedVarFnEC(ec, &__v, "ns", "name"), args)
                invoke    (invoke-by-arity (gogen/ident "ec") "Invoke" [cached-fn] arg-exprs)]
            (boxed-call-stmts f nid target invoke))
          ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
@@ -4238,6 +4240,7 @@
        ;; which feeds the NativeFn override wrapper. A typed sibling (e.g.
        ;; func f(ec, x int) int) is direct-callable but NOT override-eligible.
        :direct-callable? (override-coercible? f)
+       :var-called? (boolean (:var-called? @f))
        :param-specs (function-param-specs f)
        :result-spec (function-return-spec f)
        ;; The closure structs of this fn's literals, emitted beside :decl.

@@ -261,13 +261,13 @@
       (is (not (str/includes? body "Varargs(arg"))
           (str "vcaller should NOT emit a bare direct varargs(...) Go call; got:\n"
                body))
-      ;; Instead it lifts to cached-var IFn dispatch via rt.CachedVarFn (the
+      ;; Instead it lifts to cached-var IFn dispatch via rt.CachedVarFnEC (the
       ;; override seam: the *Var is cached, its fn root re-read each call).
-      (is (str/includes? body "rt.CachedVarFn(")
-          (str "vcaller should dispatch the variadic callee via rt.CachedVarFn; got:\n"
+      (is (str/includes? body "rt.CachedVarFnEC(")
+          (str "vcaller should dispatch the variadic callee via rt.CachedVarFnEC; got:\n"
                body))
       ;; The per-call rt.LookupVar is eliminated — resolution moves into the
-      ;; shared rt.CachedVarFn helper, memoized through the package-level var.
+      ;; shared rt.CachedVarFnEC helper, memoized through the package-level var.
       (is (not (str/includes? body "rt.LookupVar"))
           (str "vcaller body should not do a per-call rt.LookupVar; got:\n" body)))))
 
@@ -331,7 +331,7 @@
       (is caller "caller body extractable")
       (is (str/includes? caller ".(vm.Int)") "comma-ok assert on the opaque arg")
       (is (str/includes? caller "Gfib(ec, int64(") "guarded static call with int64 conversion")
-      (is (str/includes? caller "rt.CachedVarFn(") "trampoline fallback in else branch")
+      (is (str/includes? caller "rt.CachedVarFnEC(") "trampoline fallback in else branch")
       (is callee "callee body extractable")
       (is (not (str/includes? callee ".(vm.Int)"))
           "proven-int self-recursive args stay flat (no guard)"))))

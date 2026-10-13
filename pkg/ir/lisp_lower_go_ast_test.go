@@ -160,11 +160,11 @@ func initFuncs(f *ast.File) []*ast.FuncDecl {
 
 // ifnDispatch describes a matched cached-var IFn dispatch call chain
 //
-//	rt.CachedVarFn(&<varName>, "ns", "name").Invoke(<args>)
+//	ec.Invoke(rt.CachedVarFnEC(ec, &<varName>, "ns", "name"), <args>)
 type ifnDispatch struct {
 	varName string // cached var base, e.g. "__v_clojure_core_count"
-	nsArg   string // ns string literal passed to CachedVarFn
-	nameArg string // name string literal passed to CachedVarFn
+	nsArg   string // ns string literal passed to CachedVarFnEC
+	nameArg string // name string literal passed to CachedVarFnEC
 	nargs   int    // number of invoke args
 }
 
@@ -178,11 +178,12 @@ func basicStr(e ast.Expr) string {
 // findIFnDispatch searches node for the cached-var IFn dispatch shape. Lowered
 // code threads the caller's ExecContext, so the call is
 //
-//	ec.Invoke(rt.CachedVarFn(&__v_*, "ns", "name"), ARGS...)
-//	ec.InvokeN(rt.CachedVarFn(&__v_*, "ns", "name"), a0, …)   (N = 1..4 args)
+//	ec.Invoke(rt.CachedVarFnEC(ec, &__v_*, "ns", "name"), ARGS...)
+//	ec.InvokeN(rt.CachedVarFnEC(ec, &__v_*, "ns", "name"), a0, …)   (N = 1..4 args)
 //
-// (the older method form rt.CachedVarFn(...).Invoke(ARGS...) is still
-// recognised). Returns the first match.
+// (the method form rt.CachedVarFnEC(...).Invoke(ARGS...) is also
+// recognised). The lookup must take the caller's ec, so a ^:dynamic binding
+// in that context selects the callee. Returns the first match.
 func findIFnDispatch(node ast.Node) (ifnDispatch, bool) {
 	var res ifnDispatch
 	found := false
@@ -201,23 +202,26 @@ func findIFnDispatch(node ast.Node) (ifnDispatch, bool) {
 		if !ok || !isInvokeName(invSel.Sel.Name) {
 			return true
 		}
-		// Locate the rt.CachedVarFn(&__v_*, ns, name) call. Two shapes:
-		//   ec.Invoke(rt.CachedVarFn(...), ARGS...)  -> first call arg
-		//   rt.CachedVarFn(...).Invoke(ARGS...)      -> the receiver
+		// Locate the rt.CachedVarFnEC(ec, &__v_*, ns, name) call. Two shapes:
+		//   ec.Invoke(rt.CachedVarFnEC(...), ARGS...)  -> first call arg
+		//   rt.CachedVarFnEC(...).Invoke(ARGS...)      -> the receiver
 		var cached *ast.CallExpr
 		invokeArgs := invoke.Args
-		if c, ok := invSel.X.(*ast.CallExpr); ok && isSelector(c.Fun, "rt", "CachedVarFn") {
+		if c, ok := invSel.X.(*ast.CallExpr); ok && isSelector(c.Fun, "rt", "CachedVarFnEC") {
 			cached = c
 		} else if len(invoke.Args) >= 1 {
-			if c, ok := invoke.Args[0].(*ast.CallExpr); ok && isSelector(c.Fun, "rt", "CachedVarFn") {
+			if c, ok := invoke.Args[0].(*ast.CallExpr); ok && isSelector(c.Fun, "rt", "CachedVarFnEC") {
 				cached = c
 				invokeArgs = invoke.Args[1:]
 			}
 		}
-		if cached == nil || len(cached.Args) != 3 {
+		if cached == nil || len(cached.Args) != 4 {
 			return true
 		}
-		amp, ok := cached.Args[0].(*ast.UnaryExpr)
+		if ecArg, ok := cached.Args[0].(*ast.Ident); !ok || ecArg.Name != "ec" {
+			return true
+		}
+		amp, ok := cached.Args[1].(*ast.UnaryExpr)
 		if !ok || amp.Op != token.AND {
 			return true
 		}
@@ -227,8 +231,8 @@ func findIFnDispatch(node ast.Node) (ifnDispatch, bool) {
 		}
 		res = ifnDispatch{
 			varName: varIdent.Name,
-			nsArg:   basicStr(cached.Args[1]),
-			nameArg: basicStr(cached.Args[2]),
+			nsArg:   basicStr(cached.Args[2]),
+			nameArg: basicStr(cached.Args[3]),
 			nargs:   len(invokeArgs),
 		}
 		found = true

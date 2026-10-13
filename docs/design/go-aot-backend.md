@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-05
+last-verified: 2026-10-06
 authoritative-for:
   - go-aot-backend-design
   - two-tier-aot-approach
@@ -53,7 +53,7 @@ This document proposes a second backend that compiles let-go code to Go, preserv
   - Self-tail recursion: transform to `for { ... update args ... continue }`.
   - Mutual tail recursion: optional trampoline helper (lower priority, can remain dynamic via VM path initially).
 - Calls:
-  - Direct calls to known compiled functions via Go calls when target is statically known and annotations allow devirtualization.
+  - Direct calls to known compiled functions via Go calls, as Clojure's direct linking does: a lowered fn calling another lowered fn calls its Go function, except a `^:redef` or `^:dynamic` fn, which stays a call through its `Var`.
   - Otherwise, call through `Var` indirection: `v := ns.Resolve("sym"); fn := v.Deref().(vm.Fn); return fn.Invoke(args)`.
 - Numerics: continue to use `vm.Int` fast paths per `value-representation-and-numeric-performance.md`.
 
@@ -93,14 +93,14 @@ The intended destination for this layering, including a thin `lg.commands.compil
 
 - Closures: compile to Go structs capturing closed-overs and implementing `vm.Fn`.
 - Variadics/rest args: specialized wrappers to minimize allocations; align with VM small-arity opcodes.
-- Direct-call devirtualization when target var is known final (annotated or compiler-proven).
+- Direct linking between lowered fns, as in Clojure: a fn is treated as final unless it is `^:redef` or `^:dynamic`. Compiler-proven finality and deoptimization through the evaluator are planned in #1031.
 - Source maps and improved stack traces.
 
 ### Acceptance criteria
 
 - Mixed execution works: compiled functions can call interpreted functions and vice versa using the same `Var`s.
 - Performance: microbenchmarks show clear wins over VM interpreter for hot functions (call overhead, tight loops, tail recursion).
-- Semantics preserved: dynamic var redefinition observed by compiled code when not inlined.
+- Semantics preserved: a var redefinition is observed by interpreted code and by every call through the `Var`; a lowered caller of a directly linked fn observes it once recompiled, as with Clojure's direct linking.
 
 ### Risks and mitigations
 

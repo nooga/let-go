@@ -1878,7 +1878,7 @@ func TestLowerNsToGoLiftsIntraNsCall(t *testing.T) {
 // call site. (count, formerly used here, is now a native-direct call into
 // corefns.Count, so it no longer exercises the cached-var fallback.)
 // Cross-ns cached-var dispatch: a call to a non-native fn in another namespace
-// lifts to shared rt.CachedVarFn IFn dispatch. Uses a user-defined fn (uxns/uxfn)
+// lifts to shared rt.CachedVarFnEC IFn dispatch. Uses a user-defined fn (uxns/uxfn)
 // rather than a core primitive — core primitives like str/deref are now //lg:
 // native and direct-link, so they no longer exercise this path; a user fn always
 // does.
@@ -1906,7 +1906,7 @@ func TestLowerNsToGoLiftsCrossNsCall(t *testing.T) {
 
 // IFn-dispatch lowering: a cross-ns callee (clojure.core/count) makes the
 // lowered package declare a package-level cached `var __v_* *vm.Var`. Resolution
-// + memoization happen at the call site via the shared rt.CachedVarFn helper (no
+// + memoization happen at the call site via the shared rt.CachedVarFnEC helper (no
 // per-callee accessor func is emitted), and NOT eagerly in init() — blank-
 // imported lowered packages run init() before the bundle replay loads
 // namespaces, where the lookup would return nil.
@@ -1936,14 +1936,14 @@ func TestLowerGoCrossNsEmitsCachedVar(t *testing.T) {
 		t.Fatalf("cached var %s has type %q, want *vm.Var", name, typ)
 	}
 
-	// 2. the call site resolves it via the shared rt.CachedVarFn helper, and NO
-	//    per-callee accessor func is emitted (that bloat is what rt.CachedVarFn
+	// 2. the call site resolves it via the shared rt.CachedVarFnEC helper, and NO
+	//    per-callee accessor func is emitted (that bloat is what rt.CachedVarFnEC
 	//    replaces).
 	if _, ok := findIFnDispatch(f); !ok {
-		t.Fatalf("expected rt.CachedVarFn IFn dispatch for str:\n%s", src)
+		t.Fatalf("expected rt.CachedVarFnEC IFn dispatch for str:\n%s", src)
 	}
 	if _, ok := findFunc(f, func(n string) bool { return strings.HasPrefix(n, "__getv_") }); ok {
-		t.Fatalf("no per-callee accessor func should be emitted (use rt.CachedVarFn):\n%s", src)
+		t.Fatalf("no per-callee accessor func should be emitted (use rt.CachedVarFnEC):\n%s", src)
 	}
 
 	// 3. resolution is lazy: no init() may eagerly call rt.LookupVar (that would
@@ -1958,7 +1958,7 @@ func TestLowerGoCrossNsEmitsCachedVar(t *testing.T) {
 // Task 2 (IFn-dispatch lowering): a cross-ns call lowers its CALL SITE to the
 // cached-var IFn dispatch
 //
-//	rt.CachedVarFn(&__v_<ns>_<name>, "ns", "name").Invoke([]vm.Value{...})
+//	ec.Invoke(rt.CachedVarFnEC(ec, &__v_<ns>_<name>, "ns", "name"), []vm.Value{...})
 //
 // keeping the per-call .Deref() as the override seam, and NO per-call
 // rt.LookupVar at the call site.
@@ -1988,7 +1988,7 @@ func TestLowerGoCrossNsCallLiftsToIFn(t *testing.T) {
 		t.Fatalf("dispatch var %q does not target uxfn", d.varName)
 	}
 	if d.nsArg != "uxns" || d.nameArg != "uxfn" {
-		t.Fatalf("CachedVarFn resolves (%q,%q), want (uxns,uxfn)", d.nsArg, d.nameArg)
+		t.Fatalf("CachedVarFnEC resolves (%q,%q), want (uxns,uxfn)", d.nsArg, d.nameArg)
 	}
 	// The call site must NOT do a per-call rt.LookupVar for str anymore.
 	if callsLookupVarNamed(caller, "str") {
@@ -2166,7 +2166,7 @@ func TestLowerGoMultiArityEmitsDistinctPerArityHelperNames(t *testing.T) {
 	if !strings.Contains(rendered, "Foo_2(ec, arg0") {
 		t.Fatalf("expected sibling `(foo a b)` to lower to a direct `Foo_2(ec, arg0, …)` call, not a trampoline\n--- go ---\n%s", rendered)
 	}
-	if strings.Contains(rendered, `CachedVarFn(&__v_lgtest_foo`) {
+	if strings.Contains(rendered, `CachedVarFnEC(ec, &__v_lgtest_foo`) {
 		t.Fatalf("sibling call to multi-arity `foo` still trampolines via CachedVarFn\n--- go ---\n%s", rendered)
 	}
 	// Step 2b: one multi-arity override adapter registered under the bare name,
@@ -2291,5 +2291,34 @@ func TestLowerGoUncheckedBoxedOperandRoutesToUncheckedHelper(t *testing.T) {
 				t.Fatalf("expected %s to avoid the promoting helper %s, got:\n%s", tc.name, tc.reject, rendered)
 			}
 		})
+	}
+}
+
+// Lowered code links a sibling directly, as Clojure's direct linking does: a
+// redefinition reaches its lowered callers only once they are recompiled. A
+// ^:redef or ^:dynamic fn is never linked directly; callers reach it through
+// its var, so with-redefs and binding apply.
+func TestLowerGoLinksSiblingsDirectlyExceptRedefAndDynamic(t *testing.T) {
+	ensureLoader()
+
+	v := runLispExpr(t, `(do (create-ns 'lgdl)
+	                        (doseq [s '[plain redefd dyn use]] (intern (the-ns 'lgdl) s))
+	                        (ir.passes.pipeline/lower-ns-to-go "lgdl" 'lgdl
+	                          '[(defn plain [x] x)
+	                            (defn ^:redef redefd [x] x)
+	                            (defn ^:dynamic dyn [x] x)
+	                            (defn use [a] [(plain a) (redefd a) (dyn a)])]))`)
+	src, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected lower-ns-to-go to return rendered Go source string, got %T (%v)", v, v)
+	}
+	rendered := string(src)
+	if !strings.Contains(rendered, "Plain(ec, arg0") {
+		t.Fatalf("expected `(plain a)` to lower to a direct `Plain(ec, arg0)` call\n--- go ---\n%s", rendered)
+	}
+	for _, name := range []string{"redefd", "dyn"} {
+		if !strings.Contains(rendered, "CachedVarFnEC(ec, &__v_lgdl_"+name) {
+			t.Fatalf("expected `(%s a)` to go through its var\n--- go ---\n%s", name, rendered)
+		}
 	}
 }
