@@ -232,7 +232,7 @@ func TestLowerGoArrayRecurFallbackCallerUsesTrampoline(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected rendered Go, got %T", rendered)
 	}
-	mustContain(t, string(source), `rt.CachedVarFn(&__v_arrayrecur_changing, "arrayrecur", "changing")`)
+	mustContain(t, string(source), `rt.CachedVarFnEC(ec, &__v_arrayrecur_changing, "arrayrecur", "changing")`)
 	mustNotContain(t, string(source), "func Changing(", "Changing(ec")
 	got := runLispExpr(t, `(do
    (defn review-array-recur [^doubles a n]
