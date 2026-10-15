@@ -28,4 +28,4 @@ import _ "embed"
 //go:embed gogen/gogen.lg
 var gogenSrc string
 
-func init() { registerEmbeddedSource("gogen", gogenSrc) }
+func init() { RegisterEmbeddedSource("gogen", gogenSrc) }
