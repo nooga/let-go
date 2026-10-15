@@ -179,10 +179,12 @@
               (contains? array-ctor-kind name)
               [:array (get array-ctor-kind name)]
 
+              ;; A :bottom array operand keeps the call :bottom, as for the
+              ;; transient ops above, so the result waits for the operand.
               (= name "aclone")
               (when (= 1 (count args))
-                (let [t (normalize-type (state-type state (first args)))]
-                  (when (lat/array-type? t) t)))
+                (let [t (arg0-type)]
+                  (when (or (= t :bottom) (lat/array-type? t)) t)))
 
               ;; CoreAlengthf errors on a non-array, so when it returns at all
               ;; the result is an Int.
@@ -193,8 +195,9 @@
               ;; whose kinds are not tracked.
               (= name "aget")
               (when (= 2 (count args))
-                (let [t (normalize-type (state-type state (first args)))]
-                  (when (lat/array-type? t) (get array-elem-type (nth t 1)))))
+                (let [t (arg0-type)]
+                  (cond (= t :bottom) :bottom
+                        (lat/array-type? t) (get array-elem-type (nth t 1)))))
 
               ;; aset returns the value it was given, as passed (CoreAsetf
               ;; returns vs[2], before any element coercion), so its type is
