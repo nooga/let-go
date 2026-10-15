@@ -225,3 +225,97 @@ func TestTypeInfraStateSeedsWithoutTouchingInstTypesUntilFlush(t *testing.T) {
 		t.Fatalf("expected flush to materialize inferred arg seeds\n--- dump ---\n%s", after)
 	}
 }
+
+// The drain is LIFO, so the call to transient is visited before the [] it
+// reads. Its type has to wait for that operand; settling on :unknown first
+// leaves the call untyped until a second epoch, so the facts would depend on
+// visit order.
+func TestTypeInferTypesTransientCallOnFirstEpoch(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn mapv-shaped [f coll]
+	                       (persistent! (reduce (fn* [acc x] (conj! acc (f x))) (transient []) coll)))`)
+
+	passVarCounter++
+	fnVar := fmt.Sprintf("*typeinfra-fn-%d*", passVarCounter)
+	rt.NS(rt.NameCoreNS).Def(fnVar, fn)
+
+	for epoch := 1; epoch <= 2; epoch++ {
+		runLispExpr(t, fmt.Sprintf(`(let [s (ir.lattice/new-typeinfra-state %[1]s)
+		                                  s (ir.lattice/seed-state-from-inst-types! s %[1]s)
+		                                  s (ir.passes.infer-arg-types/infer-arg-types %[1]s s)
+		                                  s (ir.passes.typeinfer/typeinfer %[1]s s)]
+		                              (ir.lattice/flush-state-types! s %[1]s))`, fnVar))
+		got := runLispExpr(t, fmt.Sprintf(`(pr-str
+			(some (fn* [i]
+			        (let [callee (first (ir/refs i %[1]s))]
+			          (when (and (= :call (ir/op i %[1]s))
+			                     (= :load-var (ir/op callee %[1]s))
+			                     (= "transient" (name (symbol (ir/aux callee %[1]s)))))
+			            (ir/type-of i %[1]s))))
+			      (range (ir/inst-count %[1]s))))`, fnVar))
+		if string(got.(vm.String)) != ":transient-vector" {
+			t.Fatalf("after epoch %d, (transient []) is typed %s, want :transient-vector", epoch, got)
+		}
+	}
+}
+
+// Calls that read operand kinds must infer their result on the first epoch,
+// including persistent! and every supported transient mutation.
+func TestTypeInferTransientCallKinds(t *testing.T) {
+	ensureLoader()
+	cases := []struct{ expr, want string }{
+		{`(transient [])`, ":transient-vector"},
+		{`(transient {})`, ":transient-map"},
+		{`(transient #{})`, ":transient-set"},
+		{`(persistent! (transient []))`, ":vector"},
+		{`(persistent! (transient {}))`, ":map"},
+		{`(persistent! (transient #{}))`, ":set"},
+		{`(conj! (transient []) 1)`, ":transient-vector"},
+		{`(conj! (transient #{}) 1)`, ":transient-set"},
+		{`(assoc! (transient {}) :a 1)`, ":transient-map"},
+		{`(dissoc! (transient {}) :a)`, ":transient-map"},
+		{`(disj! (transient #{}) 1)`, ":transient-set"},
+		{`(transient x)`, ":unknown"},
+		{`(persistent! x)`, ":unknown"},
+		{`(conj! x 1)`, ":unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.expr, func(t *testing.T) {
+			f := buildLispIR(t, `(defn infer-kind [x] `+c.expr+`)`)
+			passVarCounter++
+			name := fmt.Sprintf("*typeinfer-call-kinds-%d*", passVarCounter)
+			rt.NS(rt.NameCoreNS).Def(name, f)
+			for epoch := 1; epoch <= 2; epoch++ {
+				runTypeInfer(t, f)
+				got := runLispExpr(t, fmt.Sprintf(`(let [f %s
+				                                       term (ir/block-term (last (ir/blocks f)) f)
+				                                       result (first (ir/refs term f))]
+				                                   (pr-str (ir/type-of result f)))`, name))
+				if string(got.(vm.String)) != c.want {
+					t.Fatalf("epoch %d got %s want %s", epoch, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// An unreachable parameter with no sources stays bottom in analysis. Flush
+// must preserve the call's original unknown type for downstream lowering.
+func TestTypeInferUnresolvedCallPreservesUnknownOnFlush(t *testing.T) {
+	ensureLoader()
+	got := runLispExpr(t, `(let [f (ir/new-fn "unreachable-transient" 0 false)
+                         b (ir/add-block f)
+                         p (ir/add-block-arg-front! f b 0)
+                         _ (ir/add-block-param! f b p)
+                         callee (ir/add-inst f b :load-var [] "clojure.core/transient")
+                         c (ir/add-inst f b :call [callee p] nil)
+                         s (ir.lattice/seed-state-from-inst-types! (ir.lattice/new-typeinfra-state f) f)
+                         s (ir.passes.typeinfer/typeinfer f s)
+                         before (ir.lattice/state-type s c)
+                         _ (ir.lattice/flush-state-types! s f)]
+                      (pr-str [before (ir/type-of c f)]))`)
+	if string(got.(vm.String)) != "[:bottom :unknown]" {
+		t.Fatalf("got %s", got)
+	}
+}

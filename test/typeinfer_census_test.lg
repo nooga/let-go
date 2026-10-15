@@ -45,8 +45,8 @@
     (is (some (fn [t] (= :transient-vector t)) (types (unit r "build"))))
     (is (every? (fn [t] (= :unknown t)) (types (unit r "pick"))))
     (is (= 18 (:insts (:totals r))))
-    (is (= 6 (:typed (:totals r))))
-    (is (= 12 (:unknown (:totals r))))))
+    (is (= 8 (:typed (:totals r))))
+    (is (= 10 (:unknown (:totals r))))))
 
 (deftest direction-follows-the-lattice
   (is (= :tighter (tcensus/direction :unknown :int)))
@@ -89,10 +89,10 @@
 (deftest losing-a-fact-source-shows-as-looser
   (let [d (tcensus/diff-censuses @base @without-call-core-type)]
     (is (= 2 (:identical d)))
-    (is (= {:tighter 0 :looser 2 :incomparable 0} (:facts d)))
+    (is (= {:tighter 0 :looser 4 :incomparable 0} (:facts d)))
     (is (= #{"fixture.typeinfer-census/root/1" "fixture.typeinfer-census/build/1"}
            (set (map :key (:facts-changed d)))))
-    (is (= {:tighter 2 :looser 0 :incomparable 0}
+    (is (= {:tighter 4 :looser 0 :incomparable 0}
            (:facts (tcensus/diff-censuses @without-call-core-type @base))))))
 
 (deftest the-same-facts-in-another-order-are-reordered-not-changed
@@ -125,7 +125,7 @@
     (try
       (let [out (with-out-str (tcensus/main ["--diff" path path]))]
         (is (str/includes? out "4 functions in both, 4 with identical facts"))
-        (is (str/includes? out "typed instructions: 6 of 18 (33.3%) -> 6 of 18 (33.3%)")))
+        (is (str/includes? out "typed instructions: 8 of 18 (44.4%) -> 8 of 18 (44.4%)")))
       (finally (os/delete-tree path)))))
 
 (deftest usage-errors-exit-2
