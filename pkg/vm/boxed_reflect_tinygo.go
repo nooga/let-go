@@ -7,10 +7,11 @@
  * unless hand-shimmed here.
  *
  * We hand-register the handful of methods let-go programs actually reach for
- * via the `.` interop operator. Today that's `time.Time.Sub` — let-go's `now`
- * returns a boxed time.Time and the idiomatic monotonic-ms clock is
- * `(quot (.Sub (now) epoch) 1000000)` (see xsofy ui.lg). Add cases here as new
- * boxed-method needs surface under TinyGo.
+ * via the `.` interop operator. Today that's two methods on time.Time, which
+ * let-go's `now` returns boxed: `Sub`, for the monotonic-ms clock idiom
+ * `(quot (.Sub (now) epoch) 1000000)` (see xsofy ui.lg), and `UnixMilli`, which
+ * core's `inst-ms` calls. Add cases here as new boxed-method needs surface
+ * under TinyGo.
  */
 
 package vm
@@ -40,8 +41,17 @@ func reflectMethods(t reflect.Type) map[Symbol]*NativeFn {
 		return ms
 	}
 	if t == timeType {
-		// (.Sub a b) — method value semantics: receiver is the first arg.
-		sub, err := NativeFnType.Wrap(func(vs []Value) (Value, error) {
+		return timeMethods()
+	}
+	return nil
+}
+
+// timeMethods shims time.Time's methods with method value semantics: the
+// receiver is the first arg. Results match what the reflect path returns.
+func timeMethods() map[Symbol]*NativeFn {
+	return map[Symbol]*NativeFn{
+		// (.Sub a b): a Duration, int64 nanoseconds.
+		Symbol("Sub"): wrapTimeMethod("Sub", func(vs []Value) (Value, error) {
 			a, ok := vs[0].Unbox().(time.Time)
 			if !ok {
 				return NIL, NewTypeError(vs[0], "is not a time for .Sub on", NativeFnType)
@@ -50,16 +60,27 @@ func reflectMethods(t reflect.Type) map[Symbol]*NativeFn {
 			if !ok {
 				return NIL, NewTypeError(vs[1], "is not a time for .Sub on", NativeFnType)
 			}
-			return Int(int64(a.Sub(b))), nil // Duration is int64 ns, matching the reflect path
-		})
-		// Fail loud: a discarded error would install a nil method that only
-		// blows up at call time, off in the tinygo build.
-		if err != nil {
-			panic(fmt.Errorf("reflectMethods: wrapping time.Sub: %w", err))
-		}
-		return map[Symbol]*NativeFn{Symbol("Sub"): sub.(*NativeFn)}
+			return Int(int64(a.Sub(b))), nil
+		}),
+		// (.UnixMilli t): epoch milliseconds, an int64.
+		Symbol("UnixMilli"): wrapTimeMethod("UnixMilli", func(vs []Value) (Value, error) {
+			a, ok := vs[0].Unbox().(time.Time)
+			if !ok {
+				return NIL, NewTypeError(vs[0], "is not a time for .UnixMilli on", NativeFnType)
+			}
+			return Int(a.UnixMilli()), nil
+		}),
 	}
-	return nil
+}
+
+// wrapTimeMethod fails loud: a discarded error would install a nil method that
+// only blows up at call time, off in the tinygo build.
+func wrapTimeMethod(name string, f func(vs []Value) (Value, error)) *NativeFn {
+	fn, err := NativeFnType.Wrap(f)
+	if err != nil {
+		panic(fmt.Errorf("reflectMethods: wrapping time.%s: %w", name, err))
+	}
+	return fn.(*NativeFn)
 }
 
 // methodLookupError explains a failed InvokeMethod. Under TinyGo we cannot
