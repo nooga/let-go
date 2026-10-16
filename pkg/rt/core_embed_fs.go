@@ -54,15 +54,22 @@ var (
 // a qualified name (mylib.core, not core).
 //
 // It panics if src is empty (the //go:embed directive that feeds it never
-// populated, a broken build), if name is a core namespace, or if name is
-// already registered: each would otherwise surface later as an obscure
-// resolution failure, or as one package's source silently replacing another's.
+// populated, a broken build), if name is a core namespace or a native one
+// already registered, or if name is already registered: each would otherwise
+// surface later as an obscure resolution failure, as a source that never loads
+// because the native namespace wins, or as one package's source silently
+// replacing another's. A native namespace registered after the source isn't
+// caught, so register the source under a name of its own, not one of the
+// package's rt.RegisterNS names.
 func RegisterEmbeddedSource(name, src string) {
 	if src == "" {
 		panic("rt: embedded source for namespace " + name + " is empty (//go:embed failed?)")
 	}
 	if _, err := coreFS.ReadFile("core/" + nsNameToPath(name)); err == nil {
 		panic("rt: embedded source for namespace " + name + " would shadow the core namespace of that name")
+	}
+	if LookupNS(name) != nil {
+		panic("rt: embedded source for namespace " + name + " would never load: a native namespace of that name is already registered")
 	}
 	auxEmbeddedMu.Lock()
 	defer auxEmbeddedMu.Unlock()

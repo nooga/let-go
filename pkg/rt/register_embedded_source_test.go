@@ -40,6 +40,7 @@ func TestRegisterEmbeddedSourceRefuses(t *testing.T) {
 	for _, tc := range []struct{ desc, name, src, want string }{
 		{"empty source", "test.register-embedded-source-empty", "", "is empty"},
 		{"core namespace", "walk", "(ns walk)", "would shadow the core namespace"},
+		{"native namespace", "os", "(ns os)", "native namespace of that name"},
 		{"second registration", dup, "(ns test.register-embedded-source-dup)", "registered twice"},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
@@ -52,8 +53,10 @@ func TestRegisterEmbeddedSourceRefuses(t *testing.T) {
 			RegisterEmbeddedSource(tc.name, tc.src)
 		})
 	}
-	if _, shadowed := auxEmbeddedSources["walk"]; shadowed {
-		t.Fatal("the refused registration was recorded over core walk")
+	for _, n := range []string{"walk", "os"} {
+		if _, shadowed := auxEmbeddedSources[n]; shadowed {
+			t.Fatalf("the refused registration was recorded over %s", n)
+		}
 	}
 }
 

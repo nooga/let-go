@@ -139,8 +139,11 @@ several files registers each one.
   shadows a file of the same name there. Give library namespaces a qualified
   name (`mytool.crc`, not `crc`).
 - **Refusals.** `RegisterEmbeddedSource` panics on an empty source (the
-  `//go:embed` didn't populate), on the name of a core namespace, and on a name
-  that is already registered.
+  `//go:embed` didn't populate), on the name of a core namespace or of a native
+  namespace already registered (such as `os`), and on a name that is already
+  registered. A native namespace registered later under the same name isn't
+  caught, and its natives win, so give the lg source a name of its own rather
+  than one of your `rt.RegisterNS` names.
 - **Loading.** A registered namespace loads as interpreted source the first time
   it is required, as it would from a file. It is not precompiled or lowered
   with let-go's core.
