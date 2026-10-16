@@ -1,0 +1,70 @@
+;; Tagged literals resolve as in Clojure: *data-readers*, then the built-in
+;; #inst and #uuid, then *default-data-reader-fn*; a tag nothing resolves
+;; throws "No reader function for tag". tagged-literal builds the value a
+;; default reader usually returns, and prints back as the literal it came from.
+(ns test.tagged-literal-test
+  (:require
+   [clojure.string :as s]
+   [test :refer :all]))
+
+(defn- message-of [thunk]
+  (try (thunk) nil (catch e (ex-message e))))
+
+(deftest unregistered-tag-throws
+  (is (s/includes? (message-of #(read-string "#app/unknown 5"))
+                   "No reader function for tag app/unknown"))
+  (is (s/includes? (message-of #(read-string "#foo 1"))
+                   "No reader function for tag foo"))
+  (is (s/includes? (message-of #(load-string "#app/unknown 5"))
+                   "No reader function for tag app/unknown")))
+
+(deftest default-data-reader-fn
+  (testing "receives the tag symbol and the unevaluated form"
+    (is (= [:default 'app/other '(+ 1 2)]
+           (binding [*default-data-reader-fn* (fn [tag v] [:default tag v])]
+             (read-string "#app/other (+ 1 2)")))))
+  (testing "*data-readers* wins over the default"
+    (is (= :dr
+           (binding [*data-readers* {'app/b (fn [_] :dr)}
+                     *default-data-reader-fn* (fn [_ _] :df)]
+             (read-string "#app/b 1")))))
+  (testing "the built-in tags don't reach the default"
+    (is (inst? (binding [*default-data-reader-fn* (fn [_ _] :df)]
+                 (read-string "#inst \"2020-01-01T00:00:00Z\""))))
+    (is (uuid? (binding [*default-data-reader-fn* (fn [_ _] :df)]
+                 (read-string "#uuid \"00000000-0000-0000-0000-000000000001\"")))))
+  (testing "load-string sees the binding"
+    (is (= [:app/x 1]
+           (binding [*default-data-reader-fn* (fn [tag v] [(keyword tag) v])]
+             (load-string "#app/x 1"))))))
+
+(deftest tagged-literal-values
+  (let [t (tagged-literal 'app/b [1 2])]
+    (is (tagged-literal? t))
+    (is (not (tagged-literal? [1 2])))
+    (is (= "#app/b [1 2]" (pr-str t)))
+    (is (= 'app/b (:tag t)))
+    (is (= [1 2] (:form t)))
+    (is (= 'app/b (get t :tag)))
+    (is (= t (tagged-literal 'app/b [1 2])))
+    (is (not= t (tagged-literal 'app/c [1 2])))
+    (is (= (hash t) (hash (tagged-literal 'app/b [1 2]))))
+    (is (not (map? t)))
+    (is (= "#app/s \"x\"" (pr-str (tagged-literal 'app/s "x"))))))
+
+(deftest tagged-literal-as-the-default-reader
+  (binding [*default-data-reader-fn* tagged-literal]
+    (let [t (read-string "#app/b {:x 1}")]
+      (is (tagged-literal? t))
+      (is (= {:x 1} (:form t)))
+      (is (= t (read-string (pr-str t)))))))
+
+(deftest default-data-readers-hold-inst-and-uuid
+  (is (= #{'inst 'uuid} (set (keys default-data-readers))))
+  (testing "rebinding *data-readers* leaves them in place, as in Clojure"
+    (binding [*data-readers* {}]
+      (is (inst? (read-string "#inst \"2020-01-01T00:00:00Z\"")))
+      (is (uuid? (read-string "#uuid \"00000000-0000-0000-0000-000000000001\"")))))
+  (testing "a *data-readers* entry overrides one"
+    (binding [*data-readers* {'uuid (fn [_] :mine)}]
+      (is (= :mine (read-string "#uuid \"00000000-0000-0000-0000-000000000001\""))))))
