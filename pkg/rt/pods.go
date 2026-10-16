@@ -30,7 +30,9 @@ type podMsg struct {
 type Pod struct {
 	id         string // identifier derived from first namespace
 	name       string
-	format     string // "json", "edn", or "transit+json"
+	format     string   // "json", "edn", or "transit+json"
+	readerDict vm.Value // describe "readers": tag string -> symbol string
+	readers    vm.Value // the :readers map an EDN reply is read with
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
 	stdout     io.ReadCloser
@@ -45,6 +47,9 @@ type Pod struct {
 	// Response routing
 	pending   map[string]chan podMsg // id -> response channel
 	streaming map[string]bool        // ids that should not auto-close on done
+	// stopped[id] closes when a stream's collector stops reading, so a
+	// router blocked sending to it gives up instead of stalling the pod.
+	stopped   map[string]chan struct{}
 	pendingMu sync.Mutex
 	routerUp  bool
 }
@@ -126,6 +131,7 @@ func (p *Pod) recvRaw() (map[string]any, error) {
 func (p *Pod) startRouter() {
 	p.pending = make(map[string]chan podMsg)
 	p.streaming = make(map[string]bool)
+	p.stopped = make(map[string]chan struct{})
 	p.routerUp = true
 	go func() {
 		for {
@@ -163,10 +169,16 @@ func (p *Pod) startRouter() {
 
 			p.pendingMu.Lock()
 			ch, ok := p.pending[id]
+			stopped := p.stopped[id]
 			p.pendingMu.Unlock()
 
 			if ok {
-				ch <- podMsg{raw: msg}
+				// A nil stopped (a non-streaming reply) never fires.
+				select {
+				case ch <- podMsg{raw: msg}:
+				case <-stopped:
+					continue
+				}
 				// Clean up if done (but not for streaming channels)
 				if isDone(msg) {
 					p.pendingMu.Lock()
@@ -199,6 +211,7 @@ func (p *Pod) registerStreaming(id string) chan podMsg {
 	p.pendingMu.Lock()
 	p.pending[id] = ch
 	p.streaming[id] = true
+	p.stopped[id] = make(chan struct{})
 	p.pendingMu.Unlock()
 	return ch
 }
@@ -220,6 +233,15 @@ func (p *Pod) describe() error {
 
 	if ops, ok := msg["ops"].(map[string]any); ok {
 		p.ops = ops
+	}
+
+	p.readerDict = vm.EmptyPersistentMap
+	if readers, ok := msg["readers"].(map[string]any); ok {
+		dict := vm.EmptyPersistentMap
+		for tag := range readers {
+			dict = dict.Assoc(vm.String(tag), vm.String(bencStr(readers, tag))).(*vm.PersistentMap)
+		}
+		p.readerDict = dict
 	}
 
 	if nsList, ok := msg["namespaces"].([]any); ok {
@@ -287,7 +309,10 @@ func (p *Pod) Invoke(varName string, args []vm.Value) (vm.Value, error) {
 			exData := bencStr(m, "ex-data")
 			var dataVal vm.Value = vm.NIL
 			if exData != "" {
-				dataVal, _ = p.decodePayload(exData)
+				dataVal, err = p.decodePayload(exData)
+				if err != nil {
+					return vm.NIL, fmt.Errorf("pod %s: decode ex-data: %w", p.name, err)
+				}
 			}
 			errMap := vm.EmptyPersistentMap
 			errMap = errMap.Assoc(vm.Keyword("message"), vm.String(exMsg)).(*vm.PersistentMap)
@@ -327,31 +352,74 @@ func (p *Pod) InvokeAsync(varName string, args []vm.Value) (vm.Chan, error) {
 		return nil, err
 	}
 
+	// A reply ends the stream when it reports an error, when a payload does
+	// not decode, or when the pod says done. A payload that does not decode
+	// is delivered as an error map, as babashka hands it to the :error
+	// handler, rather than dropped.
 	valCh := make(vm.Chan, 32)
 	go func() {
 		defer close(valCh)
+		defer p.endStream(id)
 		for msg := range routerCh {
 			m := msg.raw
 			if exMsg, ok := m["ex-message"].(string); ok {
+				var dataVal vm.Value = vm.NIL
+				if exData := bencStr(m, "ex-data"); exData != "" {
+					dv, err := p.decodePayload(exData)
+					if err != nil {
+						valCh <- podErrorMap(err)
+						return
+					}
+					dataVal = dv
+				}
 				errMap := vm.EmptyPersistentMap
 				errMap = errMap.Assoc(vm.Keyword("error"), vm.String(exMsg)).(*vm.PersistentMap)
-				if exData := bencStr(m, "ex-data"); exData != "" {
-					if dv, err := p.decodePayload(exData); err == nil {
-						errMap = errMap.Assoc(vm.Keyword("data"), dv).(*vm.PersistentMap)
-					}
+				if dataVal != vm.NIL {
+					errMap = errMap.Assoc(vm.Keyword("data"), dataVal).(*vm.PersistentMap)
 				}
 				valCh <- errMap
 				return
 			}
 			if valStr, ok := m["value"].(string); ok {
-				if v, err := p.decodePayload(valStr); err == nil {
-					valCh <- v
+				v, err := p.decodePayload(valStr)
+				if err != nil {
+					valCh <- podErrorMap(err)
+					return
 				}
+				valCh <- v
+			}
+			if isDone(m) {
+				return
 			}
 		}
 	}()
 
 	return valCh, nil
+}
+
+// endStream stops routing replies with the given id. The router's channel is
+// left to the collector rather than closed, since the router may be sending
+// on it; closing stopped releases such a send.
+func (p *Pod) endStream(id string) {
+	p.pendingMu.Lock()
+	if stopped, ok := p.stopped[id]; ok {
+		close(stopped)
+	}
+	delete(p.pending, id)
+	delete(p.streaming, id)
+	delete(p.stopped, id)
+	p.pendingMu.Unlock()
+}
+
+// podErrorMap is the error map an :error handler receives for a reply that
+// failed on the client side: the message and, for an ex-info, its data.
+func podErrorMap(err error) vm.Value {
+	errMap := vm.EmptyPersistentMap
+	errMap = errMap.Assoc(vm.Keyword("error"), vm.String(err.Error())).(*vm.PersistentMap)
+	if ei, ok := vm.ErrorToValue(err).(*vm.ExInfo); ok && ei.Data() != nil {
+		errMap = errMap.Assoc(vm.Keyword("data"), ei.Data()).(*vm.PersistentMap)
+	}
+	return errMap
 }
 
 // Shutdown sends shutdown op if supported and waits for process to exit.
@@ -397,13 +465,54 @@ func (p *Pod) decodePayload(s string) (vm.Value, error) {
 	case "transit+json":
 		return TransitDecodeValue(s)
 	case "edn":
-		if readEDN == nil {
-			return vm.NIL, fmt.Errorf("EDN reader not initialized")
+		readEDN, err := podsPolicy("-read-edn")
+		if err != nil {
+			return vm.NIL, err
 		}
-		return readEDN(s)
+		return readEDN.Invoke([]vm.Value{p.readers, vm.String(s)})
 	default:
 		return vm.NIL, fmt.Errorf("unsupported pod format: %s", p.format)
 	}
+}
+
+// podsPolicy returns a function of pods.edn (core/pods/edn.lg), the bundled
+// let-go namespace that holds the parts of the pod client that are language
+// policy. RequireNS loads it on first use.
+func podsPolicy(name string) (invokable, error) {
+	ns, err := RequireNS("pods.edn")
+	if err != nil {
+		return nil, err
+	}
+	v := ns.LookupLocal(vm.Symbol(name))
+	if v == nil {
+		return nil, fmt.Errorf("pods.edn/%s is not defined", name)
+	}
+	fn, ok := v.Deref().(invokable)
+	if !ok {
+		return nil, fmt.Errorf("pods.edn/%s is not a function", name)
+	}
+	return fn, nil
+}
+
+// resolveReaders builds the :readers map an EDN pod's replies are read with,
+// from the describe reply's "readers" dict. It runs before the pod's
+// client-side code, as in babashka: a reader named there resolves to a var
+// that the code binds afterwards.
+func (p *Pod) resolveReaders() error {
+	p.readers = vm.NIL
+	if p.format != "edn" {
+		return nil
+	}
+	resolve, err := podsPolicy("-resolve-readers")
+	if err != nil {
+		return err
+	}
+	readers, err := resolve.Invoke([]vm.Value{p.readerDict})
+	if err != nil {
+		return fmt.Errorf("pod %s: resolve readers: %w", p.name, err)
+	}
+	p.readers = readers
+	return nil
 }
 
 // --- Namespace proxy creation ---
@@ -616,6 +725,9 @@ func installPodsNS() {
 		}
 
 		registerPod(pod)
+		if err := pod.resolveReaders(); err != nil {
+			return vm.NIL, err
+		}
 		if err := createProxyNamespaces(pod); err != nil {
 			return vm.NIL, err
 		}
@@ -671,11 +783,15 @@ func installPodsNS() {
 						doneFn = hmap.ValueAt(vm.Keyword("done"))
 					}
 
+					// As in babashka, a reply that ended in an error runs the
+					// :error handler and no :done handler.
 					go func() {
+						failed := false
 						for val := range ch {
 							// Check if it's an error map
 							if m, ok := val.(*vm.PersistentMap); ok {
 								if errMsg := m.ValueAt(vm.Keyword("error")); errMsg != vm.NIL {
+									failed = true
 									if errorFn != nil && errorFn != vm.NIL {
 										callFn(errorFn, []vm.Value{val})
 									}
@@ -686,7 +802,7 @@ func installPodsNS() {
 								callFn(successFn, []vm.Value{val})
 							}
 						}
-						if doneFn != nil && doneFn != vm.NIL {
+						if !failed && doneFn != nil && doneFn != vm.NIL {
 							callFn(doneFn, nil)
 						}
 					}()
