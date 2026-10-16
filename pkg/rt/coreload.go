@@ -120,7 +120,7 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 
 	// Replay core's def/defn/defmacro definitions.
 	tCore := time.Now()
-	if err := runChunk(unit.MainChunk); err != nil {
+	if err := runUnitChunk(unit, unit.MainChunk); err != nil {
 		return nil, fmt.Errorf("run core chunk: %w", err)
 	}
 	// Every replayed namespace takes back the Go overrides its lowered
@@ -139,7 +139,7 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 	// rt.runChunk does not nil-guard, so skip those here.
 	for _, name := range LgBaselineNSNames() {
 		if ch := unit.NSChunks[name]; ch != nil {
-			if err := runChunk(ch); err != nil {
+			if err := runUnitChunk(unit, ch); err != nil {
 				return nil, fmt.Errorf("run baseline %s: %w", name, err)
 			}
 			ApplyGoOverrides(LookupNS(name))
@@ -165,7 +165,7 @@ func LoadCoreBundle(opts CoreLoadOptions) (*bytecode.ExecUnit, error) {
 			if ch == nil {
 				continue
 			}
-			if err := runChunk(ch); err != nil {
+			if err := runUnitChunk(unit, ch); err != nil {
 				return nil, fmt.Errorf("run hybrid %s: %w", name, err)
 			}
 			ClearNSNeedsLoad(name)

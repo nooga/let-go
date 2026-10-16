@@ -300,10 +300,13 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) (*vm.Name
 	defer delete(r.cloading, name)
 
 	ons := r.ctx.CurrentNS()
-	f := vm.NewFrame(chunk, nil)
-	f.SetExecContext(r.ctx.EvaluationExecContext())
-	result, err := f.RunProtected()
-	vm.ReleaseFrame(f)
+	err := vm.WithTypeScope(compiler.PrecompiledTypeScope(), func() error {
+		f := vm.NewFrame(chunk, nil)
+		f.SetExecContext(r.ctx.EvaluationExecContext())
+		_, err := f.RunProtected()
+		vm.ReleaseFrame(f)
+		return err
+	})
 	if err != nil {
 		r.ctx.SetCurrentNS(ons)
 		// Wrap with vm.ExecutionError, not fmt.Errorf: FormatError walks the
@@ -313,7 +316,6 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) (*vm.Name
 		return nil, vm.NewExecutionError(
 			fmt.Sprintf("failed to load precompiled namespace %s", name)).Wrap(err)
 	}
-	_ = result
 	nns := r.ctx.CurrentNS()
 	r.ctx.SetCurrentNS(ons)
 	// gogen_ir: drain Go-native overrides registered by the lowered

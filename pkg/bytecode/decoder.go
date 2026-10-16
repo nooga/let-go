@@ -25,6 +25,10 @@ type ExecUnit struct {
 	// A namespace DecodeBundle deferred is listed here but absent from
 	// NSChunks until NSChunk materializes it.
 	NSOrder []string
+	// Types holds the defrecord and deftype types the unit's constants
+	// resolved to; run the unit's chunks under vm.WithTypeScope(Types, ...)
+	// so its own defining forms adopt them.
+	Types *vm.TypeScope
 
 	deferred *deferredBundle
 }
@@ -316,6 +320,7 @@ func (d *decoder) closeCompressedBody() error {
 }
 
 func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
+	d.types = vm.NewTypeScope()
 	if err := d.readCapabilities(); err != nil {
 		return nil, err
 	}
@@ -376,6 +381,7 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 	unit := &ExecUnit{
 		Consts:    sharedConsts,
 		MainChunk: d.chunks[0],
+		Types:     d.types,
 	}
 
 	if len(nsTable) > 0 {
@@ -514,6 +520,8 @@ type decoder struct {
 	// deferred is the state selectDeferred built for them.
 	deferNS  func(name string) bool
 	deferred *deferredBundle
+	// types is the unit's TypeScope, or nil for a decode with no unit.
+	types *vm.TypeScope
 }
 
 // readModuleV1 is the frozen v1 decode path. Do not modify.
@@ -1531,7 +1539,7 @@ func (d *decoder) skipValueV2() error {
 	}
 	tagID := tagByte & tagIDMask
 	tagVer := tagByte >> tagVersionShift
-	if tagVer != 0 && (tagID != TagIDMap || tagVer != 1) && isKnownTagID(tagID) {
+	if isKnownTagID(tagID) && !tagVersionSupported(tagID, tagVer) {
 		return fmt.Errorf("unsupported tag version %d for tag ID 0x%02x", tagVer, tagID)
 	}
 	varints := func(n int) error {
@@ -1594,7 +1602,7 @@ func (d *decoder) skipValueV2() error {
 		}
 		return values(count * 2) // pairs: a map or def metadata
 	case TagIDRecordType:
-		if err := varints(1); err != nil { // name
+		if err := varints(1 + int(tagVer)); err != nil { // namespace (version 1), name
 			return err
 		}
 		fieldCount, err := d.r.ReadVarint()
@@ -1603,7 +1611,7 @@ func (d *decoder) skipValueV2() error {
 		}
 		return varints(int(fieldCount))
 	case TagIDRecord:
-		if err := varints(1); err != nil { // type name
+		if err := varints(1 + int(tagVer)); err != nil { // namespace (version 1), type name
 			return err
 		}
 		fieldCount, err := d.r.ReadVarint()
@@ -1621,6 +1629,18 @@ func (d *decoder) skipValueV2() error {
 			return err
 		}
 		return values(extra * 2)
+	case TagIDDTypeInstance:
+		if err := varints(2); err != nil { // namespace, type name
+			return err
+		}
+		fieldCount, err := d.r.ReadVarint()
+		if err != nil {
+			return err
+		}
+		if err := varints(int(fieldCount)); err != nil { // field symbols
+			return err
+		}
+		return values(fieldCount)
 	case TagIDAtom:
 		return d.skipValueV2()
 	default:
@@ -1661,10 +1681,41 @@ func isKnownTagID(id byte) bool {
 		TagIDKeyword, TagIDSymbol, TagIDChar, TagIDBigInt, TagIDVoid, TagIDUUID,
 		TagIDInstant, TagIDFunc, TagIDVarRef, TagIDEmptyList, TagIDList,
 		TagIDVector, TagIDMap, TagIDSet, TagIDRecordType, TagIDRecord,
-		TagIDRegex, TagIDAtom:
+		TagIDRegex, TagIDAtom, TagIDDTypeInstance:
 		return true
 	}
 	return false
+}
+
+// readRecordTypeV2 reads a record type payload: the defining namespace when
+// tagVer is 1, then the name and field keywords. A namespaced type resolves to
+// the live type that namespace's defrecord made, or one the unit's own
+// defrecord adopts (vm.ResolveRecordType).
+func (d *decoder) readRecordTypeV2(tagVer byte) (*vm.RecordType, []vm.Keyword, error) {
+	ns := ""
+	if tagVer == 1 {
+		var err error
+		if ns, err = d.readStringRef(); err != nil {
+			return nil, nil, err
+		}
+	}
+	name, err := d.readStringRef()
+	if err != nil {
+		return nil, nil, err
+	}
+	fieldCount, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, nil, err
+	}
+	fields := make([]vm.Keyword, fieldCount)
+	for i := range fields {
+		s, err := d.readStringRef()
+		if err != nil {
+			return nil, nil, err
+		}
+		fields[i] = vm.Keyword(s)
+	}
+	return vm.ResolveRecordType(d.types, ns, name, fields), fields, nil
 }
 
 func (d *decoder) readValueV2() (vm.Value, error) {
@@ -1683,7 +1734,7 @@ func (d *decoder) readValueV2Tagged(tagByte byte) (vm.Value, error) {
 		d.stats.addTag(tagID)
 	}
 
-	if tagVer != 0 && (tagID != TagIDMap || tagVer != 1) && isKnownTagID(tagID) {
+	if isKnownTagID(tagID) && !tagVersionSupported(tagID, tagVer) {
 		return nil, fmt.Errorf("unsupported tag version %d for tag ID 0x%02x", tagVer, tagID)
 	}
 
@@ -1818,42 +1869,17 @@ func (d *decoder) readValueV2Tagged(tagByte byte) (vm.Value, error) {
 	case TagIDSet:
 		return d.readSetBatch()
 	case TagIDRecordType:
-		name, err := d.readStringRef()
+		rt, _, err := d.readRecordTypeV2(tagVer)
 		if err != nil {
 			return nil, err
 		}
-		fieldCount, err := d.r.ReadVarint()
-		if err != nil {
-			return nil, err
-		}
-		fields := make([]vm.Keyword, fieldCount)
-		for i := range fields {
-			s, err := d.readStringRef()
-			if err != nil {
-				return nil, err
-			}
-			fields[i] = vm.Keyword(s)
-		}
-		return vm.NewRecordType(name, fields), nil
+		return rt, nil
 	case TagIDRecord:
-		typeName, err := d.readStringRef()
+		rt, fieldKws, err := d.readRecordTypeV2(tagVer)
 		if err != nil {
 			return nil, err
 		}
-		fieldCount, err := d.r.ReadVarint()
-		if err != nil {
-			return nil, err
-		}
-		fieldKws := make([]vm.Keyword, fieldCount)
-		for i := range fieldKws {
-			s, err := d.readStringRef()
-			if err != nil {
-				return nil, err
-			}
-			fieldKws[i] = vm.Keyword(s)
-		}
-		rt := vm.NewRecordType(typeName, fieldKws)
-		fixedFields := make([]vm.Value, fieldCount)
+		fixedFields := make([]vm.Value, len(fieldKws))
 		for i := range fixedFields {
 			fixedFields[i], err = d.readValueV2()
 			if err != nil {
@@ -1871,6 +1897,35 @@ func (d *decoder) readValueV2Tagged(tagByte byte) (vm.Value, error) {
 			}
 		}
 		return vm.NewRecord(rt, data), nil
+	case TagIDDTypeInstance:
+		ns, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		name, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		fieldCount, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, err
+		}
+		fieldSyms := make([]vm.Symbol, fieldCount)
+		for i := range fieldSyms {
+			s, err := d.readStringRef()
+			if err != nil {
+				return nil, err
+			}
+			fieldSyms[i] = vm.Symbol(s)
+		}
+		values := make([]vm.Value, fieldCount)
+		for i := range values {
+			values[i], err = d.readValueV2()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return vm.NewDTypeInstance(vm.ResolveDType(d.types, ns, name, fieldSyms), values), nil
 	case TagIDRegex:
 		pattern, err := d.readStringRef()
 		if err != nil {

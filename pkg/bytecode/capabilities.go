@@ -22,11 +22,12 @@ type CapabilityInfo struct {
 // order. SupportedCapabilities is the subset this runtime accepts.
 var KnownCapabilities = []CapabilityInfo{
 	{Bit: CapOpcodeSet, Name: "CapOpcodeSet", Since: "1.12.0"},
+	{Bit: CapTypedConstants, Name: "CapTypedConstants", Since: "1.14.0"},
 }
 
 // SupportedCapabilities is the capability mask this runtime accepts.
 // Must match the check in readCapabilities.
-const SupportedCapabilities = CapOpcodeSet
+const SupportedCapabilities = CapOpcodeSet | CapTypedConstants
 
 // DescribeCapabilities formats a capability mask for humans: named bits as
 // CapName (0x…, since vX.Y.Z), unknown bits as "unknown bit N (0x…)".

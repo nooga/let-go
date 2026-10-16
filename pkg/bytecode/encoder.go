@@ -296,6 +296,8 @@ type ModuleBuilder struct {
 	// nsConstRange, per namespace, is the const-pool range its compilation
 	// appended (module-relative indices); input to the FlagNSRanges proof.
 	nsConstRange map[string]ConstRange
+	// typedConsts records that a constant needs CapTypedConstants.
+	typedConsts bool
 }
 
 // NewModuleBuilder creates a new builder.
@@ -369,6 +371,10 @@ func (b *ModuleBuilder) internStringsForValue(v vm.Value) {
 		b.internString(val.NS())
 		b.internString(val.VarName())
 	case *vm.RecordType:
+		if val.NS() != "" {
+			b.typedConsts = true
+			b.internString(val.NS())
+		}
 		b.internString(val.TypeName())
 		for _, f := range val.Fields() {
 			b.internString(string(f))
@@ -413,6 +419,10 @@ func (b *ModuleBuilder) internStringsForValue(v vm.Value) {
 		}
 	case *vm.Record:
 		rt := val.RecordType()
+		if rt.NS() != "" {
+			b.typedConsts = true
+			b.internString(rt.NS())
+		}
 		b.internString(rt.TypeName())
 		for _, f := range rt.Fields() {
 			b.internString(string(f))
@@ -423,6 +433,21 @@ func (b *ModuleBuilder) internStringsForValue(v vm.Value) {
 			}
 		}
 		b.internStringsForValue(val.Extra())
+	case *vm.DTypeInstance:
+		dt := val.DType()
+		if dt.NS() == "" {
+			// A reify instance; writeValue refuses it.
+			return
+		}
+		b.typedConsts = true
+		b.internString(dt.NS())
+		b.internString(dt.Name())
+		for _, f := range dt.Fields() {
+			b.internString(string(f))
+		}
+		for _, fv := range val.Fields() {
+			b.internStringsForValue(fv)
+		}
 	case *vm.Atom:
 		b.internStringsForValue(val.Deref())
 	}
@@ -476,6 +501,9 @@ func (b *ModuleBuilder) Build() *Module {
 		Consts:       b.consts,
 		ConstsBase:   b.constsBase,
 		NSTable:      b.nsTable,
+	}
+	if b.typedConsts {
+		m.Capabilities |= CapTypedConstants
 	}
 	if b.constsBase > 0 {
 		m.Flags |= FlagConstsBase
@@ -769,39 +797,12 @@ func (e *encoder) writeValue(v vm.Value) error {
 		}
 		return e.writeSetConsts(val)
 	case *vm.RecordType:
-		if err := e.w.WriteByte(TagRecordType); err != nil {
-			return err
-		}
-		if err := e.writeStringRef(val.TypeName()); err != nil {
-			return err
-		}
-		fields := val.Fields()
-		if err := e.w.WriteVarint(uint64(len(fields))); err != nil {
-			return err
-		}
-		for _, f := range fields {
-			if err := e.writeStringRef(string(f)); err != nil {
-				return err
-			}
-		}
-		return nil
+		return e.writeRecordType(TagRecordType, TagRecordTypeNS, val)
 	case *vm.Record:
-		if err := e.w.WriteByte(TagRecord); err != nil {
-			return err
-		}
 		// Write the RecordType inline
 		rt := val.RecordType()
-		if err := e.writeStringRef(rt.TypeName()); err != nil {
+		if err := e.writeRecordType(TagRecord, TagRecordNS, rt); err != nil {
 			return err
-		}
-		fields := rt.Fields()
-		if err := e.w.WriteVarint(uint64(len(fields))); err != nil {
-			return err
-		}
-		for _, f := range fields {
-			if err := e.writeStringRef(string(f)); err != nil {
-				return err
-			}
 		}
 		// Write fixed field values
 		ff := val.FixedFields()
@@ -824,6 +825,37 @@ func (e *encoder) writeValue(v vm.Value) error {
 			return err
 		}
 		return e.writeStringRef(val.Pattern())
+	case *vm.DTypeInstance:
+		dt := val.DType()
+		if dt.NS() == "" {
+			// A type no deftype made (reify) has no name a decoder can
+			// resolve, and a fresh type would drop its methods.
+			return fmt.Errorf("unsupported value type for serialization: %s instance", dt.Name())
+		}
+		if err := e.w.WriteByte(TagDTypeInstance); err != nil {
+			return err
+		}
+		if err := e.writeStringRef(dt.NS()); err != nil {
+			return err
+		}
+		if err := e.writeStringRef(dt.Name()); err != nil {
+			return err
+		}
+		fields := dt.Fields()
+		if err := e.w.WriteVarint(uint64(len(fields))); err != nil {
+			return err
+		}
+		for _, f := range fields {
+			if err := e.writeStringRef(string(f)); err != nil {
+				return err
+			}
+		}
+		for _, fv := range val.Fields() {
+			if err := e.writeValue(fv); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *vm.Atom:
 		if err := e.w.WriteByte(TagAtom); err != nil {
 			return err
@@ -832,6 +864,37 @@ func (e *encoder) writeValue(v vm.Value) error {
 	default:
 		return fmt.Errorf("unsupported value type for serialization: %T", v)
 	}
+}
+
+// writeRecordType writes a record type payload under tag, or under nsTag with
+// the defining namespace first when defrecord made the type, so the decoder
+// resolves it to the live type.
+func (e *encoder) writeRecordType(tag, nsTag byte, rt *vm.RecordType) error {
+	if rt.NS() == "" {
+		if err := e.w.WriteByte(tag); err != nil {
+			return err
+		}
+	} else {
+		if err := e.w.WriteByte(nsTag); err != nil {
+			return err
+		}
+		if err := e.writeStringRef(rt.NS()); err != nil {
+			return err
+		}
+	}
+	if err := e.writeStringRef(rt.TypeName()); err != nil {
+		return err
+	}
+	fields := rt.Fields()
+	if err := e.w.WriteVarint(uint64(len(fields))); err != nil {
+		return err
+	}
+	for _, f := range fields {
+		if err := e.writeStringRef(string(f)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *encoder) findChunkIndex(c *vm.CodeChunk) int {
