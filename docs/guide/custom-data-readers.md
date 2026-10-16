@@ -113,6 +113,28 @@ reads as `7`.
 primary use is supplying readable Go fragments to Go-AST-based tooling and
 production-structure tests.
 
+## EDN reading
+
+`edn/read-string` (Clojure's `clojure.edn/read-string`) never consults
+`*data-readers*` or `*default-data-reader-fn*`. It reads the built-in
+`#inst` and `#uuid`, and takes its other readers from an options map:
+
+```clojure
+(edn/read-string {:readers {'app/p (fn [[x y]] {:x x :y y})}} "#app/p [5 6]")
+;; => {:x 5, :y 6}
+(edn/read-string {:default (fn [tag form] [:unknown tag form])} "#app/q 9")
+;; => [:unknown app/q 9]
+(edn/read-string {:eof :done} "")
+;; => :done
+```
+
+`:readers` wins over the built-in tags and over `:default`. A tag nothing
+handles throws `No reader function for tag <tag>`. An input with no form
+reads as `:eof` when the option is given, as `nil` without an options map,
+and is an error with an options map that lacks `:eof`. `edn/read-all-string`
+takes the same `:readers` and `:default`. The policy lives in `edn.lg`; the
+Go reader only takes a resolver function and an EOF value.
+
 ## Register readers from an embedding Go program
 
 Embedding code can install explicit per-compiler readers:
