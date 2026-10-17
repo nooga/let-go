@@ -7,6 +7,7 @@
 ;;   :bottom :unknown :any
 ;;   :nil :true :false :bool :string :int :float :number :char
 ;;   [:const :int 0] [:const :float 0.0]
+;;   [:array :byte|:int|:float|:object]
 ;;   [:union ...]
 ;;
 ;; Two representations, kept in lockstep for the pure-kind hot path:
@@ -49,7 +50,8 @@
    :lazyseq 19
    :transient-vector 20
    :transient-map 21
-   :transient-set 22})
+   :transient-set 22
+   :array 23})
 
 ;; The concrete collection/seq kinds (keyword lattice members, non-maskable).
 (def collection-kinds #{:vector :map :set :list :cons :lazyseq
@@ -120,6 +122,17 @@
 (defn dtype-type? [t]
   (and (vector? t) (= :dtype (first t)) (= 2 (count t))))
 
+;; [:array K] — a typed array (vm.TypedArray) whose element kind K mirrors
+;; vm.ArrayKind. The kind is DECLARED, by an array constructor or a ^doubles-
+;; style param hint, never inferred from the elements, which is what makes
+;; arrays the tractable subset of native collections (#1055). Non-maskable,
+;; like :dtype: it survives the threaded state as a keyword fact.
+(def array-elem-kinds #{:byte :int :float :object})
+
+(defn array-type? [t]
+  (and (vector? t) (= :array (first t)) (= 2 (count t))
+       (contains? array-elem-kinds (nth t 1))))
+
 (defn maskable-type? [t]
   (cond
     ;; :ratio is a first-class core numeric type but has NO bitset bit — the
@@ -167,6 +180,7 @@
   (let [key (cond
               (const-type? t) (nth t 1)
               (dtype-type? t) :dtype
+              (array-type? t) :array
               :else t)]
     (get type-order key 100)))
 
@@ -194,6 +208,7 @@
 (defn type->mask [t]
   (cond
     (dtype-type? t)  nil
+    (array-type? t)  nil
     (= t :bottom)  mask-bottom
     (= t :any)     mask-any
     (= t :unknown) mask-unknown
@@ -255,6 +270,7 @@
     (nil? t) :unknown
     (keyword? t) t
     (dtype-type? t) t
+    (array-type? t) t
     (const-type? t)
     (let [tag (nth t 1)
           v   (nth t 2)]
@@ -340,6 +356,10 @@
     (if (dtype-type? b) (if (= a b) a :any) :any)
     (dtype-type? b)
     :any
+    ;; Two different array kinds, or an array against anything else, have no
+    ;; common native shape: :any, as for dtype (equal kinds hit (= a b) above).
+    (array-type? a) :any
+    (array-type? b) :any
     (= a :any) :any
     (= b :any) :any
     (= a :unknown) :unknown
