@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-10-07
+last-verified: 2026-10-15
 ---
 
 # Building a custom `lg`
@@ -116,6 +116,38 @@ cross-reference against Go docs. Most projects put a hand-written `.lg` veneer
 over it for idiomatic naming — that split is covered in
 [Wrapping Go packages](go-interop.md).
 
+## Shipping the veneer in your package
+
+A veneer kept as a `.lg` file next to your scripts has to be on
+`-source-paths` wherever the binary runs. To ship it inside the Go package
+instead, embed it and register it from `init()`, next to the package's
+`rt.RegisterNS` calls:
+
+```go
+//go:embed lg/crc.lg
+var crcSrc string
+
+func init() { rt.RegisterEmbeddedSource("mytool.crc", crcSrc) }
+```
+
+`(require 'mytool.crc)` then resolves in any binary that links the package,
+with no source path: your custom `lg`, a `-b` bundle of it, and the `-w` and
+`lg compile` builds below when they `-import` the package. A package with
+several files registers each one.
+
+- **Precedence.** Registered namespaces resolve before `-source-paths`, so one
+  shadows a file of the same name there. Give library namespaces a qualified
+  name (`mytool.crc`, not `crc`).
+- **Refusals.** `RegisterEmbeddedSource` panics on an empty source (the
+  `//go:embed` didn't populate), on the name of a core namespace or of a native
+  namespace already registered (such as `os`), and on a name that is already
+  registered. A native namespace registered later under the same name isn't
+  caught, and its natives win, so give the lg source a name of its own rather
+  than one of your `rt.RegisterNS` names.
+- **Loading.** A registered namespace loads as interpreted source the first time
+  it is required, as it would from a file. It is not precompiled or lowered
+  with let-go's core.
+
 ## Distributing a single binary
 
 `-b` bundles a script into a standalone executable by copying a base binary and
@@ -156,8 +188,9 @@ To carry them over, build inside your own module and name the packages to link:
   build. It refuses an `lgprogram/` it did not create, which it recognizes by
   the `.lg-generated` marker inside.
 - `-import <pkg>` blank-imports `<pkg>` into the generated program, so its
-  `init()` registers its namespaces as it does in your custom `lg`. Repeat it
-  for each package, drivers included. It needs `-w-module`.
+  `init()` registers its namespaces as it does in your custom `lg`, including
+  any lg source it registers with `rt.RegisterEmbeddedSource`. Repeat it for
+  each package, drivers included. It needs `-w-module`.
 
 The module's `go.mod` and `go.sum` are used as they are: the build runs with
 `-mod=readonly`, so a package that no `require` provides fails the build with

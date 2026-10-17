@@ -196,6 +196,37 @@ func TestCallerModule(t *testing.T) {
 		}
 	})
 
+	// runWasm runs a -w build's main.wasm under node with Go's wasm_exec.js,
+	// skipping the test when node is missing. The generated main writes *out*
+	// through the _lgOutput JS global, so the driver defines it.
+	runWasm := func(t *testing.T, outDir string) (stdout, stderr string, err error) {
+		t.Helper()
+		node, err := exec.LookPath("node")
+		if err != nil {
+			t.Skip("node not on PATH; cannot run the wasm build")
+		}
+		goroot, err := runCmd(ctx, t, "go", root, []string{"env", "GOROOT"})
+		if err != nil {
+			t.Fatalf("go env GOROOT: %v", err)
+		}
+		driver := filepath.Join(t.TempDir(), "run.js")
+		writeFile(t, driver, `const fs = require("fs");
+require(process.argv[2]);
+globalThis._lgOutput = (s) => process.stdout.write(s);
+const go = new Go();
+WebAssembly.instantiate(fs.readFileSync(process.argv[3]), go.importObject)
+  .then((r) => go.run(r.instance))
+  .catch((e) => { console.error(e); process.exit(1); });
+`)
+		cmd := exec.CommandContext(ctx, node, driver,
+			filepath.Join(strings.TrimSpace(goroot), "lib", "wasm", "wasm_exec.js"),
+			filepath.Join(outDir, "main.wasm"))
+		var wout, werr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &wout, &werr
+		err = cmd.Run()
+		return wout.String(), werr.String(), err
+	}
+
 	// -import: the module holds a generated interop package for hash/crc32,
 	// which registers the crc32 namespace from init(). The lg that compiles the
 	// program does not have it, so the program requires it when -main runs; the
@@ -249,32 +280,73 @@ func TestCallerModule(t *testing.T) {
 		if after := readModFiles(t, mod); !bytes.Equal(before[0], after[0]) || !bytes.Equal(before[1], after[1]) {
 			t.Error("-import changed the caller's go.mod or go.sum")
 		}
-		node, err := exec.LookPath("node")
-		if err != nil {
-			t.Skip("node not on PATH; cannot run the wasm build")
+		if wout, werr, err := runWasm(t, outDir); err != nil || wout != crcHello {
+			t.Fatalf("wasm: err=%v stdout=%q, want %q; stderr=%q", err, wout, crcHello, werr)
 		}
-		goroot, err := runCmd(ctx, t, "go", root, []string{"env", "GOROOT"})
-		if err != nil {
-			t.Fatalf("go env GOROOT: %v", err)
-		}
-		// The generated main writes *out* through the _lgOutput JS global, so
-		// the driver defines it and runs the module with Go's wasm_exec.js.
-		driver := filepath.Join(t.TempDir(), "run.js")
-		writeFile(t, driver, `const fs = require("fs");
-require(process.argv[2]);
-globalThis._lgOutput = (s) => process.stdout.write(s);
-const go = new Go();
-WebAssembly.instantiate(fs.readFileSync(process.argv[3]), go.importObject)
-  .then((r) => go.run(r.instance))
-  .catch((e) => { console.error(e); process.exit(1); });
+	})
+
+	// A package can ship an lg layer as well as natives: lglib embeds
+	// greet.lg and registers it from init() with rt.RegisterEmbeddedSource
+	// (#1063). Linked by -import, the namespace resolves in the built program
+	// with no source path, natively and in wasm.
+	embApp := filepath.Join(fix, "emb.lg")
+	writeFile(t, embApp, `(ns emb)
+(defn -main []
+  (require 'lglib.greet)
+  (println ((resolve 'lglib.greet/greet) "registered")))
+(when-not *compiling-aot* (-main))
 `)
-		cmd := exec.CommandContext(ctx, node, driver,
-			filepath.Join(strings.TrimSpace(goroot), "lib", "wasm", "wasm_exec.js"),
-			filepath.Join(outDir, "main.wasm"))
-		var wout, werr bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &wout, &werr
-		if err := cmd.Run(); err != nil || wout.String() != crcHello {
-			t.Fatalf("wasm: err=%v stdout=%q, want %q; stderr=%q", err, wout.String(), crcHello, werr.String())
+	const embHello = "hello, registered\n"
+
+	t.Run("-import links a package's registered lg namespace", func(t *testing.T) {
+		mod := newModule(t, true)
+		pkg := filepath.Join(mod, "lglib")
+		if err := os.MkdirAll(pkg, 0755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(pkg, "greet.lg"), `(ns lglib.greet)
+(defn greet [who] (str "hello, " who))
+`)
+		writeFile(t, filepath.Join(pkg, "lglib.go"), `package lglib
+
+import (
+	_ "embed"
+
+	"github.com/nooga/let-go/pkg/rt"
+)
+
+//go:embed greet.lg
+var greetSrc string
+
+func init() { rt.RegisterEmbeddedSource("lglib.greet", greetSrc) }
+`)
+
+		exe := filepath.Join(t.TempDir(), "emb.native")
+		if out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-o", exe, "-module", mod,
+			"-import", "example.com/host/lglib", embApp}, env...); err != nil {
+			t.Fatalf("lg compile -import: %v\n%s", err, out)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 || string(stdout) != embHello {
+			t.Fatalf("native: err=%v exit=%d stdout=%q, want %q; stderr=%q", err, exit, stdout, embHello, stderr)
+		}
+
+		// LG_SOURCE_PATHS doesn't reach lglib/, so without -import nothing
+		// else can supply the namespace.
+		if out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-o", exe, "-module", mod, embApp}, env...); err != nil {
+			t.Fatalf("lg compile without -import: %v\n%s", err, out)
+		}
+		if stdout, _, exit, _ := runNativeEntryBinary(ctx, exe); exit == 0 || string(stdout) == embHello {
+			t.Fatalf("without -import the program still resolved lglib.greet: exit=%d stdout=%q", exit, stdout)
+		}
+
+		outDir := filepath.Join(t.TempDir(), "web")
+		if out, err := runCmd(ctx, t, bin, fix, []string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external",
+			"-w-module", mod, "-import", "example.com/host/lglib", embApp}, env...); err != nil {
+			t.Fatalf("lg -w -import: %v\n%s", err, out)
+		}
+		if wout, werr, err := runWasm(t, outDir); err != nil || wout != embHello {
+			t.Fatalf("wasm: err=%v stdout=%q, want %q; stderr=%q", err, wout, embHello, werr)
 		}
 	})
 
