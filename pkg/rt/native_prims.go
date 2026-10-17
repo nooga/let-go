@@ -61,6 +61,64 @@ func UpperCase(v vm.Value) (string, error) {
 	return strings.ToUpper(strValue(v)), nil
 }
 
+// Escape returns s with each character c replaced by (cmap c) wherever that is
+// truthy. Mirrors clojure.string/escape — `(escape s cmap)`, where cmap is a
+// map or a function. A map is read with ValueAt rather than invoked, so the
+// usual HTML-escape call allocates no argument slice per character, and a
+// string with nothing to replace comes back as is. Registered in
+// clojure.string namespace.
+//
+//lg:native
+//lg:ns clojure.string
+//lg:name escape
+func Escape(s vm.Value, cmap vm.Value) (vm.Value, error) {
+	str, ok := s.(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("escape expected String")
+	}
+	var lookup func(vm.Char) (vm.Value, error)
+	switch m := cmap.(type) {
+	case *vm.PersistentMap:
+		lookup = func(c vm.Char) (vm.Value, error) { return m.ValueAt(c), nil }
+	case vm.Map:
+		lookup = func(c vm.Char) (vm.Value, error) { return m.ValueAt(c), nil }
+	case vm.Fn:
+		lookup = func(c vm.Char) (vm.Value, error) { return m.Invoke([]vm.Value{c}) }
+	default:
+		return vm.NIL, fmt.Errorf("escape expected a map or a function, got %s", cmap.Type().Name())
+	}
+	src := string(str)
+	var b strings.Builder
+	started := false
+	for i := 0; i < len(src); {
+		r, size := utf8.DecodeRuneInString(src[i:])
+		rep, err := lookup(vm.Char(r))
+		if err != nil {
+			return vm.NIL, err
+		}
+		if !vm.IsTruthy(rep) {
+			// Copy the original bytes, not r, so invalid UTF-8 survives as it
+			// does on the no-replacement path.
+			if started {
+				b.WriteString(src[i : i+size])
+			}
+			i += size
+			continue
+		}
+		if !started {
+			b.Grow(len(src) + len(src)/2)
+			b.WriteString(src[:i])
+			started = true
+		}
+		b.WriteString(strValue(rep))
+		i += size
+	}
+	if !started {
+		return str, nil
+	}
+	return vm.String(b.String()), nil
+}
+
 // Subs returns a substring from index start to the end.
 // Mirrors clojure.core/subs with 2 arguments — `(subs s start)`.
 //

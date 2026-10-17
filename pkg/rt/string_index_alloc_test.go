@@ -63,3 +63,20 @@ func TestStringIndexFnsDoNotCopyTheString(t *testing.T) {
 		}
 	}
 }
+
+// escape used to build a lazy seq of the whole string and apply str to it.
+// A string with nothing to replace now comes back as is, so the cost no
+// longer grows with its length.
+func TestStringEscapeReturnsACleanStringWithoutCopying(t *testing.T) {
+	s := vm.String(strings.Repeat("plain text ", 3000))
+	cmap := vm.NewPersistentMap([]vm.Value{vm.Char('<'), vm.String("&lt;")})
+	fn := stringFn(t, "escape")
+	args := []vm.Value{s, cmap}
+	if b := bytesPerCall(50, func() {
+		if _, err := fn.Invoke(args); err != nil {
+			t.Fatal(err)
+		}
+	}); b > 1024 {
+		t.Errorf("string/escape on a clean 33k-byte string: %d bytes/call", b)
+	}
+}
