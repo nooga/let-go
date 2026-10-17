@@ -320,19 +320,25 @@ func TestTypeInferUnresolvedCallPreservesUnknownOnFlush(t *testing.T) {
 	}
 }
 
-// optimize-fn skips its trailing typeinfra epoch when no middle pass edited the
-// function, and runs it when one did. Counting typeinfer calls observes the
-// skip without touching run-typeinfra-epoch, whose identity the skip checks.
+// The default pass list skips its trailing typeinfra epoch when no middle pass
+// edited the function, and runs it when one did. The test swaps a counting
+// wrapper into the :epoch entries instead of redefining typeinfer: under -tags
+// gogen_ir the native passes call each other directly, so a with-redefs is
+// never seen, and the epoch entries must still be found once the native
+// overrides are installed.
 func TestOptimizeFnSkipsTrailingEpochOnlyWhenUnedited(t *testing.T) {
 	ensureLoader()
 	got := runLispString(t, `(pr-str
 		(let [epochs (fn [form]
-		               (let [n  (atom 0)
-		                     ti ir.passes.typeinfer/typeinfer
-		                     f  (ir.build/build-fn form)]
-		                 (with-redefs [ir.passes.typeinfer/typeinfer
-		                               (fn [& args] (swap! n inc) (apply ti args))]
-		                   (ir.passes.pipeline/optimize-fn f))
+		               (let [n     (atom 0)
+		                     f     (ir.build/build-fn form)
+		                     count (fn [entry]
+		                             (if (= :epoch (nth entry 2 nil))
+		                               (let [pass (nth entry 0)]
+		                                 (assoc entry 0 (fn [g] (swap! n inc) (pass g))))
+		                               entry))]
+		                 (#'ir.passes.pipeline/run-pass-list
+		                  f (mapv count ir.passes.pipeline/default-pass-list))
 		                 @n))]
 		  [;; no middle pass changes this one
 		   (epochs '(defn unedited [x y] (+ x y)))

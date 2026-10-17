@@ -71,13 +71,17 @@
                (symbol fn-name) ir-fn))
     {} (get @*runtime-defn-ir-cache* ns-name {})))
 
-;; Declarative pass list: each entry is [pass-fn validate-label]. A nil label
-;; runs the pass without a validate step after it (matching the original
-;; hardcoded order, where the trailing typeinfra epoch had no validate call).
+;; Declarative pass list: each entry is [pass-fn validate-label], plus :epoch
+;; on a typeinfra epoch. The marker, not the fn value, identifies an epoch: under
+;; -tags gogen_ir the run-typeinfra-epoch Var gets its native override after this
+;; def has captured the bytecode fn, so comparing against the Var's current
+;; value never matches. A nil label runs the pass without a validate step after
+;; it (matching the original hardcoded order, where the trailing typeinfra epoch
+;; had no validate call).
 ;; This list is the seam the fusion-placement permutation harness manipulates;
 ;; the default order below is byte-identical to the pre-refactor sequence.
 (def default-pass-list
-  [[run-typeinfra-epoch "infer-arg-types"]
+  [[run-typeinfra-epoch "infer-arg-types" :epoch]
    [constfold           "constfold-1"]
    [cse                 "cse"]
    [fusion              "fusion"]
@@ -85,7 +89,7 @@
    [licm                "licm"]
    [constfold           "constfold-3"]
    [dce                 "dce"]
-   [run-typeinfra-epoch nil]])
+   [run-typeinfra-epoch nil               :epoch]])
 
 ;; A typeinfra epoch is skipped when no pass has edited f since the previous
 ;; epoch: its facts would come out the same. Every structural mutator in
@@ -99,7 +103,7 @@
     (reduce (fn [g entry]
               (let [pass   (nth entry 0)
                     label  (nth entry 1)
-                    epoch? (= pass run-typeinfra-epoch)
+                    epoch? (= :epoch (nth entry 2 nil))
                     prev   @after-epoch]
                 (when-not (and epoch? prev
                                (identical? (nth prev 0) (ir/all-insts g))
@@ -125,7 +129,7 @@
 ;; Skipping type inference keeps every inst :unknown → the whole body lowers
 ;; through the boxed vm.Value path → uniform ABI by construction.
 (def uniform-pass-list
-  (vec (filter (fn [entry] (not= run-typeinfra-epoch (nth entry 0)))
+  (vec (filter (fn [entry] (not= :epoch (nth entry 2 nil)))
                default-pass-list)))
 
 (defn- optimize-fn-uniform [f]
