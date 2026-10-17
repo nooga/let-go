@@ -2553,6 +2553,19 @@ func _adapt_UpperCase(vs []vm.Value) (vm.Value, error) {
 	return vm.String(r), nil
 }
 
+func _adapt_Escape(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
+	}
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := Escape(a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
 func _adapt_Subs(vs []vm.Value) (vm.Value, error) {
 	switch len(vs) {
 	case 2:
@@ -3559,12 +3572,15 @@ func RegisterGeneratedPrimitives() {
 		Namespace: "clojure.string",
 		Fns: map[string]NativeDirectFn{
 			"upper-case": {GoIdent: "UpperCase", LgName: "upper-case", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "string", NeedsError: true},
+			"escape":     {GoIdent: "Escape", LgName: "escape", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 		},
 	})
 	// Bind adapters into namespace
 	if ns := LookupOrRegisterNSNoLoad("clojure.string"); ns != nil {
 		fn0, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_UpperCase(vs) })
 		defGeneratedPrimitive(ns, "clojure.string", "upper-case", fn0)
+		fn1, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Escape(vs) })
+		defGeneratedPrimitive(ns, "clojure.string", "escape", fn1)
 	}
 }
 

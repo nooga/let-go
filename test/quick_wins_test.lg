@@ -626,7 +626,21 @@
 
 (deftest string-escape-test
   (testing "string/escape"
-    (is (= "h&lt;llo" (s/escape "h<llo" {\< "&lt;"})))))
+    (is (= "h&lt;llo" (s/escape "h<llo" {\< "&lt;"}))))
+  (testing "cmap may be a function"
+    (is (= "a&lt;b" (s/escape "a<b" (fn [c] (when (= c \<) "&lt;"))))))
+  (testing "a falsey replacement keeps the character"
+    (is (= "ab" (s/escape "ab" {\a false \b nil}))))
+  (testing "a replacement is converted with str"
+    (is (= "a1Z" (s/escape "abc" {\b 1 \c \Z}))))
+  (testing "multi-byte characters"
+    (is (= "hello->" (s/escape "héllo→" {\é "e" \→ "->"}))))
+  (testing "nothing to replace returns the string unchanged"
+    (is (= "clean" (s/escape "clean" {\< "&lt;"})))
+    (is (= "" (s/escape "" {\< "&lt;"}))))
+  (testing "a non-string or a cmap that is neither map nor fn throws"
+    (is (thrown? Exception (s/escape nil {\< "&lt;"})))
+    (is (thrown? Exception (s/escape "x" 5)))))
 
 (deftest string-re-quote-replacement-test
   (testing "string/re-quote-replacement is identity (Go regex)"
