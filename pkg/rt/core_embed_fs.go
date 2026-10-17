@@ -9,6 +9,7 @@ import (
 	"embed"
 	"io/fs"
 	"strings"
+	"sync"
 )
 
 // coreFS is the single embed.FS covering every `.lg` source that ships
@@ -21,29 +22,59 @@ import (
 var coreFS embed.FS
 
 // auxEmbeddedSources holds embedded namespace sources that live OUTSIDE the
-// core/ tree. They resolve like embedded core but are deliberately excluded
-// from the core lowering universe: EmbeddedNSNames walks core/ only, so an aux
-// source is invisible to the self-hosting bootstrap (lgbgen). gogen is the case
-// (nooga/let-go#425) — it self-contains as embedded source but is the AOT
-// Go-emitter, not core content, and enrolling it in core/ perturbs the
-// interpreted-vs-native lowering fixpoint.
+// core/ tree: gogen (nooga/let-go#425), and lg layers that out-of-tree Go
+// packages register through RegisterEmbeddedSource (nooga/let-go#1063). They
+// resolve like embedded core but are deliberately excluded from the core
+// lowering universe: EmbeddedNSNames walks core/ only, so an aux source is
+// invisible to the self-hosting bootstrap (lgbgen) and always loads as
+// interpreted source. For gogen that's the point — it is the AOT Go-emitter,
+// not core content, and enrolling it in core/ perturbs the interpreted-vs-native
+// lowering fixpoint. An out-of-tree package doesn't exist when let-go is built,
+// so there would be nothing to lower anyway.
 //
-// Concurrency: a bare map with no lock, safe ONLY because it is written
-// exclusively from init() (via registerEmbeddedSource), which happens-before
-// every resolver read through EmbeddedSource. Do NOT add a runtime
-// RegisterEmbeddedSource entry point — a write racing a resolver read would be a
-// data race. Keep all registration in init().
-var auxEmbeddedSources = map[string]string{}
+// Guarded by auxEmbeddedMu. Registration from init() alone would be race-free
+// (inits run one at a time), but an exported function can't hold callers to
+// that, and sealing the map at the first read would refuse legitimate ones:
+// pkg/compiler's own init reads embedded sources, before the init of every
+// package that imports it.
+var (
+	auxEmbeddedMu      sync.RWMutex
+	auxEmbeddedSources = map[string]string{}
+)
 
-// registerEmbeddedSource records an auxiliary embedded namespace source. Call it
-// ONLY from init() (see auxEmbeddedSources for the race invariant). An empty
-// source means the //go:embed directive that feeds it never populated — a broken
-// build — so fail loudly and name the namespace here, rather than let it surface
-// downstream as an obscure "Can't resolve <ns>/..." through the resolver's
-// fallback chain.
-func registerEmbeddedSource(name, src string) {
+// RegisterEmbeddedSource makes the lg source src resolvable as namespace name,
+// with no search path: (require 'name) finds it before any file on
+// -source-paths, so a registered namespace shadows a file of the same name.
+// It lets a Go package ship the lg layer over its natives inside the package,
+// for any binary that links it — a custom lg built on cli.Main, or a -w/-b
+// build that imports it.
+//
+// Call it from init(), next to the package's rt.RegisterNS calls, so the
+// namespace exists before any program can require it. Give library namespaces
+// a qualified name (mylib.core, not core).
+//
+// It panics if src is empty (the //go:embed directive that feeds it never
+// populated, a broken build), if name is a core namespace or a native one
+// already registered, or if name is already registered: each would otherwise
+// surface later as an obscure resolution failure, as a source that never loads
+// because the native namespace wins, or as one package's source silently
+// replacing another's. A native namespace registered after the source isn't
+// caught, so register the source under a name of its own, not one of the
+// package's rt.RegisterNS names.
+func RegisterEmbeddedSource(name, src string) {
 	if src == "" {
 		panic("rt: embedded source for namespace " + name + " is empty (//go:embed failed?)")
+	}
+	if _, err := coreFS.ReadFile("core/" + nsNameToPath(name)); err == nil {
+		panic("rt: embedded source for namespace " + name + " would shadow the core namespace of that name")
+	}
+	if LookupNS(name) != nil {
+		panic("rt: embedded source for namespace " + name + " would never load: a native namespace of that name is already registered")
+	}
+	auxEmbeddedMu.Lock()
+	defer auxEmbeddedMu.Unlock()
+	if _, dup := auxEmbeddedSources[name]; dup {
+		panic("rt: embedded source for namespace " + name + " is registered twice")
 	}
 	auxEmbeddedSources[name] = src
 }
@@ -60,7 +91,10 @@ func registerEmbeddedSource(name, src string) {
 //
 // Returns ("", false) if no matching file exists.
 func EmbeddedSource(name string) (string, bool) {
-	if src, ok := auxEmbeddedSources[name]; ok {
+	auxEmbeddedMu.RLock()
+	src, ok := auxEmbeddedSources[name]
+	auxEmbeddedMu.RUnlock()
+	if ok {
 		return src, true
 	}
 	path := "core/" + nsNameToPath(name)

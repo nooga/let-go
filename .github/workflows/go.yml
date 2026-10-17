@@ -378,6 +378,10 @@ jobs:
         run: make test SHORT=false PKG=./test/e2e RUN=TestJankSuiteDirectABIGeneratedGo COUNT=1
       - name: Engine parity and differential engine gate
         run: make test SHORT=false PKG=./test/e2e RUN='TestEngineParityGate|TestGogenAOTDiff|TestGogenLazyCoreNamespaceStaysLowered'
+      # pkg/ir's own tests against the native passes: dispatch wireup and pass
+      # behaviour that only differs once the lowered overrides are installed.
+      - name: pkg/ir tests under -tags gogen_ir
+        run: go test -tags gogen_ir -count=1 ./pkg/ir
 
   # Single gate for every generated artifact (Policy: docs/contribution-policy.md §3):
   # the bundle is verified in lockstep with pkg/rt/core/**/*.lg (content-based, so
