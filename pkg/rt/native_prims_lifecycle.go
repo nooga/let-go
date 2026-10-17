@@ -45,13 +45,23 @@ var (
 // emitted for native-module callees consult this before taking the baked
 // direct call; on false they fall back to the var-dispatch trampoline so the
 // override is observed across lowered function boundaries.
+//
+// Lowered code calls this per guarded site, which in a numeric loop is per
+// element, so the intact path must inline: it is one atomic load, and the
+// deviated path lives in its own function to keep this one under the
+// inliner's budget (`go build -gcflags=-m=2 ./pkg/rt | grep NativePrimsIntact`).
 func NativePrimsIntact() bool {
 	if vm.GuardedRootsIntact() {
 		return true
 	}
-	// Off the fast path (a root deviated): under LG_GUARD_DEBUG, name the
-	// offending native primitive(s) — the diagnostic that pinpoints which
-	// hoisted primitive is being shadowed instead of a bare intact=false.
+	return nativePrimsDeviated()
+}
+
+// nativePrimsDeviated is the cold half of NativePrimsIntact: a root deviated.
+// Under LG_GUARD_DEBUG, name the offending native primitive(s), the
+// diagnostic that pinpoints which hoisted primitive is being shadowed instead
+// of a bare intact=false.
+func nativePrimsDeviated() bool {
 	if guardDebug {
 		fmt.Fprintf(os.Stderr, "[GUARD] deviated: %v\n", deviatedGuardedVars())
 	}
