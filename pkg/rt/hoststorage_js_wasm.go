@@ -43,13 +43,29 @@ func (s *HostStorage) physicalKey(key string) string {
 	return s.prefix + key
 }
 
+// localStorage returns the page's localStorage, or an error where there is
+// none: a Web Worker, which is where lg -w runs the program (#1078). It is
+// checked rather than left to the recover in each method because TinyGo cannot
+// recover a syscall/js panic on wasm, so the call would trap the page.
+func localStorage(op string) (js.Value, error) {
+	ls := js.Global().Get("localStorage")
+	if ls.IsUndefined() || ls.IsNull() {
+		return js.Value{}, fmt.Errorf("%s: no localStorage here (a Web Worker has none)", op)
+	}
+	return ls, nil
+}
+
 func (s *HostStorage) Get(key string) (value string, ok bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			value, ok, err = "", false, fmt.Errorf("storage/get: %v", r)
 		}
 	}()
-	v := js.Global().Get("localStorage").Call("getItem", s.physicalKey(key))
+	ls, err := localStorage("storage/get")
+	if err != nil {
+		return "", false, err
+	}
+	v := ls.Call("getItem", s.physicalKey(key))
 	if v.IsNull() || v.IsUndefined() {
 		return "", false, nil
 	}
@@ -62,7 +78,11 @@ func (s *HostStorage) Set(key, value string) (err error) {
 			err = fmt.Errorf("storage/set: %v", r)
 		}
 	}()
-	js.Global().Get("localStorage").Call("setItem", s.physicalKey(key), value)
+	ls, err := localStorage("storage/set")
+	if err != nil {
+		return err
+	}
+	ls.Call("setItem", s.physicalKey(key), value)
 	return nil
 }
 
@@ -72,7 +92,11 @@ func (s *HostStorage) Remove(key string) (err error) {
 			err = fmt.Errorf("storage/remove: %v", r)
 		}
 	}()
-	js.Global().Get("localStorage").Call("removeItem", s.physicalKey(key))
+	ls, err := localStorage("storage/remove")
+	if err != nil {
+		return err
+	}
+	ls.Call("removeItem", s.physicalKey(key))
 	return nil
 }
 
@@ -82,7 +106,10 @@ func (s *HostStorage) Keys(prefix string) (keys []string, err error) {
 			keys, err = nil, fmt.Errorf("storage/keys: %v", r)
 		}
 	}()
-	ls := js.Global().Get("localStorage")
+	ls, err := localStorage("storage/keys")
+	if err != nil {
+		return nil, err
+	}
 	n := ls.Get("length").Int()
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {
