@@ -402,3 +402,48 @@ func TestTinyGoBuildArgs(t *testing.T) {
 		})
 	}
 }
+
+// TestTinyGoBuildEnv pins how a caller-module build holds tinygo to the
+// caller's go.mod: tinygo has no -mod flag, so -mod=readonly goes last in
+// GOFLAGS, where it overrides a user's -mod=mod without dropping their other
+// flags.
+func TestTinyGoBuildEnv(t *testing.T) {
+	tests := []struct {
+		name         string
+		environ      []string
+		callerModule bool
+		want         []string
+	}{
+		{
+			name:    "no caller module: environment unchanged",
+			environ: []string{"HOME=/h", "GOFLAGS=-mod=mod"},
+			want:    []string{"HOME=/h", "GOFLAGS=-mod=mod"},
+		},
+		{
+			name:         "caller module, no GOFLAGS",
+			environ:      []string{"HOME=/h"},
+			callerModule: true,
+			want:         []string{"HOME=/h", "GOFLAGS=-mod=readonly"},
+		},
+		{
+			name:         "caller module: the user's GOFLAGS are kept and -mod=readonly goes last",
+			environ:      []string{"GOFLAGS=-mod=mod -trimpath", "HOME=/h"},
+			callerModule: true,
+			want:         []string{"HOME=/h", "GOFLAGS=-mod=mod -trimpath -mod=readonly"},
+		},
+		{
+			name:         "caller module, empty GOFLAGS",
+			environ:      []string{"GOFLAGS=", "HOME=/h"},
+			callerModule: true,
+			want:         []string{"HOME=/h", "GOFLAGS=-mod=readonly"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tinyGoBuildEnv(tt.environ, tt.callerModule)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("tinyGoBuildEnv() =\n  %q\nwant\n  %q", got, tt.want)
+			}
+		})
+	}
+}
