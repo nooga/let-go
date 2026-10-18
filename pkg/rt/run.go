@@ -152,7 +152,7 @@ func LoadProgramNamespaces(unit *bytecode.ExecUnit) error {
 		if chunk == nil {
 			continue
 		}
-		if err := runChunk(chunk); err != nil {
+		if err := runUnitChunk(unit, chunk); err != nil {
 			return fmt.Errorf("loading namespace %s: %w", name, err)
 		}
 		if ns := LookupNS(name); ns != nil {
@@ -180,7 +180,7 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 			return nil
 		}
 	}
-	if err := runChunk(unit.MainChunk); err != nil {
+	if err := runUnitChunk(unit, unit.MainChunk); err != nil {
 		return err
 	}
 	// The chunk's ns form entered the namespace it defines, so *ns* names it;
@@ -223,6 +223,12 @@ func InvokeProgramEntry(ec *vm.ExecContext, namespace, name string, args []vm.Va
 	}
 	_, err := ec.Invoke(fn, args)
 	return err
+}
+
+// runUnitChunk runs one of unit's chunks with the unit's TypeScope active, so
+// its defrecord and deftype forms adopt the types its constants decoded to.
+func runUnitChunk(unit *bytecode.ExecUnit, c *vm.CodeChunk) error {
+	return vm.WithTypeScope(unit.Types, func() error { return runChunk(c) })
 }
 
 func runChunk(c *vm.CodeChunk) error {

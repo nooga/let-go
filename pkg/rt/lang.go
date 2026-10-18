@@ -7240,6 +7240,7 @@ func CoreDissocBang(vs ...vm.Value) (vm.Value, error) {
 //lg:native
 //lg:name make-record-type
 func CoreMakeRecordType(vs ...vm.Value) (vm.Value, error) {
+	ns, vs := typeDefiningNS(vs)
 	if len(vs) < 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
@@ -7255,7 +7256,22 @@ func CoreMakeRecordType(vs ...vm.Value) (vm.Value, error) {
 		}
 		fields[i-1] = kw
 	}
-	return vm.NewRecordType(string(name), fields), nil
+	return vm.DefineRecordType(ns, string(name), fields), nil
+}
+
+// typeDefiningNS splits the optional leading namespace off make-record-type
+// and make-deftype arguments: (ns-name type-name & fields), both strings, as
+// defrecord and deftype emit, or (type-name & fields), which makes a type no
+// compiled constant can name.
+func typeDefiningNS(vs []vm.Value) (string, []vm.Value) {
+	if len(vs) >= 2 {
+		if ns, ok := vs[0].(vm.String); ok {
+			if _, ok := vs[1].(vm.String); ok {
+				return string(ns), vs[1:]
+			}
+		}
+	}
+	return "", vs
 }
 
 //lg:native
@@ -7288,6 +7304,7 @@ func CoreIsRecord(vs ...vm.Value) (vm.Value, error) {
 //lg:native
 //lg:name make-deftype
 func CoreMakeDType(vs ...vm.Value) (vm.Value, error) {
+	ns, vs := typeDefiningNS(vs)
 	if len(vs) < 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
@@ -7303,7 +7320,7 @@ func CoreMakeDType(vs ...vm.Value) (vm.Value, error) {
 		}
 		fields[i-1] = sym
 	}
-	return vm.NewDType(string(name), fields), nil
+	return vm.DefineDType(ns, string(name), fields), nil
 }
 
 //lg:native

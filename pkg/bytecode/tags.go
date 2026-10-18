@@ -75,6 +75,12 @@ const (
 	// compiled a bundle and the tree running it fails with a clear message
 	// instead of decoding shifted opcodes into undefined behavior.
 	CapOpcodeSet uint32 = 1 << 0
+	// CapTypedConstants: the constants include a record or deftype instance
+	// that names its type's defining namespace (TagRecordTypeNS, TagRecordNS,
+	// TagDTypeInstance). Set only on bundles that carry one, so an older
+	// runtime rejects such a bundle at the header instead of failing midway
+	// through the constants, and still loads every other bundle.
+	CapTypedConstants uint32 = 1 << 1
 )
 
 // Tag byte layout: 0bVV_TTTTTT
@@ -121,6 +127,9 @@ const (
 	TagIDRecord     byte = 0x31
 	TagIDRegex      byte = 0x32
 	TagIDAtom       byte = 0x33
+	// TagIDDTypeInstance is a deftype instance: its type's namespace, name
+	// and field symbols, then the field values.
+	TagIDDTypeInstance byte = 0x34
 )
 
 // Tag byte values (version 0). These are the actual bytes on the wire
@@ -150,6 +159,8 @@ const (
 	TagRecord     byte = TagIDRecord | TagVer0
 	TagRegex      byte = TagIDRegex | TagVer0
 	TagAtom       byte = TagIDAtom | TagVer0
+
+	TagDTypeInstance byte = TagIDDTypeInstance | TagVer0
 )
 
 // Versioned tag variants.
@@ -159,11 +170,29 @@ const (
 	// Older v2 readers reject the non-zero tag version instead of silently
 	// treating the compact representation as ordinary metadata.
 	TagDefMetaPairs byte = TagIDMap | TagVer1
+
+	// TagRecordTypeNS and TagRecordNS lead the version-0 payload with the
+	// defining namespace of a defrecord type, so the decoder resolves the
+	// constant to the live type (vm.ResolveRecordType) instead of making a
+	// new one. Older v2 readers reject the tag version.
+	TagRecordTypeNS byte = TagIDRecordType | TagVer1
+	TagRecordNS     byte = TagIDRecord | TagVer1
 )
 
-// Reserved tag IDs for future standard tags (0x34–0x3F).
+// tagVersionSupported reports whether this decoder reads version ver of the
+// known tag id.
+func tagVersionSupported(id, ver byte) bool {
+	switch ver {
+	case 0:
+		return true
+	case 1:
+		return id == TagIDMap || id == TagIDRecordType || id == TagIDRecord
+	}
+	return false
+}
+
+// Reserved tag IDs for future standard tags (0x35–0x3F).
 const (
-	TagIDReserved0  byte = 0x34
 	TagIDReserved1  byte = 0x35
 	TagIDReserved2  byte = 0x36
 	TagIDReserved3  byte = 0x37

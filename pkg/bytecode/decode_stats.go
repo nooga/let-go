@@ -146,6 +146,8 @@ func tagName(id byte) string {
 		return "regex"
 	case TagIDAtom:
 		return "atom"
+	case TagIDDTypeInstance:
+		return "deftype-instance"
 	default:
 		return fmt.Sprintf("0x%02x", id)
 	}

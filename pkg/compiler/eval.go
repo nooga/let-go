@@ -53,6 +53,15 @@ func PrecompiledNSChunk(name string) (*vm.CodeChunk, error) {
 	return precompiledCore.NSChunk(name)
 }
 
+// PrecompiledTypeScope returns the core bundle's TypeScope, to run one of its
+// namespace chunks under.
+func PrecompiledTypeScope() *vm.TypeScope {
+	if precompiledCore == nil {
+		return nil
+	}
+	return precompiledCore.Types
+}
+
 // evalInNSChild is the namespace-aware eval behind rt.SetEvalInNS (pod
 // client-side code). Pod evals are transient, so it compiles through a
 // per-call transient compiler; named rather than inline so the const-pool

@@ -13,6 +13,7 @@ import (
 // RecordType is a dynamically-created ValueType for a defrecord.
 // Each defrecord call creates a unique RecordType instance.
 type RecordType struct {
+	ns       string // defining namespace; empty for types no defrecord made
 	typeName string
 	fields   []Keyword       // ordered field names
 	fieldIdx map[Keyword]int // field name → index for O(1) access
@@ -31,6 +32,10 @@ func (t *RecordType) Type() ValueType   { return TypeType }
 func (t *RecordType) Unbox() any        { return t }
 func (t *RecordType) Name() string      { return t.typeName }
 func (t *RecordType) Fields() []Keyword { return t.fields }
+
+// NS returns the namespace whose defrecord made the type, or "" for a type
+// made outside defrecord.
+func (t *RecordType) NS() string { return t.ns }
 
 func (t *RecordType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
