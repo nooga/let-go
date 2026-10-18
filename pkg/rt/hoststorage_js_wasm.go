@@ -43,16 +43,18 @@ func (s *HostStorage) physicalKey(key string) string {
 	return s.prefix + key
 }
 
-// localStorage returns the page's localStorage, or an error where there is
-// none: a Web Worker, which is where lg -w runs the program (#1078). It is
-// checked rather than left to the recover in each method because TinyGo cannot
-// recover a syscall/js panic on wasm, so the call would trap the page.
+// localStorage returns the page's localStorage or, in the Web Worker where
+// lg -w runs the program, the host's _lgStorage bridge to it (#1078). Either
+// has the getItem/setItem/removeItem/key/length subset used here. With
+// neither, it returns an error rather than letting the call panic, because
+// TinyGo cannot recover a syscall/js panic on wasm and would trap the page.
 func localStorage(op string) (js.Value, error) {
-	ls := js.Global().Get("localStorage")
-	if ls.IsUndefined() || ls.IsNull() {
-		return js.Value{}, fmt.Errorf("%s: no localStorage here (a Web Worker has none)", op)
+	for _, name := range []string{"localStorage", "_lgStorage"} {
+		if ls := js.Global().Get(name); !ls.IsUndefined() && !ls.IsNull() {
+			return ls, nil
+		}
 	}
-	return ls, nil
+	return js.Value{}, fmt.Errorf("%s: no localStorage here", op)
 }
 
 func (s *HostStorage) Get(key string) (value string, ok bool, err error) {
