@@ -101,6 +101,12 @@ func TestTruncatedTaggedLiteralIsIncompleteThroughPublicAPIs(t *testing.T) {
 }
 
 func TestTruncatedRawGoFragmentIsIncompleteThroughPublicAPIs(t *testing.T) {
+	v := rt.NS(rt.NameCoreNS).Lookup(vm.Symbol("*data-readers*")).(*vm.Var)
+	old := v.Root()
+	if err := compiler.InstallDataReader("go", compiler.GoRawDataReader()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { v.SetRoot(old) })
 	for _, input := range []string{"#go", "#go{if ready {", "#go{s := `}`", "#go{x /"} {
 		t.Run(input, func(t *testing.T) {
 			_, err := compiler.NewLispReader(strings.NewReader(input), "fragment.lg").Read()

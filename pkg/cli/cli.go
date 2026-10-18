@@ -21,6 +21,7 @@ import (
 	"github.com/nooga/let-go/pkg/bundle"
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/compiler"
+
 	"github.com/nooga/let-go/pkg/gomod"
 	"github.com/nooga/let-go/pkg/nrepl"
 	"github.com/nooga/let-go/pkg/resolver"
