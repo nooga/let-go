@@ -1,0 +1,87 @@
+;; clojure.edn/read-string takes an opts map, as in Clojure: :readers (tag
+;; symbol -> fn of the form), :default (fn of tag and form) for any other
+;; tag, and :eof for what an empty input reads as. EDN reading never consults
+;; *data-readers* or *default-data-reader-fn*: only the built-in #inst and
+;; #uuid plus the opts. read-all-string takes the same :readers and :default.
+(ns test.edn-read-opts-test
+  (:require
+   [clojure.string :as s]
+   [edn]
+   [test :refer :all]))
+
+(defn- message-of [thunk]
+  (try (thunk) nil (catch e (ex-message e))))
+
+(defn- point [[x y]] {:x x :y y})
+
+(deftest readers-option
+  (is (= {:x 5 :y 6} (edn/read-string {:readers {'app/p point}} "#app/p [5 6]")))
+  (testing "readers nest"
+    (is (= [:a [:b 42]]
+           (edn/read-string {:readers {'my/a (fn [x] [:a x]) 'my/b (fn [x] [:b x])}}
+                            "#my/a #my/b 42"))))
+  (testing "a var entry is dereferenced"
+    (is (= 1 (edn/read-string {:readers {'app/id #'identity}} "#app/id 1"))))
+  (testing "a reader may return nil"
+    (is (nil? (edn/read-string {:readers {'app/n (fn [_] nil)}} "#app/n 1"))))
+  (testing ":readers overrides the built-in tags"
+    (is (= :o (edn/read-string {:readers {'inst (constantly :o)}} "#inst \"2020-01-01T00:00:00Z\"")))
+    (is (= :o (edn/read-string {:readers {'uuid (constantly :o)}} "#uuid \"00000000-0000-0000-0000-000000000001\""))))
+  (testing "an entry that is not callable throws"
+    (is (s/includes? (message-of #(edn/read-string {:readers {'app/x 5}} "#app/x 1"))
+                     "must be callable"))))
+
+(deftest default-option
+  (testing "receives the tag symbol and the unevaluated form"
+    (is (= [:d 'app/q '(+ 1 2)] (edn/read-string {:default (fn [t v] [:d t v])} "#app/q (+ 1 2)"))))
+  (testing ":readers wins over :default"
+    (is (= :r (edn/read-string {:readers {'a/b (fn [_] :r)} :default (fn [_ _] :d)} "#a/b 1"))))
+  (testing "the built-in tags don't reach :default"
+    (is (inst? (edn/read-string {:default (fn [_ _] :d)} "#inst \"2020-01-01T00:00:00Z\""))))
+  (testing ":default may return nil"
+    (is (nil? (edn/read-string {:default (fn [_ _] nil)} "#app/q 1"))))
+  (testing "tagged-literal is the usual default"
+    (let [t (edn/read-string {:default tagged-literal} "#a/b [1 2]")]
+      (is (tagged-literal? t))
+      (is (= "#a/b [1 2]" (pr-str t))))))
+
+(deftest unknown-tags-throw
+  (is (s/includes? (message-of #(edn/read-string "#foo 1")) "No reader function for tag foo"))
+  (is (s/includes? (message-of #(edn/read-string {} "#app/q 9")) "No reader function for tag app/q"))
+  (testing "EDN ignores *data-readers* and *default-data-reader-fn*"
+    (is (s/includes? (message-of #(binding [*data-readers* {'app/p point}]
+                                    (edn/read-string "#app/p [5 6]")))
+                     "No reader function for tag app/p"))
+    (is (s/includes? (message-of #(binding [*default-data-reader-fn* (fn [t v] [:d t v])]
+                                    (edn/read-string "#app/p [5 6]")))
+                     "No reader function for tag app/p"))))
+
+(deftest eof-option
+  (is (= :done (edn/read-string {:eof :done} "")))
+  (is (= :done (edn/read-string {:eof :done} "  , \n")))
+  (is (= :done (edn/read-string {:eof :done} ";just a comment\n")))
+  (is (= :done (edn/read-string {:eof :done} "#_ 1")))
+  (is (nil? (edn/read-string {:eof nil} "")))
+  (is (= 42 (edn/read-string {:eof :done} "42 43")))
+  (testing "without :eof an empty input throws"
+    (is (s/includes? (message-of #(edn/read-string {} "")) "EOF"))
+    (is (s/includes? (message-of #(edn/read-string {} " ")) "EOF"))
+    (is (s/includes? (message-of #(edn/read-string {} ";c\n")) "EOF")))
+  (testing "EOF inside a form throws even with :eof"
+    (is (s/includes? (message-of #(edn/read-string {:eof :done} "[1")) "EOF")))
+  (testing "the one-argument form reads an empty input as nil"
+    (is (nil? (edn/read-string "")))
+    (is (nil? (edn/read-string " ")))
+    (is (nil? (edn/read-string "#_ 1")))
+    (is (= 1 (edn/read-string ";c\n1")))))
+
+(deftest nil-input
+  (is (nil? (edn/read-string nil)))
+  (is (nil? (edn/read-string {:eof :done} nil))))
+
+(deftest read-all-string-options
+  (is (= [1 {:x 1 :y 2}] (edn/read-all-string {:readers {'app/p point}} "1 #app/p [1 2]")))
+  (is (= [[:d 'app/q 1] 2] (edn/read-all-string {:default (fn [t v] [:d t v])} "#app/q 1 2")))
+  (is (= [] (edn/read-all-string {} "")))
+  (is (= [1 2] (edn/read-all-string "1 2")))
+  (is (s/includes? (message-of #(edn/read-all-string "1 #foo 2")) "No reader function for tag foo")))
