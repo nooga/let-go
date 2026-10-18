@@ -42,11 +42,9 @@ func SplitTopLevelForms(src, inputName string) ([]TopLevelForm, error) {
 		startLine := r.line
 		startCol := r.column
 
+		// An EOF here is inside an unfinished form, so it is a syntax error.
 		form, err := r.Read()
 		if err != nil {
-			if isErrorEOF(err) {
-				return out, nil
-			}
 			return nil, err
 		}
 		if form.Type() == vm.VoidType {
