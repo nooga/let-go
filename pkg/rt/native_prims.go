@@ -85,7 +85,11 @@ func Escape(s vm.Value, cmap vm.Value) (vm.Value, error) {
 	case vm.Fn:
 		lookup = func(c vm.Char) (vm.Value, error) { return m.Invoke([]vm.Value{c}) }
 	default:
-		return vm.NIL, fmt.Errorf("escape expected a map or a function, got %s", cmap.Type().Name())
+		// Fail on the first lookup, not up front: Clojure never calls cmap on
+		// an empty string, so (escape "" nil) returns "".
+		lookup = func(vm.Char) (vm.Value, error) {
+			return vm.NIL, fmt.Errorf("escape expected a map or a function, got %s", cmap.Type().Name())
+		}
 	}
 	src := string(str)
 	var b strings.Builder

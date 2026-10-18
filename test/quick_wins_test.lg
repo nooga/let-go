@@ -648,12 +648,19 @@
     (is (= "a1Z" (s/escape "abc" {\b 1 \c \Z}))))
   (testing "multi-byte characters"
     (is (= "hello->" (s/escape "héllo→" {\é "e" \→ "->"}))))
+  (testing "a fn cmap gets an astral character as one code point"
+    ;; Clojure would pass the two UTF-16 halves of U+1F600 separately.
+    (is (= "a128512b" (s/escape "a😀b" (fn [c] (when (> (int c) 0xFFFF) (str (int c))))))))
   (testing "nothing to replace returns the string unchanged"
     (is (= "clean" (s/escape "clean" {\< "&lt;"})))
     (is (= "" (s/escape "" {\< "&lt;"}))))
   (testing "a non-string or a cmap that is neither map nor fn throws"
     (is (thrown? Exception (s/escape nil {\< "&lt;"})))
-    (is (thrown? Exception (s/escape "x" 5)))))
+    (is (thrown? Exception (s/escape "x" 5)))
+    (is (thrown? Exception (s/escape "x" nil))))
+  (testing "an empty string never looks up cmap, so any cmap returns empty"
+    (is (= "" (s/escape "" nil)))
+    (is (= "" (s/escape "" 5)))))
 
 (deftest string-re-quote-replacement-test
   (testing "string/re-quote-replacement is identity (Go regex)"
