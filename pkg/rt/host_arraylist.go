@@ -197,7 +197,7 @@ func installHostArrayList(ns *vm.Namespace) {
 
 	listArg := func(name string, vs []vm.Value) (*hostArrayList, error) {
 		if len(vs) != 1 {
-			return nil, fmt.Errorf("Collections/%s expects 1 arg", name)
+			return nil, fmt.Errorf("expected 1 arg for Collections/%s", name)
 		}
 		l, ok := vs[0].(*hostArrayList)
 		if !ok {

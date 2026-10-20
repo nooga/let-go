@@ -20,7 +20,7 @@ func installCharacterStatics(ns *vm.Namespace) {
 	predicate := func(name string, pred func(rune) bool) {
 		ns.Def(name, mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 1 {
-				return vm.NIL, fmt.Errorf("Character/%s expects 1 arg", name)
+				return vm.NIL, fmt.Errorf("expected 1 arg for Character/%s", name)
 			}
 			r, _, err := characterArg(name, vs[0])
 			if err != nil {
@@ -39,7 +39,7 @@ func installCharacterStatics(ns *vm.Namespace) {
 	caseMap := func(name string, to func(rune) rune) {
 		ns.Def(name, mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 1 {
-				return vm.NIL, fmt.Errorf("Character/%s expects 1 arg", name)
+				return vm.NIL, fmt.Errorf("expected 1 arg for Character/%s", name)
 			}
 			r, isChar, err := characterArg(name, vs[0])
 			if err != nil {
@@ -56,7 +56,7 @@ func installCharacterStatics(ns *vm.Namespace) {
 
 	ns.Def("digit", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("Character/digit expects 2 args")
+			return vm.NIL, fmt.Errorf("expected 2 args for Character/digit")
 		}
 		r, _, err := characterArg("digit", vs[0])
 		if err != nil {
@@ -64,7 +64,7 @@ func installCharacterStatics(ns *vm.Namespace) {
 		}
 		radix, ok := vm.ToInt64(vs[1])
 		if !ok {
-			return vm.NIL, fmt.Errorf("Character/digit radix must be an integer, got %s", vs[1].Type().Name())
+			return vm.NIL, fmt.Errorf("expected an integer radix for Character/digit, got %s", vs[1].Type().Name())
 		}
 		return vm.MakeInt(characterDigit(r, int(radix))), nil
 	}))
@@ -78,7 +78,7 @@ func characterArg(name string, v vm.Value) (rune, bool, error) {
 	if cp, ok := vm.ToInt64(v); ok {
 		return rune(cp), false, nil
 	}
-	return 0, false, fmt.Errorf("Character/%s expected character or code point, got %s", name, v.Type().Name())
+	return 0, false, fmt.Errorf("expected a character or code point for Character/%s, got %s", name, v.Type().Name())
 }
 
 // characterDigit is java.lang.Character/digit: the value of r as a digit in

@@ -241,11 +241,11 @@ func installJVMStatics(ns *vm.Namespace) {
 	// splice for a \E inside the quoted text.
 	patternQuote := mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("Pattern/quote expects 1 arg")
+			return vm.NIL, fmt.Errorf("expected 1 arg for Pattern/quote")
 		}
 		s, ok := vs[0].(vm.String)
 		if !ok {
-			return vm.NIL, fmt.Errorf("Pattern/quote expects a string, got %s", vs[0].Type().Name())
+			return vm.NIL, fmt.Errorf("expected a string for Pattern/quote, got %s", vs[0].Type().Name())
 		}
 		return vm.String(`\Q` + strings.ReplaceAll(string(s), `\E`, `\E\\E\Q`) + `\E`), nil
 	})
