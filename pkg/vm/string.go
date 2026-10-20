@@ -8,6 +8,7 @@ package vm
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -242,6 +243,52 @@ func (l String) InvokeMethod(name Symbol, args []Value) (Value, error) {
 		if len(args) == 0 {
 			return String(strings.TrimSpace(string(l))), nil
 		}
+	case "strip":
+		if len(args) == 0 {
+			return String(strings.TrimFunc(string(l), JavaIsWhitespace)), nil
+		}
+	case "stripLeading":
+		if len(args) == 0 {
+			return String(strings.TrimLeftFunc(string(l), JavaIsWhitespace)), nil
+		}
+	case "stripTrailing":
+		if len(args) == 0 {
+			return String(strings.TrimRightFunc(string(l), JavaIsWhitespace)), nil
+		}
+	case "isBlank":
+		if len(args) == 0 {
+			return Boolean(strings.IndexFunc(string(l), func(r rune) bool { return !JavaIsWhitespace(r) }) < 0), nil
+		}
+	case "lastIndexOf":
+		if len(args) == 1 || len(args) == 2 {
+			return l.lastIndexOf(args)
+		}
+	case "codePoints":
+		if len(args) == 0 {
+			cps := make(CodePointStream, 0, len(l))
+			for _, r := range string(l) {
+				cps = append(cps, int64(r))
+			}
+			return cps, nil
+		}
+	case "codePointCount":
+		if len(args) == 2 {
+			begin, ok1 := args[0].(Int)
+			end, ok2 := args[1].(Int)
+			if !ok1 || !ok2 {
+				return NIL, fmt.Errorf("string.codePointCount indices must be ints")
+			}
+			// Indices are rune indices already, so the count is the span.
+			n := utf8.RuneCountInString(string(l))
+			if begin < 0 || int(end) > n || begin > end {
+				return NIL, fmt.Errorf("string.codePointCount: range [%d, %d) out of bounds for length %d", int(begin), int(end), n)
+			}
+			return end - begin, nil
+		}
+	case "split":
+		if len(args) == 1 || len(args) == 2 {
+			return l.split(args)
+		}
 	default:
 		return NIL, fmt.Errorf("method %s not found on string", name)
 	}
@@ -362,4 +409,82 @@ func (l String) String() string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// lastIndexOf is java.lang.String.lastIndexOf over rune indices: the needle is
+// a string, a character or a code point, and the optional fromIndex is the
+// last index a match may start at.
+func (l String) lastIndexOf(args []Value) (Value, error) {
+	var needle []rune
+	switch a := args[0].(type) {
+	case String:
+		needle = []rune(string(a))
+	case Char:
+		needle = []rune{rune(a)}
+	case Int:
+		needle = []rune{rune(a)}
+	default:
+		return NIL, fmt.Errorf("string.lastIndexOf expected a string or character, got %s", args[0].Type().Name())
+	}
+	hay := []rune(string(l))
+	from := len(hay) - len(needle)
+	if len(args) == 2 {
+		f, ok := args[1].(Int)
+		if !ok {
+			return NIL, fmt.Errorf("string.lastIndexOf fromIndex must be an int, got %s", args[1].Type().Name())
+		}
+		from = min(from, int(f))
+	}
+	for i := from; i >= 0; i-- {
+		if string(hay[i:i+len(needle)]) == string(needle) {
+			return Int(i), nil
+		}
+	}
+	return Int(-1), nil
+}
+
+// split is java.lang.String.split: the separator is a regex, a positive
+// limit caps the number of parts, zero drops trailing empty strings, and a
+// negative limit keeps them. A zero-width match at index 0 yields no leading
+// empty string. It returns an array, as the JVM's String[] is one.
+func (l String) split(args []Value) (Value, error) {
+	pat, ok := args[0].(String)
+	if !ok {
+		return NIL, fmt.Errorf("string.split expected a regex string, got %s", args[0].Type().Name())
+	}
+	limit := 0
+	if len(args) == 2 {
+		n, ok := args[1].(Int)
+		if !ok {
+			return NIL, fmt.Errorf("string.split limit must be an int, got %s", args[1].Type().Name())
+		}
+		limit = int(n)
+	}
+	re, err := regexp.Compile(string(pat))
+	if err != nil {
+		return NIL, fmt.Errorf("string.split: %w", err)
+	}
+	str := string(l)
+	if str == "" {
+		return NewObjectArrayFrom([]Value{String("")}), nil
+	}
+	var parts []Value
+	start := 0
+	for _, m := range re.FindAllStringIndex(str, -1) {
+		if limit > 0 && len(parts) == limit-1 {
+			break
+		}
+		if m[1] == 0 {
+			continue // a zero-width match at the start splits nothing off
+		}
+		parts = append(parts, String(str[start:m[0]]))
+		start = m[1]
+	}
+	parts = append(parts, String(str[start:]))
+	if limit == 0 {
+		for len(parts) > 0 && parts[len(parts)-1] == String("") {
+			parts = parts[:len(parts)-1]
+		}
+	}
+	return NewObjectArrayFrom(parts), nil
 }

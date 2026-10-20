@@ -46,6 +46,8 @@ func installTermNS() {
 
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
+	// term/flush is the same flush as clojure.core/flush.
+	ns.Exclude("flush")
 
 	// raw-mode! — no-op in WASM (xterm.js is always raw)
 	rawMode, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -291,18 +293,24 @@ func installTermNS() {
 	// the empty screen buffer. The default-root *out* wraps os.Stdout, whose
 	// Sync() is a no-op in wasm, so _lgFlush stays the real screen flush.
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
-			if err := h.Sync(); err != nil {
-				return vm.NIL, err
-			}
-		}
-		flush := js.Global().Get("_lgFlush")
-		if !flush.IsUndefined() {
-			flush.Invoke()
-		}
-		return vm.NIL, nil
+		return vm.NIL, flushOut(ec)
 	})
 	ns.Def("flush", flushFn)
 
 	RegisterNS(ns)
+}
+
+// flushOut syncs the active *out* binding; term/flush and clojure.core/flush
+// share it.
+func flushOut(ec *vm.ExecContext) error {
+	if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+		if err := h.Sync(); err != nil {
+			return err
+		}
+	}
+	flush := js.Global().Get("_lgFlush")
+	if !flush.IsUndefined() {
+		flush.Invoke()
+	}
+	return nil
 }

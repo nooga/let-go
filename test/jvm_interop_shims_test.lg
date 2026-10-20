@@ -1,0 +1,140 @@
+(ns test.jvm-interop-shims-test
+  (:require [test :refer :all])
+  (:import [java.util ArrayList Collections]))
+
+;; JVM interop a Clojure runtime written for the JVM reaches for (niva's
+;; niva.core is the motivating case). Each assertion is what the JVM returns.
+
+(deftest number-parses
+  (testing "parseLong and parseInt take a radix"
+    (is (= 255 (Long/parseLong "ff" 16)))
+    (is (= -5 (Long/parseLong "-101" 2)))
+    (is (= 5 (Long/parseLong "+101" 2)))
+    (is (= 2147483647 (Integer/parseInt "7fffffff" 16)))
+    (is (= 42 (Long/parseLong "42"))))
+
+  (testing "a bad number throws NumberFormatException"
+    (is (= "For input string: \"zz\" under radix 16"
+           (try (Long/parseLong "zz" 16) (catch NumberFormatException e (ex-message e)))))
+    (is (= :nfe (try (Integer/parseInt "80000000" 16) (catch NumberFormatException _ :nfe))))
+    (is (= :nfe (try (Long/parseLong "1" 37) (catch NumberFormatException _ :nfe))))
+    (is (= "For input string: \"x\""
+           (try (Double/parseDouble "x") (catch NumberFormatException e (ex-message e)))))
+    (is (= :iae (try (Float/parseFloat "x") (catch IllegalArgumentException _ :iae))))))
+
+(deftest boolean-to-string
+  (is (= ["true" "false"] [(Boolean/toString true) (Boolean/toString false)])))
+
+(deftest character-statics
+  (testing "predicates take a char or an int code point"
+    (is (Character/isLetter \a))
+    (is (Character/isLetter (int \é)))
+    (is (not (Character/isLetterOrDigit \-)))
+    (is (Character/isLetterOrDigit \7))
+    (is (Character/isLowerCase \a))
+    (is (Character/isUpperCase 65))
+    (is (Character/isWhitespace \space))
+    (is (Character/isWhitespace 0x2028))
+    (is (not (Character/isWhitespace 0xA0)) "non-breaking space is not whitespace"))
+
+  (testing "case mappings return the kind they were given"
+    (is (= \a (Character/toLowerCase \A)))
+    (is (= 233 (Character/toLowerCase 201)))
+    (is (= \A (Character/toUpperCase \a)))
+    (is (= 65 (Character/toUpperCase 97))))
+
+  (testing "digit"
+    (is (= [7 15 15 -1 -1] [(Character/digit \7 10) (Character/digit \f 16)
+                            (Character/digit \F 16) (Character/digit \g 16)
+                            (Character/digit \5 1)]))
+    (is (= 3 (Character/digit (int \٣) 10)) "Arabic-Indic three")
+    (is (= 1 (Character/digit 0x1D7D9 10)) "mathematical double-struck one")))
+
+(deftest system-set-property
+  (is (nil? (System/setProperty "let-go.test.shim" "1")))
+  (is (= "1" (System/getProperty "let-go.test.shim")))
+  (is (= "1" (System/setProperty "let-go.test.shim" "2")))
+  (is (= "2" (get (System/getProperties) "let-go.test.shim"))))
+
+(deftest pattern-quote
+  (is (= "\\Qa.b\\E" (java.util.regex.Pattern/quote "a.b")))
+  (is (= "a.b" (re-find (re-pattern (Pattern/quote "a.b")) "xa.by")))
+  (is (nil? (re-find (re-pattern (Pattern/quote "a.b")) "axb")))
+  (is (= ["a" "c"] (vec (.split "a\\Ec" (Pattern/quote "\\E"))))))
+
+(deftest iatom-instance
+  (is (instance? clojure.lang.IAtom (atom 1)))
+  (is (not (instance? clojure.lang.IAtom 1))))
+
+(deftest core-flush
+  (is (= "x" (with-out-str (print "x") (flush)))))
+
+(deftest string-methods
+  (testing "lastIndexOf"
+    (is (= [3 3 1 -1 2 3 -1]
+           [(.lastIndexOf "a.b.c" ".") (.lastIndexOf "a.b.c" \.) (.lastIndexOf "a.b.c" "." 2)
+            (.lastIndexOf "abc" "z") (.lastIndexOf "héé" "é") (.lastIndexOf "abc" "")
+            (.lastIndexOf "abc" "a" -1)])))
+
+  (testing "code points"
+    (is (= [104 233 108 108 111 128512] (vec (.toArray (.codePoints "héllo😀")))))
+    (is (= 2 (.count (.codePoints "a😀"))))
+    (is (= 6 (.codePointCount "héllo😀" 0 6))))
+
+  (testing "strip and isBlank use Character/isWhitespace"
+    (is (= ["a" "a " " a"] [(.strip " \t a \n") (.stripLeading "  a ") (.stripTrailing " a  ")]))
+    (is (= " a" (.strip " a ")))
+    (is (= [true false true] [(.isBlank " \t") (.isBlank " a") (.isBlank "")])))
+
+  (testing "split takes a regex and a limit"
+    (is (= ["a" "b" "" "c"] (vec (.split "a,b,,c,," ","))))
+    (is (= ["a" "b" "" "c" "" ""] (vec (.split "a,b,,c,," "," -1))))
+    (is (= ["a" "b,c"] (vec (.split "a,b,c" "," 2))))
+    (is (= ["" "a"] (vec (.split ",a" ","))))
+    (is (= ["a" "b" "c"] (vec (.split "abc" ""))))
+    (is (= ["a" "b" "c" ""] (vec (.split "abc" "" -1))))
+    (is (= [""] (vec (.split "" ","))))
+    (is (= ["a" "b" "c"] (vec (.split "a1b22c" "\\d+"))))))
+
+(deftest string-builder
+  (let [b (StringBuilder. "héllo")]
+    (.appendCodePoint b 128512)
+    (is (= "héllo😀" (.toString b)))
+    (.setLength b 3)
+    (is (= "hél" (.toString b)))
+    (.setLength b 5)
+    (is (= "hél\u0000\u0000" (.toString b)))))
+
+(deftest array-list
+  (testing "a mutable list that vec, seq and count read"
+    (let [l (ArrayList. [1 2 3])]
+      (is (true? (.add l 4)))
+      (.add l 0 0)
+      (is (= [0 1 2 3 4] (vec l)))
+      (is (= 5 (count l) (.size l)))
+      (is (= 2 (.get l 2)))
+      (is (= 0 (.set l 0 :z)))
+      (is (= "[:z, 1, 2, 3, 4]" (str l)))
+      (is (.contains l 3))
+      (is (= -1 (.indexOf l 9)))
+      (is (instance? java.util.ArrayList l))
+      (.clear l)
+      (is (.isEmpty l))
+      (is (nil? (seq l)))))
+
+  (testing "capacity and copy constructors"
+    (is (= [] (vec (java.util.ArrayList. 10))))
+    (is (= [0 1 2] (vec (doto (ArrayList.) (.addAll (range 3)))))))
+
+  (testing "out of range index throws IndexOutOfBoundsException"
+    (is (= "Index 0 out of bounds for length 0"
+           (try (.get (ArrayList.) 0) (catch IndexOutOfBoundsException e (ex-message e)))))))
+
+(deftest collections-statics
+  (let [l (ArrayList. (range 50))]
+    (Collections/shuffle l)
+    (is (= (range 50) (sort (vec l))))
+    (is (not= (range 50) (vec l))))
+  (is (= [3 2 1] (vec (doto (ArrayList. [1 2 3]) (java.util.Collections/reverse)))))
+  (is (= :uoe (try (Collections/shuffle [1 2]) (catch UnsupportedOperationException _ :uoe)))
+      "persistent collections are immutable"))

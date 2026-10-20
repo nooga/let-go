@@ -8,6 +8,7 @@ package rt
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -71,6 +72,32 @@ func (s *hostStringBuilder) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Va
 		if len(args) == 0 {
 			// Rune count, matching the string host methods' index space.
 			return vm.Int(utf8.RuneCountInString(s.b.String())), nil
+		}
+	case "appendCodePoint":
+		if len(args) == 1 {
+			cp, ok := vm.ToInt64(args[0])
+			if !ok || cp < 0 || cp > unicode.MaxRune {
+				return vm.NIL, fmt.Errorf("StringBuilder.appendCodePoint: invalid code point %s", args[0])
+			}
+			s.b.WriteRune(rune(cp))
+			return s, nil
+		}
+	case "setLength":
+		if len(args) == 1 {
+			n, ok := vm.ToInt64(args[0])
+			if !ok || n < 0 {
+				return vm.NIL, fmt.Errorf("StringBuilder.setLength: invalid length %s", args[0])
+			}
+			// Truncate to n runes, or pad with NUL as Java does.
+			runes := []rune(s.b.String())
+			if int(n) <= len(runes) {
+				runes = runes[:n]
+			} else {
+				runes = append(runes, make([]rune, int(n)-len(runes))...)
+			}
+			s.b.Reset()
+			s.b.WriteString(string(runes))
+			return vm.NIL, nil
 		}
 	}
 	return vm.NIL, fmt.Errorf("java.lang.StringBuilder has no method .%s/%d", name, len(args))
