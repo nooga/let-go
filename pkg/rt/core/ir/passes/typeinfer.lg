@@ -83,6 +83,25 @@
 ;; the hint is authoritative and the boundary coerces.
 (def ^:dynamic *declared-return-types* nil)
 
+(defn self-callee?
+  "True when a call of `callee` with `n-args` arguments re-enters the fn being
+   inferred: it loads that fn's var, the one its name resolves to in the
+   namespace being compiled, and lands on the same arity. A same-named fn of
+   another namespace is not a self-call (a wrapper like `(defn conj [a b]
+   (core/conj a b))`), nor is one arity of a multi-arity defn calling another;
+   f is a single arity, so a variadic f is left out rather than matched against
+   its rest arity. Vars are compared, not namespace names: core's resolve to
+   `clojure.core/…` while the namespace is named `core`."
+  [callee n-args f]
+  (and (= :load-var (ir/op callee f))
+       (not (ir/fn-variadic? f))
+       (= n-args (ir/fn-arity f))
+       (let [sym   (symbol (ir/aux callee f))
+             fname (str (ir/fn-name f))]
+         (and (= (name sym) fname)
+              (let [own (resolve (symbol fname))]
+                (and (some? own) (= own (resolve sym))))))))
+
 (defn- call-declared-type
   "If a :call inst is a SELF-call to the fn being inferred and that fn declared
    a return type, return it; otherwise nil."
@@ -91,10 +110,8 @@
     (let [refs (ir/refs inst f)]
       (when (seq refs)
         (let [callee (first refs)]
-          (when (= :load-var (ir/op callee f))
-            (let [callee-name (name (symbol (ir/aux callee f)))]
-              (when (= callee-name (str (ir/fn-name f)))
-                (get *declared-return-types* callee-name)))))))))
+          (when (self-callee? callee (dec (count refs)) f)
+            (get *declared-return-types* (str (ir/fn-name f)))))))))
 
 (defn- load-var-ns+name [nid f]
   (when (= :load-var (ir/op nid f))
@@ -219,7 +236,7 @@
 ;; ir.ops: the reified op-types' infer facets (NumericOp/QuotOp/DivOp)
 ;; consume them there.
 
-(defn- truthy-type? [t]
+(defn truthy-type? [t]
   (let [t (normalize-type t)]
     (cond
       (= t :true) true
@@ -234,7 +251,7 @@
       (union-type? t) (every? truthy-type? (rest t))
       :else false)))
 
-(defn- falsey-type? [t]
+(defn falsey-type? [t]
   (let [t (normalize-type t)]
     (cond
       (= t :nil) true

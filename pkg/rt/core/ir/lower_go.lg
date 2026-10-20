@@ -4198,6 +4198,13 @@
                    (= 1 (count (distinct specs))))
           (first specs))))))
 
+(defn returns-as?
+  "True when f's lowered Go return type is the one lattice type t lowers to —
+   what a caller typing f's result as t assumes."
+  [f t]
+  (let [s (go-type-spec t)]
+    (and (some? s) (= s (function-return-spec f)))))
+
 (defn- result-node [f]
   (let [ret-ids (return-ref-ids f)]
     (when (and ret-ids (pos? (count ret-ids)))

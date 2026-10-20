@@ -1,0 +1,208 @@
+;; Branch folding — CFG simplification for tests whose outcome is known.
+;;
+;; build-if emits a :branch-if for every `if`, including the ones macros leave
+;; with a constant test: `cond`'s `:else` arm becomes (if :else x nil), `when`
+;; on a literal, a test constfold reduced to true/false. Typeinfer narrows the
+;; tested value along each edge but never treats an edge as dead, so the arm
+;; that cannot run still feeds the join. For `cond … :else` that arm is a
+;; constant nil, and the join's type, and with it the fn's return type, picks
+;; up nil: fib's return stays boxed and its `+` stays generic.
+;;
+;; Three steps, in order:
+;;   1. fold   — a :branch-if whose test is a constant, or whose inferred type
+;;               is always truthy or always falsey, becomes a :branch to the arm
+;;               that runs. The test inst stays; DCE drops it if it is pure.
+;;   2. prune  — blocks unreachable from the entry lose their insts, params and
+;;               terminator, and the edges they sent leave their successors'
+;;               :preds. A pruned inst that a reachable inst still references
+;;               is kept rather than tombstoned (it can only be a re-emittable
+;;               load; see check-no-cross-block-refs!).
+;;   3. merge  — a block J whose only predecessor P reaches it by an
+;;               unconditional :branch is spliced onto P: J's params become
+;;               P's edge args, J's insts and terminator move to P. Skipped
+;;               when a param of J is referenced outside J (block-args may be
+;;               referenced across blocks; the edge arg it would become may not).
+;;
+;; Returns true when it changed f. Callers that keep types must re-infer them
+;; afterwards (see ir.passes.pipeline/branchfold-retyped): removing an edge can
+;; only narrow a join, and typeinfer's facts only widen from their seed.
+
+(ns ir.passes.branchfold
+  (:require
+   [ir.data :refer [detach-block! remove-block-pred!]]
+   [ir.passes.typeinfer :as ti]))
+
+;; --- CFG helpers ------------------------------------------------------
+
+(defn- term-targets [f term]
+  "Branch targets of terminator inst `term`, one per edge."
+  (let [o (ir/op term f) a (ir/aux term f)]
+    (cond
+      (= o :branch)    [a]
+      (= o :branch-if) [(ir/cond-target-true a) (ir/cond-target-false a)]
+      :else            [])))
+
+(defn- successors [f bid]
+  (let [term (ir/block-term bid f)]
+    (if term
+      (mapv ir/branch-target-target (term-targets f term))
+      [])))
+
+(defn- reachable-blocks [f]
+  (loop [work [(ir/entry-block f)] seen #{}]
+    (if (empty? work)
+      seen
+      (let [b (peek work) work (pop work)]
+        (if (contains? seen b)
+          (recur work seen)
+          (recur (into work (successors f b)) (conj seen b)))))))
+
+;; --- 1. fold ----------------------------------------------------------
+
+(defn- known-truth
+  "true / false when the branch-if test `nid` always has that truthiness, else
+   nil. A constant is read directly; anything else goes by its inferred type."
+  [f nid]
+  (if (= :const (ir/op nid f))
+    (let [v (ir/aux nid f)]
+      (not (or (nil? v) (false? v))))
+    (let [t (ir/type-of nid f)]
+      (cond
+        (ti/truthy-type? t) true
+        (ti/falsey-type? t) false
+        :else               nil))))
+
+(defn- fold-branch! [f bid]
+  "Rewrite bid's :branch-if to a :branch when its test is known. Returns true
+   when it did."
+  (let [term (ir/block-term bid f)]
+    (when (and term (= :branch-if (ir/op term f)))
+      (let [truth (known-truth f (first (ir/refs term f)))]
+        (when-not (nil? truth)
+          (let [a    (ir/aux term f)
+                kept (if truth (ir/cond-target-true a) (ir/cond-target-false a))
+                gone (if truth (ir/cond-target-false a) (ir/cond-target-true a))]
+            (ir/replace-op! f term :branch)
+            (ir/set-refs! f term [])
+            (ir/set-aux! f term kept)
+            ;; Both arms into one block: drop the edge only if it is listed per
+            ;; edge, so the surviving edge keeps its pred entry.
+            (let [g (ir/branch-target-target gone)]
+              (when (or (not= g (ir/branch-target-target kept))
+                        (< 1 (count (filter (fn [p] (= p bid)) (ir/block-preds g f)))))
+                (remove-block-pred! f g bid)))
+            true))))))
+
+;; --- 2. prune ---------------------------------------------------------
+
+(defn- live-use?
+  "True when some user of nid is a live inst outside the `dead` nid set."
+  [f nid dead]
+  (let [found (atom false)]
+    (ir/uses-for-each (nth (ir/uses f) nid)
+                      (fn [u]
+                        (when (and (not (contains? dead u))
+                                   (not= :invalid (ir/op u f)))
+                          (reset! found true))))
+    @found))
+
+(defn- prune-unreachable! [f]
+  "Detach every block the entry cannot reach. Returns true when one was
+   detached."
+  (let [live  (reachable-blocks f)
+        doomed (filterv (fn [b]
+                          (and (not (contains? live b))
+                               (or (ir/block-term b f)
+                                   (seq (ir/block-insts b f))
+                                   (seq (ir/block-params b f))
+                                   (seq (ir/block-preds b f)))))
+                        (ir/blocks f))]
+    (when (seq doomed)
+      (let [dead (set (mapcat (fn [b]
+                                (let [t (ir/block-term b f)]
+                                  (if t
+                                    (conj (vec (ir/block-insts b f)) t)
+                                    (ir/block-insts b f))))
+                              doomed))]
+        (doseq [b doomed]
+          (doseq [s (successors f b)]
+            (when (contains? live s)
+              (remove-block-pred! f s b))))
+        (doseq [b doomed]
+          (doseq [nid (vec (ir/block-insts b f))]
+            (when-not (live-use? f nid dead)
+              (ir/remove-inst! f b nid)))
+          (when-let [t (ir/block-term b f)]
+            (ir/remove-inst! f b t))
+          (detach-block! f b)))
+      true)))
+
+;; --- 3. merge ---------------------------------------------------------
+
+(defn- params-local? [f bid]
+  "True when every use of bid's params is inside bid (its terminator included)."
+  (every? (fn [p]
+            (let [ok (atom true)]
+              (ir/uses-for-each (nth (ir/uses f) p)
+                                (fn [u]
+                                  (when (not= bid (ir/block-of u f))
+                                    (reset! ok false))))
+              @ok))
+          (ir/block-params bid f)))
+
+(defn- mergeable-pred [f bid]
+  "bid's sole predecessor, when it reaches bid by an unconditional :branch and
+   the two can be spliced; else nil."
+  (let [preds (ir/block-preds bid f)]
+    (when (and (not= bid (ir/entry-block f))
+               (= 1 (count preds)))
+      (let [p    (first preds)
+            term (ir/block-term p f)]
+        (when (and (not= p bid)
+                   term
+                   (= :branch (ir/op term f))
+                   (= bid (ir/branch-target-target (ir/aux term f)))
+                   (ir/block-term bid f)
+                   (params-local? f bid))
+          p)))))
+
+(defn- merge-into-pred! [f bid p]
+  (let [branch (ir/block-term p f)
+        args   (ir/branch-target-args (ir/aux branch f))
+        params (vec (ir/block-params bid f))]
+    (doseq [i (range (count params))]
+      (ir/replace-all-uses! f (nth params i) (nth args i)))
+    (doseq [prm params]
+      (ir/remove-inst! f bid prm))
+    (ir/remove-inst! f p branch)
+    (doseq [nid (vec (ir/block-insts bid f))]
+      (ir/move-inst! f nid p))
+    (ir/reparent-terminator! f bid p)
+    (doseq [s (successors f p)]
+      (ir/replace-block-pred! f s bid p))
+    (detach-block! f bid)
+    (ir/invalidate-uses! f)))
+
+(defn- merge-chains! [f]
+  "Splice single-predecessor blocks onto their predecessor until none is left.
+   Returns true when one was spliced."
+  (loop [changed false]
+    (let [hit (some (fn [b] (when-let [p (mergeable-pred f b)] [b p]))
+                    (ir/blocks f))]
+      (if hit
+        (do (merge-into-pred! f (nth hit 0) (nth hit 1))
+            (recur true))
+        changed))))
+
+;; --- driver -----------------------------------------------------------
+
+(defn branchfold [f]
+  "Fold known branch-if tests, prune what that leaves unreachable, splice
+   straight-line chains. Returns true when f changed."
+  (let [folded (reduce (fn [acc b] (or (fold-branch! f b) acc))
+                       false (ir/blocks f))]
+    (if folded
+      (do (prune-unreachable! f)
+          (merge-chains! f)
+          true)
+      false)))

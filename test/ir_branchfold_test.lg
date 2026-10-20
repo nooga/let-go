@@ -1,0 +1,192 @@
+;; Branch folding: an `if` whose test is known never branches. The IR pass
+;; (ir.passes.branchfold) turns such a :branch-if into a :branch and drops the
+;; arm that cannot run, so the join no longer sees it; the bytecode compiler
+;; skips the test of a scalar literal. Each IR case checks the folded shape,
+;; that it validates, and that the IR-compiled fn returns what the VM's does.
+(ns test.ir-branchfold-test
+  (:require
+   [ir.build :as build]
+   [ir.data :as ir]
+   [ir.passes.pipeline :as pipeline]
+   [ir.passes.typeinfer :as typeinfer]
+   [ir.validate :as validate]
+   [test :refer :all]))
+
+(def ^:private this-ns (find-ns 'test.ir-branchfold-test))
+
+(defn- replace-sym [form from to]
+  (cond
+    (= form from) to
+    (seq? form)    (apply list (map (fn [x] (replace-sym x from to)) form))
+    (vector? form) (mapv (fn [x] (replace-sym x from to)) form)
+    :else          form))
+
+;; Renames the defn, self-calls included.
+(defn- rename [form suffix]
+  (let [nm (second form)]
+    (replace-sym form nm (symbol (str nm suffix)))))
+
+;; build-fn resolves the self-call against the var.
+(declare bf-fib)
+
+;; Defines the form twice, as <name>-vm through the bytecode compiler and as
+;; <name>-ir through *ir-compile* in strict mode (a pipeline failure throws
+;; rather than falling back), and returns both fns.
+(defn- vm-and-ir [form]
+  (binding [*ns* this-ns]
+    (let [vm (binding [*ir-compile* false] (eval (rename form "-vm")))
+          ir (binding [*ir-compile* true *ir-compile-strict* true]
+               (eval (rename form "-ir")))]
+      [@vm @ir])))
+
+(defn- optimized-ir [form]
+  (binding [*ns* this-ns]
+    (doto (build/build-fn (apply list (first form) (second form) (nth form 2)
+                                 (map pipeline/expand-all (drop 3 form))))
+      pipeline/optimize-fn)))
+
+(defn- reachable [f]
+  (loop [work [(ir/fn-entry f)] seen #{}]
+    (if (empty? work)
+      seen
+      (let [b (peek work) work (pop work) t (ir/block-term b f)]
+        (if (or (contains? seen b) (nil? t))
+          (recur work (conj seen b))
+          (recur (into work (case (ir/op t f)
+                              :branch    [(ir/branch-target-target (ir/aux t f))]
+                              :branch-if [(ir/branch-target-target (ir/cond-target-true (ir/aux t f)))
+                                          (ir/branch-target-target (ir/cond-target-false (ir/aux t f)))]
+                              []))
+                 (conj seen b)))))))
+
+(defn- branch-ifs [f]
+  "Count of :branch-if terminators the entry still reaches."
+  (count (filter (fn [b] (let [t (ir/block-term b f)]
+                           (and t (= :branch-if (ir/op t f)))))
+                 (reachable f))))
+
+(defn- validate-error [f]
+  (try (validate/validate-fn! f "test") nil
+       (catch Exception e (ex-message e))))
+
+(defn- return-types [f]
+  (set (keep (fn [b] (let [t (ir/block-term b f)]
+                       (when (and t (= :return (ir/op t f)))
+                         (ir/type-of (first (ir/refs t f)) f))))
+             (reachable f))))
+
+;; --- cond's :else ---------------------------------------------------------
+
+(def cond-else
+  '(defn bf-sign [n]
+     (cond (neg? n) -1 (zero? n) 0 :else 1)))
+
+(def cond-else-rec
+  '(defn bf-fib [n]
+     (cond (= n 0) 1 (= n 1) 1 :else (+ (bf-fib (- n 2)) (bf-fib (- n 1))))))
+
+(deftest cond-else-folds
+  (testing ":else no longer branches, and its nil arm is gone"
+    (let [f (optimized-ir cond-else)]
+      (is (nil? (validate-error f)))
+      (is (= 2 (branch-ifs f)) "neg? and zero? still branch")))
+  (testing "without the nil arm the recursive fn's return types as an int"
+    (let [f (optimized-ir cond-else-rec)]
+      (is (nil? (validate-error f)))
+      (is (= 2 (branch-ifs f)))
+      (is (= #{:int} (return-types f))))))
+
+(deftest cond-else-matches-vm
+  (let [[vm ir] (vm-and-ir cond-else)]
+    (is (= (map vm [-5 0 7]) (map ir [-5 0 7]) [-1 0 1])))
+  (let [[vm ir] (vm-and-ir cond-else-rec)]
+    (is (= (map vm (range 10)) (map ir (range 10))))))
+
+;; --- literal and typed tests ----------------------------------------------
+
+(def falsey-literals
+  '(defn bf-falsey [x]
+     [(if nil x :else-nil) (if false x :else-false) (when false x)]))
+
+(def truthy-literals
+  '(defn bf-truthy [x]
+     [(if 0 x :no) (if "" x :no) (if \a x :no) (if :k x :no)]))
+
+;; The test is not a constant, but it is an int, so it is never nil or false.
+(def typed-test
+  '(defn bf-typed [^long n]
+     (if (- n 1) :yes :no)))
+
+(deftest literal-and-typed-tests-fold
+  (doseq [form [falsey-literals truthy-literals typed-test]]
+    (let [f (optimized-ir form)]
+      (is (nil? (validate-error f)) (second form))
+      (is (zero? (branch-ifs f)) (second form)))))
+
+(deftest literal-and-typed-tests-match-vm
+  (doseq [form [falsey-literals truthy-literals typed-test]]
+    (let [[vm ir] (vm-and-ir form)]
+      (is (= (vm 1) (ir 1)) (second form)))))
+
+;; --- shapes around the fold -----------------------------------------------
+
+;; The dead arm holds a whole nested if: every block only it reached goes.
+(def nested-dead-arm
+  '(defn bf-nested [x]
+     (if false
+       (if (pos? x) (if (odd? x) :a :b) :c)
+       (if (pos? x) :pos :non-pos))))
+
+;; A fold inside a loop body, next to a recur.
+(def loop-fold
+  '(defn bf-loop [n]
+     (loop [i 0 acc 0]
+       (cond (= i n) acc
+             :else   (recur (inc i) (+ acc i))))))
+
+;; The test folds by type (an int is never nil or false); the effect evaluated
+;; with it must still happen.
+(def effect-log (atom []))
+(defn bf-note [x] (swap! effect-log conj x) x)
+
+(def effectful-test
+  '(defn bf-effect [^long n]
+     (if (do (bf-note n) (- n 1)) :yes :no)))
+
+(deftest surrounding-shapes-fold
+  (let [f (optimized-ir nested-dead-arm)]
+    (is (nil? (validate-error f)))
+    (is (= 1 (branch-ifs f)) "only (pos? x) in the live arm"))
+  (let [f (optimized-ir loop-fold)]
+    (is (nil? (validate-error f)))
+    (is (= 1 (branch-ifs f)) "only (= i n)"))
+  (let [f (optimized-ir effectful-test)]
+    (is (nil? (validate-error f)))
+    (is (zero? (branch-ifs f)))))
+
+(deftest surrounding-shapes-match-vm
+  (let [[vm ir] (vm-and-ir nested-dead-arm)]
+    (is (= (map vm [-1 0 3 4]) (map ir [-1 0 3 4]) [:non-pos :non-pos :pos :pos])))
+  (let [[vm ir] (vm-and-ir loop-fold)]
+    (is (= (vm 10) (ir 10) 45)))
+  (let [[vm ir] (vm-and-ir effectful-test)]
+    (reset! effect-log [])
+    (is (= (vm 3) (ir 3) :yes))
+    (is (= [3 3] @effect-log) "both engines ran the test once")))
+
+;; --- the bytecode compiler ------------------------------------------------
+
+(deftest bytecode-literal-tests
+  (testing "a scalar literal test picks its arm without branching"
+    (is (= [:t :t :t :t :t :f :f]
+           (binding [*ir-compile* false]
+             (eval '[(if :k :t :f) (if 0 :t :f) (if "" :t :f) (if \a :t :f)
+                     (if 1.5 :t :f) (if nil :t :f) (if false :t :f)]))))
+    (is (nil? (binding [*ir-compile* false] (eval '(if false :t))))))
+  (testing "the arm that never runs is still compiled, so its errors surface"
+    (is (thrown? Exception
+                 (binding [*ir-compile* false]
+                   (eval '(if :else 1 (bf-no-such-fn 2))))))
+    (is (thrown? Exception
+                 (binding [*ir-compile* false]
+                   (eval '(if nil (bf-no-such-fn 2) 1)))))))
