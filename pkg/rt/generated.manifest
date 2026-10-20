@@ -48,6 +48,7 @@ pkg/rt/core_compiled.lgb pkg/ir/op_generated.go generator 07863c49dc579079c4273e
 pkg/rt/core_compiled.lgb pkg/ir/op_lookup.go generator 08d0527e7c33a41f39c3bd8d2ee85f0b37879834409073e4d97b0e1b7c342224
 pkg/rt/core_compiled.lgb pkg/resolver/resolver.go generator fa96a984631ebc0edb8955d4aae383c0deae409edae888aeed1caa4929eb9f25
 pkg/rt/core_compiled.lgb pkg/rt/async.go generator 9fffc835ef00c0edca4916b439623099929df9ab8b71a53237a02882a33cbead
+pkg/rt/core_compiled.lgb pkg/rt/audio.go generator cf16ae8a2df58b7c6edb01f8be0e52d5aa4f843f3f2c77a672d921d406255984
 pkg/rt/core_compiled.lgb pkg/rt/base64.go generator 845dd4c2795b31f2145111472fb4cf89e6a1bce1c9a845b30015d3d6a990e089
 pkg/rt/core_compiled.lgb pkg/rt/bencode.go generator cd0df7574d5cc529a6adb52a77ce4c1359a1d8799632fa6928a58437d28aaef7
 pkg/rt/core_compiled.lgb pkg/rt/bencode_wasm.go generator 939796f0c528593976fd2db34e3d635baf5c8af04415f48a10f35a1faeecad62
@@ -158,7 +159,7 @@ pkg/rt/core_compiled.lgb pkg/rt/interop_glplat.go generator a263b3a715503f91f0fb
 pkg/rt/core_compiled.lgb pkg/rt/interop_xxh3.go generator c8ea01dbe4c5a30a0292e613318ae9263341e465a3265deb46aa83ec7c2940b3
 pkg/rt/core_compiled.lgb pkg/rt/interop_xxh3_tinygo.go generator 1b0402d35f056616e8c7efa220b5663b734a049941f2daace8f91dd602c382e3
 pkg/rt/core_compiled.lgb pkg/rt/ions.go generator ebbd1a40c468dfecb9b419d9957aec4ce30ffc106f77d8ef968b73d056ba422b
-pkg/rt/core_compiled.lgb pkg/rt/iort.go generator e484344606fa06afd7d7adc8bf4f71f2a05d2de1dbaab44be7d9b8bb2d5fb185
+pkg/rt/core_compiled.lgb pkg/rt/iort.go generator 535a449c83eef67d456a88e5df5bf47940b798b3bc3287ee33dc56f25387f389
 pkg/rt/core_compiled.lgb pkg/rt/ir_bridge_generated.go generator e9147537efd6da82ca9023b8fe7ef249cecaae89bae5893a51db4113d95aa2d9
 pkg/rt/core_compiled.lgb pkg/rt/js.go generator a1e67bc893affc07d8f0a4f42e83fce9f79d39730293fd63cd632c9078676072
 pkg/rt/core_compiled.lgb pkg/rt/json.go generator e60494e04544736feea2bcf4c3d63bb8001bb38f010ecb0aed632617796a8d79
@@ -407,6 +408,7 @@ pkg/rt/core_go_lowered/ pkg/ir/op_generated.go generator 07863c49dc579079c4273ea
 pkg/rt/core_go_lowered/ pkg/ir/op_lookup.go generator 08d0527e7c33a41f39c3bd8d2ee85f0b37879834409073e4d97b0e1b7c342224
 pkg/rt/core_go_lowered/ pkg/resolver/resolver.go generator fa96a984631ebc0edb8955d4aae383c0deae409edae888aeed1caa4929eb9f25
 pkg/rt/core_go_lowered/ pkg/rt/async.go generator 9fffc835ef00c0edca4916b439623099929df9ab8b71a53237a02882a33cbead
+pkg/rt/core_go_lowered/ pkg/rt/audio.go generator cf16ae8a2df58b7c6edb01f8be0e52d5aa4f843f3f2c77a672d921d406255984
 pkg/rt/core_go_lowered/ pkg/rt/base64.go generator 845dd4c2795b31f2145111472fb4cf89e6a1bce1c9a845b30015d3d6a990e089
 pkg/rt/core_go_lowered/ pkg/rt/bencode.go generator cd0df7574d5cc529a6adb52a77ce4c1359a1d8799632fa6928a58437d28aaef7
 pkg/rt/core_go_lowered/ pkg/rt/bencode_wasm.go generator 939796f0c528593976fd2db34e3d635baf5c8af04415f48a10f35a1faeecad62
@@ -517,7 +519,7 @@ pkg/rt/core_go_lowered/ pkg/rt/interop_glplat.go generator a263b3a715503f91f0fbf
 pkg/rt/core_go_lowered/ pkg/rt/interop_xxh3.go generator c8ea01dbe4c5a30a0292e613318ae9263341e465a3265deb46aa83ec7c2940b3
 pkg/rt/core_go_lowered/ pkg/rt/interop_xxh3_tinygo.go generator 1b0402d35f056616e8c7efa220b5663b734a049941f2daace8f91dd602c382e3
 pkg/rt/core_go_lowered/ pkg/rt/ions.go generator ebbd1a40c468dfecb9b419d9957aec4ce30ffc106f77d8ef968b73d056ba422b
-pkg/rt/core_go_lowered/ pkg/rt/iort.go generator e484344606fa06afd7d7adc8bf4f71f2a05d2de1dbaab44be7d9b8bb2d5fb185
+pkg/rt/core_go_lowered/ pkg/rt/iort.go generator 535a449c83eef67d456a88e5df5bf47940b798b3bc3287ee33dc56f25387f389
 pkg/rt/core_go_lowered/ pkg/rt/ir_bridge_generated.go generator e9147537efd6da82ca9023b8fe7ef249cecaae89bae5893a51db4113d95aa2d9
 pkg/rt/core_go_lowered/ pkg/rt/js.go generator a1e67bc893affc07d8f0a4f42e83fce9f79d39730293fd63cd632c9078676072
 pkg/rt/core_go_lowered/ pkg/rt/json.go generator e60494e04544736feea2bcf4c3d63bb8001bb38f010ecb0aed632617796a8d79
@@ -739,6 +741,7 @@ pkg/rt/zz_primitives_generated.go internal/primgen/generate.go generator 34578fc
 pkg/rt/zz_primitives_generated.go internal/primgen/prims_emit.go generator 90f1810a54f29db13ce87810763fda251bb7b86713438301d6322467197638e9
 pkg/rt/zz_primitives_generated.go internal/primgen/prims_scan.go generator 0eeed4460781cf5115777417cf9669917aeefc0d4716407532d6abce9288f1a1
 pkg/rt/zz_primitives_generated.go pkg/rt/async.go input 9fffc835ef00c0edca4916b439623099929df9ab8b71a53237a02882a33cbead
+pkg/rt/zz_primitives_generated.go pkg/rt/audio.go input cf16ae8a2df58b7c6edb01f8be0e52d5aa4f843f3f2c77a672d921d406255984
 pkg/rt/zz_primitives_generated.go pkg/rt/base64.go input 845dd4c2795b31f2145111472fb4cf89e6a1bce1c9a845b30015d3d6a990e089
 pkg/rt/zz_primitives_generated.go pkg/rt/bencode.go input cd0df7574d5cc529a6adb52a77ce4c1359a1d8799632fa6928a58437d28aaef7
 pkg/rt/zz_primitives_generated.go pkg/rt/bencode_wasm.go input 939796f0c528593976fd2db34e3d635baf5c8af04415f48a10f35a1faeecad62
@@ -787,7 +790,7 @@ pkg/rt/zz_primitives_generated.go pkg/rt/installers.go input 5aba80526feae8d3cef
 pkg/rt/zz_primitives_generated.go pkg/rt/internal/jsonenc/jsonenc.go input a939dd152a2b8549b7f720912420dbd29406bb5f87357e918f10926a29f43247
 pkg/rt/zz_primitives_generated.go pkg/rt/interop_xxh3_tinygo.go input 1b0402d35f056616e8c7efa220b5663b734a049941f2daace8f91dd602c382e3
 pkg/rt/zz_primitives_generated.go pkg/rt/ions.go input ebbd1a40c468dfecb9b419d9957aec4ce30ffc106f77d8ef968b73d056ba422b
-pkg/rt/zz_primitives_generated.go pkg/rt/iort.go input e484344606fa06afd7d7adc8bf4f71f2a05d2de1dbaab44be7d9b8bb2d5fb185
+pkg/rt/zz_primitives_generated.go pkg/rt/iort.go input 535a449c83eef67d456a88e5df5bf47940b798b3bc3287ee33dc56f25387f389
 pkg/rt/zz_primitives_generated.go pkg/rt/js.go input a1e67bc893affc07d8f0a4f42e83fce9f79d39730293fd63cd632c9078676072
 pkg/rt/zz_primitives_generated.go pkg/rt/json.go input e60494e04544736feea2bcf4c3d63bb8001bb38f010ecb0aed632617796a8d79
 pkg/rt/zz_primitives_generated.go pkg/rt/json_stub.go input 98e9a8ca7f5cd6b8e70744e5eee91fe59bd666f5a76adfc5180d1f2c6010930a
