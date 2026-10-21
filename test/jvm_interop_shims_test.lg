@@ -199,7 +199,12 @@
     (is (= 2 (.remove m :a)))
     (is (nil? (.remove m :a)))
     (.clear m)
-    (is (.isEmpty m))))
+    (is (.isEmpty m)))
+  (testing "putAll realizes a lazy source that reads the same map"
+    (let [m (java.util.HashMap.)]
+      (.putAll m {:a 1})
+      (.putAll m (map (fn [k] [k (.get m :a)]) [:b :c]))
+      (is (= [1 1 1] [(.get m :a) (.get m :b) (.get m :c)])))))
 
 (deftest deque-and-builder-methods
   (let [d (doto (java.util.ArrayDeque.) (.push 1) (.push 2))]

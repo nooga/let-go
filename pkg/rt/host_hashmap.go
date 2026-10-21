@@ -77,11 +77,17 @@ func (h *hostHashMap) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, e
 				return vm.NIL, throwHost(vm.ClassClassCastException,
 					"class %s cannot be cast to class java.util.Map", args[0].Type().Name())
 			}
+			// Realize the source before taking the lock: a lazy source may read
+			// this map, and h.mu is not reentrant.
+			var kvs []vm.Value
+			for s := sq.Seq(); !vm.SeqIsEmpty(s); s = s.Next() {
+				if k, v, ok := vm.MapEntryKV(s.First()); ok {
+					kvs = append(kvs, k, v)
+				}
+			}
 			h.update(func(acc vm.Associative) (vm.Associative, vm.Value) {
-				for s := sq.Seq(); !vm.SeqIsEmpty(s); s = s.Next() {
-					if k, v, ok := vm.MapEntryKV(s.First()); ok {
-						acc = acc.Assoc(k, v)
-					}
+				for i := 0; i < len(kvs); i += 2 {
+					acc = acc.Assoc(kvs[i], kvs[i+1])
 				}
 				return acc, vm.NIL
 			})
