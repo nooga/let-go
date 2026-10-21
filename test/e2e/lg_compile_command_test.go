@@ -83,6 +83,50 @@ func TestLgCompileCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("skips data-only input without importing its package", func(t *testing.T) {
+		consts := filepath.Join(fix, "demo", "consts.lg")
+		if err := os.MkdirAll(filepath.Dir(consts), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(consts, []byte(`(ns demo.consts)
+(def greeting "hello")
+(when-not *compiling-aot* (println "consts: runtime init ran"))
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		app := filepath.Join(fix, "demo", "app.lg")
+		if err := os.WriteFile(app, []byte(`(ns demo.app (:require [demo.consts :as c] [libx.core :as lib]))
+(defn -main [] (println c/greeting) (println (lib/helper 1)))
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		work := t.TempDir()
+		exe := filepath.Join(t.TempDir(), "app.native")
+		out, err := runCmd(ctx, t, bin, fix,
+			[]string{"compile", "-o", exe, "-work", work, consts, lib, app}, env...)
+		if err != nil {
+			t.Fatalf("lg compile: %v\n%s", err, out)
+		}
+		if !bytes.Contains([]byte(out), []byte(consts+": no lowerable defns — skipped")) {
+			t.Fatalf("missing skipped-input diagnostic:\n%s", out)
+		}
+		main, err := os.ReadFile(filepath.Join(work, "main.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(main, []byte(`"lgprogram/demo/consts"`)) {
+			t.Fatalf("main.go imports a skipped package:\n%s", main)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 {
+			t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
+		}
+		want := []byte("consts: runtime init ran\nlibx: runtime init ran\nhello\n42\n")
+		if !bytes.Equal(stdout, want) {
+			t.Fatalf("stdout %q, want %q; stderr=%q", stdout, want, stderr)
+		}
+	})
+
 	t.Run("usage errors exit 2", func(t *testing.T) {
 		for _, args := range [][]string{{"compile"}, {"compile", "-bogus", app}, {"compile", "-o"}} {
 			cmd := exec.CommandContext(ctx, bin, args...)

@@ -207,7 +207,7 @@
   (let [blanks   (vec (keep (fn [pair]
                               (let [s (nth specs (first pair))
                                     r (second pair)]
-                                (when (and r (string? (:source r))) (:go-pkg s))))
+                                (when (and (seq (:lf s)) r (string? (:source r))) (:go-pkg s))))
                             (map-indexed vector results)))
         frame    (ir.passes.entry-frame/emit-entry-frame-go
                    {:entry entry
