@@ -265,11 +265,6 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	useTinyGo := os.Getenv("LETGO_USE_TINYGO") == "1"
 	srcDir := tmpDir
 	if moduleDir != "" {
-		// tinygo has no -mod flag, so nothing would hold it to the caller's
-		// go.mod as written.
-		if useTinyGo {
-			return fmt.Errorf("-w-module does not support LETGO_USE_TINYGO yet")
-		}
 		m, err := openCallerModule(moduleDir, imports)
 		if err != nil {
 			return err
@@ -351,8 +346,8 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 			}
 		}
 		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags)...)
-		build.Dir = tmpDir
-		build.Env = os.Environ()
+		build.Dir = srcDir
+		build.Env = tinyGoBuildEnv(os.Environ(), moduleDir != "")
 	} else {
 		fmt.Println("building wasm...")
 		args := wasmassets.GoBuildArgs(wasmPath, buildTags)
@@ -481,6 +476,29 @@ func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string)
 		args = append(args, "-tags", buildTags)
 	}
 	return append(args, "-o", wasmPath, ".")
+}
+
+// tinyGoBuildEnv is the environment for the tinygo arm. tinygo has no -mod
+// flag, but it loads packages through `go list`, which reads GOFLAGS, so a
+// caller-module build appends -mod=readonly there: the last -mod in GOFLAGS
+// wins, so a user's GOFLAGS=-mod=mod cannot edit the caller's go.mod, and the
+// rest of their GOFLAGS is kept.
+func tinyGoBuildEnv(environ []string, callerModule bool) []string {
+	if !callerModule {
+		return environ
+	}
+	env := make([]string, 0, len(environ)+1)
+	goflags := "-mod=readonly"
+	for _, kv := range environ {
+		if v, ok := strings.CutPrefix(kv, "GOFLAGS="); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				goflags = v + " " + goflags
+			}
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "GOFLAGS="+goflags)
 }
 
 // tinygoFdWriteRe matches TinyGo's WASI fd_write import in its wasm_exec.js.
