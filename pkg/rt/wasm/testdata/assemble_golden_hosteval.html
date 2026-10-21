@@ -317,12 +317,37 @@ async function startWorkerMode() {
         return;
       }
       if (e.data.t !== 'init') return;
-      const { sab, mode, wasmModule, wasmGzB64, wasmExecJS, urlSearch } = e.data;
+      const { sab, mode, wasmModule, wasmGzB64, wasmExecJS, urlSearch, storage } = e.data;
       globalThis._lgKeyInt32 = new Int32Array(sab);
       globalThis._lgKeyUint8 = new Uint8Array(sab); // full ring (lengths @64, keys @72)
       // Page URL search string, forwarded from the main thread (the worker's
       // own location is the blob URL, not the page). Read by js/url-param.
       globalThis._lgUrlSearch = urlSearch || '';
+      // Storage bridge (#1078): a worker has no localStorage, so the Go
+      // HostStorage falls back to _lgStorage. Reads come from the page's
+      // let-go: entries as they were at init; each write updates that copy and
+      // is posted to the page, which applies it to localStorage. storage is
+      // null when the page's localStorage was unreadable, and then storage
+      // calls fail as they would without the bridge.
+      if (storage) {
+        const m = new Map(Object.entries(storage));
+        let keys = null; // key(i) order, rebuilt after a key is added or removed
+        globalThis._lgStorage = {
+          get length() { return m.size; },
+          key(i) { keys ??= [...m.keys()]; return i < keys.length ? keys[i] : null; },
+          getItem(k) { return m.has(k) ? m.get(k) : null; },
+          setItem(k, v) {
+            v = String(v);
+            if (!m.has(k)) keys = null;
+            m.set(k, v);
+            postMessage({t:'storage-set', k, v});
+          },
+          removeItem(k) {
+            if (m.delete(k)) keys = null;
+            postMessage({t:'storage-remove', k});
+          },
+        };
+      }
       // Load wasm_exec.js in worker scope
       eval(wasmExecJS);
       const go = new Go();
@@ -364,6 +389,22 @@ async function startWorkerMode() {
     }
   })() : null;
 
+  // The page's let-go: localStorage entries, which the worker serves storage
+  // reads from (see _lgStorage in the worker code); null if unreadable.
+  const storageSnapshot = () => {
+    try {
+      const out = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k !== null && k.startsWith('let-go:')) out[k] = localStorage.getItem(k);
+      }
+      return out;
+    } catch (err) {
+      console.error('lg storage snapshot:', err);
+      return null;
+    }
+  };
+
   const blob = new Blob([workerCode], { type: 'application/javascript' });
   const worker = new Worker(URL.createObjectURL(blob));
 
@@ -377,6 +418,14 @@ async function startWorkerMode() {
     if (e.data.t === 'emit') {
       try { window.LetGoHost._emit(e.data.name, JSON.parse(e.data.data)); }
       catch (err) { console.error('lg emit relay:', err); }
+    }
+    // Storage relay: the worker already applied the write to its copy, so a
+    // failure here (quota, storage disabled) can only be logged.
+    if (e.data.t === 'storage-set' || e.data.t === 'storage-remove') {
+      try {
+        if (e.data.t === 'storage-set') localStorage.setItem(e.data.k, e.data.v);
+        else localStorage.removeItem(e.data.k);
+      } catch (err) { console.error('lg storage relay:', err); }
     }
     // Surface relay: the worker transferred the RGBA ArrayBuffer; hand it to the
     // shell's onSurface sink (which putImageDatas it to a canvas).
@@ -433,7 +482,8 @@ async function startWorkerMode() {
     }
   };
 
-  const initMsg = { t: 'init', sab, mode: WASM_MODE, wasmExecJS: WASM_EXEC_JS, urlSearch: location.search };
+  const initMsg = { t: 'init', sab, mode: WASM_MODE, wasmExecJS: WASM_EXEC_JS, urlSearch: location.search,
+                    storage: storageSnapshot() };
   if (WASM_MODE === 'external') {
     initMsg.wasmModule = await modPromise; // compiled on the main thread
   } else {
