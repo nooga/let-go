@@ -35,6 +35,9 @@ func renderLeaf(v vm.Value, readably bool) string {
 		case vm.CharType:
 			return string(rune(v.(vm.Char)))
 		}
+	} else if sb, ok := v.(*hostStringBuilder); ok {
+		// pr shows a builder's contents as a string literal.
+		return vm.String(sb.b.String()).String()
 	}
 	return v.String()
 }

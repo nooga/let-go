@@ -103,7 +103,13 @@
     (.setLength b 3)
     (is (= "hél" (.toString b)))
     (.setLength b 5)
-    (is (= "hél\u0000\u0000" (.toString b)))))
+    (is (= "hél\u0000\u0000" (.toString b))))
+  (testing "str, format and print show the contents, as toString does (#1069)"
+    (let [b (doto (StringBuilder.) (.append "a") (.append 1))]
+      (is (= ["a1" "a1" "a1" "a1"]
+             [(str b) (format "%s" b) (with-out-str (print b)) (.toString b)]))
+      (is (= "x a1" (str "x " b)))
+      (is (= "\"a1\"" (pr-str b))))))
 
 (deftest array-list
   (testing "a mutable list that vec, seq and count read"

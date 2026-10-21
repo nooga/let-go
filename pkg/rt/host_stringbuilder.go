@@ -37,7 +37,10 @@ type hostStringBuilder struct{ b strings.Builder }
 
 func (s *hostStringBuilder) Type() vm.ValueType { return hostStringBuilderType }
 func (s *hostStringBuilder) Unbox() any         { return s }
-func (s *hostStringBuilder) String() string     { return "#<java.lang.StringBuilder>" }
+
+// String is the builder's contents, as StringBuilder.toString is, so str,
+// format's %s and print show what was built.
+func (s *hostStringBuilder) String() string { return s.b.String() }
 
 // appendString renders a value the way StringBuilder.append does: strings
 // append their content, characters their rune, nil appends "null" (Java
