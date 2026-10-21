@@ -1,0 +1,17 @@
+;; (* x 0) under *ir-compile* must give what bytecode gives (#1071): 0.0, NaN
+;; and -0.0 for doubles, not the Int 0 constfold used to fold it to. Results
+;; are compared by their printed form, which keeps -0.0 apart from 0.0 and
+;; makes NaN comparable.
+(ns test.ir-mul-zero-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+(deftest ir-compiled-mul-by-zero-keeps-double-results
+  (let [fs (binding [*ir-compile* true
+                     *ir-compile-strict* true]
+             [(eval '(defn ir-mul-zero-right [x] (* x 0)))
+              (eval '(defn ir-mul-zero-left [x] (* 0 x)))])]
+    (doseq [f fs]
+      (is (= ["0.0" "NaN" "-0.0" "0"]
+             (mapv (comp pr-str @f) [1.5 ##NaN -2.0 3]))))))
