@@ -25,9 +25,7 @@ import (
 // storage disabled, quota exceeded) into a returned error rather than a nil,
 // honoring the Storage contract: a genuinely absent key reads back as nil,
 // but an unavailable or failing backend surfaces as a guest exception
-// instead of a silent miss or dropped write. A future refinement could probe
-// availability once at construction so private mode fails once, clearly,
-// rather than on every call.
+// instead of a silent miss or dropped write.
 type HostStorage struct {
 	prefix string
 }
