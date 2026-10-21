@@ -109,6 +109,15 @@ type Receiver interface {
 	InvokeMethod(Symbol, []Value) (Value, error)
 }
 
+// HostShim marks a Receiver that stands in for a JVM class (a StringBuilder,
+// an ArrayList). Its methods are the ones InvokeMethod handles: a call it does
+// not handle fails as Clojure's reflective call does, rather than falling back
+// to a let-go fn of the same name the way other receivers' calls may.
+type HostShim interface {
+	Receiver
+	HostShim()
+}
+
 type Named interface {
 	Value
 	Name() Value

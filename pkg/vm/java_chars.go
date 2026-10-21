@@ -48,6 +48,7 @@ type CodePointStream []int64
 func (c CodePointStream) Type() ValueType { return CodePointStreamType }
 func (c CodePointStream) Unbox() any      { return []int64(c) }
 func (c CodePointStream) String() string  { return "#<java.util.stream.IntStream>" }
+func (c CodePointStream) HostShim()       {}
 
 func (c CodePointStream) InvokeMethod(name Symbol, args []Value) (Value, error) {
 	switch name {

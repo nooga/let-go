@@ -160,3 +160,53 @@
   (is (= [3 2 1] (vec (doto (ArrayList. [1 2 3]) (java.util.Collections/reverse)))))
   (is (= :uoe (try (Collections/shuffle [1 2]) (catch UnsupportedOperationException _ :uoe)))
       "persistent collections are immutable"))
+
+;; A shim's methods are the ones it implements. Any other call throws what
+;; Clojure's reflective call throws; it never reaches a let-go fn of the same
+;; name (.get with two args is not clojure.core/get with a not-found).
+(deftest shims-fail-like-the-jvm
+  (testing "a call no overload takes throws IllegalArgumentException"
+    (doseq [f [#(.get (java.util.HashMap.) :a :b)
+               #(.first (ArrayList. [1 2]))
+               #(.peek (java.util.ArrayDeque.) 1)
+               #(.append (StringBuilder.) "a" "b")
+               #(.first (StringBuilder.))
+               #(.map (.codePoints "ab") inc)]]
+      (is (thrown? IllegalArgumentException (f)))))
+  (testing "failures inside a method throw the JVM's class"
+    (is (thrown? java.util.NoSuchElementException (.pop (java.util.ArrayDeque.))))
+    (is (thrown? java.util.NoSuchElementException (.next (.iterator []))))
+    (is (thrown? UnsupportedOperationException (.remove (.iterator [1]))))
+    (is (thrown? ClassCastException (.putAll (java.util.HashMap.) 7)))
+    (is (thrown? IndexOutOfBoundsException (.setLength (StringBuilder.) -1)))
+    (is (thrown? IllegalArgumentException (.appendCodePoint (StringBuilder.) -1)))
+    (is (thrown? UnsupportedOperationException (.getName (Thread/currentThread)))))
+  (testing "Object and Iterable methods still answer"
+    (is (= "[1, 2]" (.toString (ArrayList. [1 2]))))
+    (let [it (.iterator (ArrayList. [1 2]))]
+      (is (= [1 2] [(.next it) (.next it)]))
+      (is (false? (.hasNext it))))))
+
+(deftest hash-map-shim
+  (let [m (java.util.HashMap.)]
+    (is (nil? (.put m :a 1)))
+    (is (= 1 (.put m :a 2)))
+    (.put m :n nil)
+    (is (true? (.containsKey m :n)))
+    (is (false? (.containsKey m :z)))
+    (is (= :d (.getOrDefault m :z :d)))
+    (is (= 2 (.size m)))
+    (is (= 2 (.remove m :a)))
+    (is (nil? (.remove m :a)))
+    (.clear m)
+    (is (.isEmpty m))))
+
+(deftest deque-and-builder-methods
+  (let [d (doto (java.util.ArrayDeque.) (.push 1) (.push 2))]
+    (is (= 2 (.size d)))
+    (.clear d)
+    (is (.isEmpty d)))
+  (let [b (doto (StringBuilder.) (.append "abc"))]
+    (is (= \b (.charAt b 1)))
+    (is (thrown? IndexOutOfBoundsException (.charAt b 3)))
+    (is (= "cba" (str (.reverse b))))))

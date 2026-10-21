@@ -36,6 +36,7 @@ type hostArrayList struct{ items []vm.Value }
 
 func (l *hostArrayList) Type() vm.ValueType { return hostArrayListType }
 func (l *hostArrayList) Unbox() any         { return l }
+func (l *hostArrayList) HostShim()          {}
 
 // String renders like java.util.AbstractCollection.toString: [a, b, c].
 func (l *hostArrayList) String() string {
@@ -61,13 +62,10 @@ func (l *hostArrayList) Seq() vm.Seq {
 func (l *hostArrayList) index(name string, args []vm.Value, v vm.Value, size int) (int, error) {
 	i, ok := v.(vm.Int)
 	if !ok {
-		// Thrown, not returned: a plain error would send the call on to the
-		// core fn of the same name (.get to clojure.core/get).
-		return 0, noMatchingArrayListMethod(name, args)
+		return 0, noMatchingMethod("java.util.ArrayList", name, args)
 	}
 	if i < 0 || int(i) >= size {
-		return 0, vm.NewThrownError(vm.NewExInfoWithClass(vm.ClassIndexOutOfBounds,
-			fmt.Sprintf("Index %d out of bounds for length %d", i, len(l.items)), nil))
+		return 0, throwHost(vm.ClassIndexOutOfBounds, "Index %d out of bounds for length %d", i, len(l.items))
 	}
 	return int(i), nil
 }
@@ -167,31 +165,7 @@ func (l *hostArrayList) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value,
 			return vm.String(l.String()), nil
 		}
 	}
-	if arrayListMethods[string(name)] {
-		// A method the shim has, called with arguments none of its overloads
-		// take. Thrown, so it does not fall back to a same-named core fn.
-		return vm.NIL, noMatchingArrayListMethod(string(name), args)
-	}
 	return vm.NIL, fmt.Errorf("java.util.ArrayList has no method .%s/%d", name, len(args))
-}
-
-// arrayListMethods names the methods InvokeMethod implements.
-var arrayListMethods = map[string]bool{
-	"add": true, "addAll": true, "get": true, "set": true, "remove": true,
-	"size": true, "isEmpty": true, "clear": true, "contains": true,
-	"indexOf": true, "toArray": true, "toString": true,
-}
-
-// noMatchingArrayListMethod is the JVM's reflective-call failure for args no
-// overload of the method accepts.
-func noMatchingArrayListMethod(name string, args []vm.Value) error {
-	types := make([]string, len(args))
-	for i, a := range args {
-		types[i] = a.Type().Name()
-	}
-	return vm.NewThrownError(vm.NewExInfoWithClass(vm.ClassIllegalArgument,
-		fmt.Sprintf("No matching method %s found taking %d args (%s) for class java.util.ArrayList",
-			name, len(args), strings.Join(types, ", ")), nil))
 }
 
 func (l *hostArrayList) indexOf(v vm.Value) int {

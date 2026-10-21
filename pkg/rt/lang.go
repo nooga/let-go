@@ -6243,7 +6243,48 @@ func CoreMethodInvoke(vs ...vm.Value) (vm.Value, error) {
 	if errors.As(err, &thrown) {
 		return vm.NIL, err
 	}
+	if shim, ok := rec.(vm.HostShim); ok {
+		return invokeShimFallback(shim, name, vs[2:])
+	}
 	return invokeMethodFallback(rec, name, vs[2:], err)
+}
+
+// invokeShimFallback finishes a call a HostShim did not handle. Explicit
+// host-method registrations and the java.lang.Object / Iterable methods every
+// such class has still answer; anything else throws what Clojure's reflective
+// call throws, never reaching a let-go fn of the same name (.get on a HashMap
+// is not clojure.core/get).
+func invokeShimFallback(shim vm.HostShim, name vm.Symbol, args []vm.Value) (vm.Value, error) {
+	if fn, ok := lookupHostMethod(shim.Type(), name); ok {
+		return fn.Invoke(append([]vm.Value{shim}, args...))
+	}
+	switch {
+	case name == "toString" && len(args) == 0:
+		return vm.String(strValue(shim)), nil
+	case name == "hashCode" && len(args) == 0, name == "iterator" && len(args) == 0:
+		if v, handled, err := hostCollectionMethod(shim, name, args); handled || err != nil {
+			return v, err
+		}
+	}
+	return vm.NIL, noMatchingMethod(shim.Type().Name(), string(name), args)
+}
+
+// noMatchingMethod is the IllegalArgumentException Clojure's reflective call
+// throws when no method of that name takes the given args.
+func noMatchingMethod(class, name string, args []vm.Value) error {
+	types := make([]string, len(args))
+	for i, a := range args {
+		types[i] = a.Type().Name()
+	}
+	return vm.NewThrownError(vm.NewExInfoWithClass(vm.ClassIllegalArgument,
+		fmt.Sprintf("No matching method %s found taking %d args (%s) for class %s",
+			name, len(args), strings.Join(types, ", "), class), nil))
+}
+
+// throwHost wraps a JVM-classed failure raised inside a shim's method, so the
+// caller sees a thrown exception of that class.
+func throwHost(class *vm.ExceptionClass, format string, a ...any) error {
+	return vm.NewThrownError(vm.NewExInfoWithClass(class, fmt.Sprintf(format, a...), nil))
 }
 
 //lg:native
