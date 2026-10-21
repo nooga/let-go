@@ -248,7 +248,7 @@
       (= t :string) true
       (= t [:const :int 0]) true
       (= t [:const :float 0.0]) true
-      (union-type? t) (every? truthy-type? (rest t))
+      (union-type? t) (boolean (and (seq (rest t)) (every? truthy-type? (rest t))))
       :else false)))
 
 (defn falsey-type? [t]
@@ -256,7 +256,7 @@
     (cond
       (= t :nil) true
       (= t :false) true
-      (union-type? t) (every? falsey-type? (rest t))
+      (union-type? t) (boolean (and (seq (rest t)) (every? falsey-type? (rest t))))
       :else false)))
 
 (defn- refine-truthy [t]

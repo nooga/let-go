@@ -128,6 +128,36 @@
     (let [[vm ir] (vm-and-ir form)]
       (is (= (vm 1) (ir 1)) (second form)))))
 
+;; --- arguments are not typed facts ---------------------------------------
+
+;; infer-arg-types types n :int because it feeds `+`/`*`, but the caller can
+;; still pass nil or false, so a test on n (or on a block param n flows into)
+;; must keep both arms.
+(def arg-test
+  '(defn bf-arg [n] (if n (+ n 1) 0)))
+
+(def arg-when
+  '(defn bf-arg-when [x] (when x (* x 2))))
+
+(def arg-via-param
+  '(defn bf-arg-param [c n] (let [m (if c n 1)] (if m (+ m 1) 0))))
+
+(deftest arg-tests-keep-both-arms
+  (doseq [form [arg-test arg-when arg-via-param]]
+    (let [f (optimized-ir form)]
+      (is (nil? (validate-error f)) (second form))
+      (is (pos? (branch-ifs f)) (second form)))))
+
+(deftest arg-tests-match-vm
+  (let [[vm ir] (vm-and-ir arg-test)]
+    (is (= (map vm [nil false 1]) (map ir [nil false 1]) [0 0 2])))
+  (let [[vm ir] (vm-and-ir arg-when)]
+    (is (= (map vm [nil false 3]) (map ir [nil false 3]) [nil nil 6])))
+  (let [[vm ir] (vm-and-ir arg-via-param)]
+    (is (= [(vm true nil) (vm true 2) (vm false nil)]
+           [(ir true nil) (ir true 2) (ir false nil)]
+           [0 3 2]))))
+
 ;; --- shapes around the fold -----------------------------------------------
 
 ;; The dead arm holds a whole nested if: every block only it reached goes.
