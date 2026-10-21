@@ -1,0 +1,38 @@
+;; Native-lowering fixture for #1081: a native prim such as aget, alength or
+;; byte-array gets a guarded direct call (rt.NativePrimsIntact) to its Go
+;; entry, which returns vm.Value, while typeinfer gives the call's node a
+;; native slot. Before the fix the direct branch assigned the vm.Value straight
+;; into that slot (the trampoline branch beside it already unboxed, #1044) and
+;; the generated Go did not build. The trampoline runs `run` under both the
+;; bytecode VM and generated Go and checks they agree.
+(ns examples.native-prim-typed-slot)
+
+(def K 651.9)
+
+;; The index is boxed because K is a var, so aget takes the guarded call.
+(defn lookup-sum [^doubles l ^double ph n]
+  (loop [j 0 acc 0.0]
+    (if (< j n)
+      (recur (inc j) (+ acc (aget l (bit-and (int (* (+ ph j) K)) 3))))
+      acc)))
+
+;; alength of an unhinted array, into an int slot.
+(defn mean [xs]
+  (let [n (alength xs)]
+    (loop [i 0 acc 0.0]
+      (if (< i n)
+        (recur (inc i) (+ acc (aget xs i)))
+        (/ acc n)))))
+
+;; A byte-array bound to a local and filled in a loop.
+(defn ramp [n]
+  (let [buf (byte-array n)]
+    (loop [i 0]
+      (if (< i n)
+        (do (aset buf i (* 2 i)) (recur (inc i)))
+        (vec buf)))))
+
+(defn run []
+  [(lookup-sum (double-array [1.0 2.0 3.0 4.0]) 0.0 4)
+   (mean (double-array [1.0 2.0 3.0 6.0]))
+   (ramp 4)])

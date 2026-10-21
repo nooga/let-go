@@ -2356,6 +2356,8 @@
                                   nil)]
     [assign err-check]))
 
+(declare boxed-call-stmts)
+
 (defn- typed-call-result-stmts
   "The static-call statement sequence for one direct call, given the
    already-coerced arg expressions: builds the call and handles the
@@ -2381,10 +2383,12 @@
                     (into [(gogen/ident "ec")] arg-exprs))
         raw-call (gogen/call callee-ident call-args)]
     (cond
-      ;; (vm.Value, error) — current shape. Keep the existing
-      ;; assign + err-check path.
+      ;; (vm.Value, error): assign + err-check, unboxing into a natively
+      ;; typed slot the same way the trampoline branch does. A native prim
+      ;; such as rt.CoreAgetf returns vm.Value even when typeinfer gives its
+      ;; node a float64 slot (#1081).
       (and (= result-spec "vm.Value") (:needs-error? entry))
-      (emit-call-stmts f target raw-call)
+      (boxed-call-stmts f nid target raw-call)
       ;; Typed result + no error: target = <call>, boxed only if the temp is
       ;; a vm.Value (see typed-result-assign).
       (and (not (:needs-error? entry))
