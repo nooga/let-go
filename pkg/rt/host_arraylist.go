@@ -58,10 +58,12 @@ func (l *hostArrayList) Seq() vm.Seq {
 	return vm.NewList(append([]vm.Value(nil), l.items...)).(vm.Seq)
 }
 
-func (l *hostArrayList) index(v vm.Value, size int) (int, error) {
-	i, ok := vm.ToInt64(v)
+func (l *hostArrayList) index(name string, args []vm.Value, v vm.Value, size int) (int, error) {
+	i, ok := v.(vm.Int)
 	if !ok {
-		return 0, fmt.Errorf("java.util.ArrayList index must be an integer, got %s", v.Type().Name())
+		// Thrown, not returned: a plain error would send the call on to the
+		// core fn of the same name (.get to clojure.core/get).
+		return 0, noMatchingArrayListMethod(name, args)
 	}
 	if i < 0 || int(i) >= size {
 		return 0, vm.NewThrownError(vm.NewExInfoWithClass(vm.ClassIndexOutOfBounds,
@@ -79,7 +81,7 @@ func (l *hostArrayList) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value,
 			return vm.TRUE, nil
 		case 2:
 			// Inserting at size appends, so the bound is size+1.
-			i, err := l.index(args[0], len(l.items)+1)
+			i, err := l.index("add", args, args[0], len(l.items)+1)
 			if err != nil {
 				return vm.NIL, err
 			}
@@ -97,7 +99,7 @@ func (l *hostArrayList) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value,
 		}
 	case "get":
 		if len(args) == 1 {
-			i, err := l.index(args[0], len(l.items))
+			i, err := l.index("get", args, args[0], len(l.items))
 			if err != nil {
 				return vm.NIL, err
 			}
@@ -105,13 +107,35 @@ func (l *hostArrayList) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value,
 		}
 	case "set":
 		if len(args) == 2 {
-			i, err := l.index(args[0], len(l.items))
+			i, err := l.index("set", args, args[0], len(l.items))
 			if err != nil {
 				return vm.NIL, err
 			}
 			old := l.items[i]
 			l.items[i] = args[1]
 			return old, nil
+		}
+	case "remove":
+		if len(args) == 1 {
+			// remove(int) takes out the element at an index and returns it;
+			// remove(Object) takes out the first equal element and reports
+			// whether there was one. An integer argument picks remove(int),
+			// as Clojure's reflective call does.
+			if _, ok := args[0].(vm.Int); ok {
+				i, err := l.index("remove", args, args[0], len(l.items))
+				if err != nil {
+					return vm.NIL, err
+				}
+				old := l.items[i]
+				l.items = append(l.items[:i], l.items[i+1:]...)
+				return old, nil
+			}
+			i := l.indexOf(args[0])
+			if i < 0 {
+				return vm.FALSE, nil
+			}
+			l.items = append(l.items[:i], l.items[i+1:]...)
+			return vm.TRUE, nil
 		}
 	case "size":
 		if len(args) == 0 {
@@ -143,7 +167,31 @@ func (l *hostArrayList) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value,
 			return vm.String(l.String()), nil
 		}
 	}
+	if arrayListMethods[string(name)] {
+		// A method the shim has, called with arguments none of its overloads
+		// take. Thrown, so it does not fall back to a same-named core fn.
+		return vm.NIL, noMatchingArrayListMethod(string(name), args)
+	}
 	return vm.NIL, fmt.Errorf("java.util.ArrayList has no method .%s/%d", name, len(args))
+}
+
+// arrayListMethods names the methods InvokeMethod implements.
+var arrayListMethods = map[string]bool{
+	"add": true, "addAll": true, "get": true, "set": true, "remove": true,
+	"size": true, "isEmpty": true, "clear": true, "contains": true,
+	"indexOf": true, "toArray": true, "toString": true,
+}
+
+// noMatchingArrayListMethod is the JVM's reflective-call failure for args no
+// overload of the method accepts.
+func noMatchingArrayListMethod(name string, args []vm.Value) error {
+	types := make([]string, len(args))
+	for i, a := range args {
+		types[i] = a.Type().Name()
+	}
+	return vm.NewThrownError(vm.NewExInfoWithClass(vm.ClassIllegalArgument,
+		fmt.Sprintf("No matching method %s found taking %d args (%s) for class java.util.ArrayList",
+			name, len(args), strings.Join(types, ", ")), nil))
 }
 
 func (l *hostArrayList) indexOf(v vm.Value) int {

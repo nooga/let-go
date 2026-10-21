@@ -134,7 +134,23 @@
 
   (testing "out of range index throws IndexOutOfBoundsException"
     (is (= "Index 0 out of bounds for length 0"
-           (try (.get (ArrayList.) 0) (catch IndexOutOfBoundsException e (ex-message e)))))))
+           (try (.get (ArrayList.) 0) (catch IndexOutOfBoundsException e (ex-message e))))))
+
+  (testing ".remove takes an index or an element"
+    (let [l (ArrayList. [:a :b :c :b])]
+      (is (= :a (.remove l 0)))
+      (is (true? (.remove l :b)))
+      (is (false? (.remove l :z)))
+      (is (= [:c :b] (vec l)))
+      (is (thrown? IndexOutOfBoundsException (.remove l 2)))))
+
+  (testing "args no overload takes throw, rather than reaching a core fn of the same name"
+    (doseq [f [#(.get (ArrayList. [1 2]) :a)
+               #(.get (ArrayList. [1 2]) 0 :not-found)
+               #(.set (ArrayList. [1 2]) :a 3)
+               #(.add (ArrayList. [1 2]) :a 3)
+               #(.remove (ArrayList.))]]
+      (is (thrown? IllegalArgumentException (f))))))
 
 (deftest collections-statics
   (let [l (ArrayList. (range 50))]
