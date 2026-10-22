@@ -197,7 +197,9 @@ The module's `go.mod` and `go.sum` are used as they are: the build runs with
 Go's own error instead of being added. `-mod=readonly` also means a `vendor/`
 directory in the module is ignored; dependencies come from the module cache.
 With `LETGO_USE_TINYGO=1` the same holds: tinygo has no `-mod` flag, so lg
-appends `-mod=readonly` to `GOFLAGS` for it.
+appends `-mod=readonly` to `GOFLAGS` for it. lg builds that value from the
+`GOFLAGS` environment variable only, and setting it overrides a `GOFLAGS`
+saved with `go env -w`, so export those flags in the environment to keep them.
 Add `lgprogram/` to `.gitignore`.
 
 `lg compile` takes the same pair as `-module <dir>` and `-import <pkg>`, for a
