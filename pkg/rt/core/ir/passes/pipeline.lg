@@ -62,11 +62,18 @@
 ;; T, which is what each self-call site assumed (induction on call depth).
 ;;
 ;; So T is a guess the body has to confirm: the declared return type when there
-;; is one (`(defn f ^long [n] …)`), otherwise :int, then :float. A guess the body
+;; is one (`(defn f ^long [n] …)`), otherwise (with *infer-self-returns* on)
+;; :int, then :float. A guess the body
 ;; contradicts, an arm that returns nil say, is dropped and the self-calls stay
 ;; boxed like the return. This must not depend on the declaration being bound:
 ;; collect-ns-exports records the cross-package signature without it.
 (def ^:private self-return-guesses [:int :float])
+
+;; The guesses are opt-in; only a declared return type is checked by default.
+;; A guessed :int return moves unhinted recursive arithmetic from checked
+;; rt.AddValue onto raw Go operators, which wrap on overflow instead of
+;; throwing, so the default waits for checked integer lowering.
+(def ^:dynamic *infer-self-returns* false)
 
 (defn- has-self-call? [f]
   (some (fn [nid]
@@ -91,7 +98,8 @@
         decl  (get ir.passes.typeinfer/*declared-return-types* fname)]
     (when-not (if decl
                 (lower-go/returns-as? f decl)
-                (or (not (has-self-call? f))
+                (or (not *infer-self-returns*)
+                    (not (has-self-call? f))
                     (some (fn [t] (lower-go/returns-as? f t)) self-return-guesses)))
       (or (some (fn [t] (infer-with-self-return! f fname t))
                 (if decl [] self-return-guesses))

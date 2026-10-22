@@ -160,6 +160,23 @@
 ;; Int (TypedArray.Get widens it); an object-array element is anything.
 (def ^:private array-elem-type {:float :float :int :int :byte :int :object :unknown})
 
+;; call-core-type's clojure.core results that copy an operand's type rather
+;; than establish one, keyed by name to the operand index (into the call's
+;; args, callee excluded) they copy from.
+(def ^:private type-copying-core-fns
+  {"aset" 2 "transient" 0 "persistent!" 0 "conj!" 0 "assoc!" 0 "dissoc!" 0
+   "disj!" 0 "aclone" 0 "aget" 0})
+
+(defn type-source
+  "The operand a :call inst's inferred type is copied from (see
+   call-core-type), or nil when its type is not derived from an operand's."
+  [inst f]
+  (when (= :call (ir/op inst f))
+    (let [refs (ir/refs inst f)]
+      (when-let [[ns name] (and (seq refs) (load-var-ns+name (first refs) f))]
+        (when-let [i (and (= ns "clojure.core") (get type-copying-core-fns name))]
+          (nth refs (inc i) nil))))))
+
 (defn- call-core-type
   "Infer result type for a small set of builtins whose result kind is
    structurally known from operand kinds (clojure.core) or fixed (math).

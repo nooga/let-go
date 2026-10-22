@@ -70,21 +70,29 @@
         (distinct (ir/block-preds bid f))))
 
 (defn- arg-derived?
-  "True when nid is a :load-arg, or a block param some edge feeds one into.
-   Such a value's type is not a fact: infer-arg-types types a param :int just
+  "True when nid's inferred type may rest on an argument's: a :load-arg, a
+   block param some edge feeds such a value into, a call that copies such an
+   operand's type (aset returns its value argument), or a self-call, typed from
+   a return type the body only confirmed against those same argument types.
+   An argument's type is not a fact: infer-arg-types types a param :int just
    because it is used in arithmetic, and the caller can still pass nil."
   ([f nid] (arg-derived? f nid #{}))
   ([f nid seen]
-   (let [o (ir/op nid f)]
+   (let [o    (ir/op nid f)
+         more (fn [srcs] (boolean (some (fn [a] (arg-derived? f a (conj seen nid))) srcs)))]
      (cond
-       (= :load-arg o) true
-       (or (not= :block-arg o) (contains? seen nid)) false
-       :else
+       (= :load-arg o)        true
+       (contains? seen nid)   false
+       (= :block-arg o)
        (let [bid (ir/block-of nid f)
              idx (first (keep-indexed (fn [i p] (when (= p nid) i))
                                       (ir/block-params bid f)))]
-         (boolean (some (fn [a] (arg-derived? f a (conj seen nid)))
-                        (incoming-args f bid idx))))))))
+         (more (incoming-args f bid idx)))
+       (= :call o)
+       (let [refs (ir/refs nid f)]
+         (or (and (seq refs) (ti/self-callee? (first refs) (dec (count refs)) f))
+             (more (keep identity [(ti/type-source nid f)]))))
+       :else false))))
 
 (defn- known-truth
   "true / false when the branch-if test `nid` always has that truthiness, else

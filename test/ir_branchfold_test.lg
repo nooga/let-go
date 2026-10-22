@@ -90,8 +90,8 @@
     (let [f (optimized-ir cond-else)]
       (is (nil? (validate-error f)))
       (is (= 2 (branch-ifs f)) "neg? and zero? still branch")))
-  (testing "without the nil arm the recursive fn's return types as an int"
-    (let [f (optimized-ir cond-else-rec)]
+  (testing "without the nil arm, and with the guesses on, the recursive fn's return types as an int"
+    (let [f (binding [pipeline/*infer-self-returns* true] (optimized-ir cond-else-rec))]
       (is (nil? (validate-error f)))
       (is (= 2 (branch-ifs f)))
       (is (= #{:int} (return-types f))))))
@@ -142,8 +142,12 @@
 (def arg-via-param
   '(defn bf-arg-param [c n] (let [m (if c n 1)] (if m (+ m 1) 0))))
 
+;; aset returns its value argument, so its result carries x's inferred type.
+(def arg-via-aset
+  '(defn bf-arg-aset [a x] (if (aset a 0 x) (+ x 1) :no)))
+
 (deftest arg-tests-keep-both-arms
-  (doseq [form [arg-test arg-when arg-via-param]]
+  (doseq [form [arg-test arg-when arg-via-param arg-via-aset]]
     (let [f (optimized-ir form)]
       (is (nil? (validate-error f)) (second form))
       (is (pos? (branch-ifs f)) (second form)))))
@@ -156,7 +160,11 @@
   (let [[vm ir] (vm-and-ir arg-via-param)]
     (is (= [(vm true nil) (vm true 2) (vm false nil)]
            [(ir true nil) (ir true 2) (ir false nil)]
-           [0 3 2]))))
+           [0 3 2])))
+  (let [[vm ir] (vm-and-ir arg-via-aset)]
+    (is (= [(vm (object-array 1) nil) (vm (object-array 1) 2)]
+           [(ir (object-array 1) nil) (ir (object-array 1) 2)]
+           [:no 3]))))
 
 ;; --- shapes around the fold -----------------------------------------------
 
