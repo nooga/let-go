@@ -55,6 +55,11 @@ func (d *Device) open() error {
 			return
 		}
 		<-ready
+		// oto opens the device asynchronously and reports a failure here.
+		if err := ctx.Err(); err != nil {
+			d.err = err
+			return
+		}
 		d.player = ctx.NewPlayer(d.Mixer)
 		d.player.SetBufferSize(rt.AudioRate * 4 * 40 / 1000)
 		d.player.Play()

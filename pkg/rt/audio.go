@@ -24,6 +24,7 @@ package rt
 import (
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -118,7 +119,11 @@ func installAudioNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		s := Sound{LoopFrom: -1, Gain: optFloat(m, "gain", 1), Tone: Tone{
+		g, err := startGain("audio/tone", m)
+		if err != nil {
+			return vm.NIL, err
+		}
+		s := Sound{LoopFrom: -1, Gain: g, Tone: Tone{
 			Freq: optFloat(m, "freq", 0),
 			Dur:  time.Duration(optFloat(m, "ms", 0) * float64(time.Millisecond)),
 			Wave: optName(m, "wave", "sine"),
@@ -156,7 +161,11 @@ func installAudioNS() {
 		for i := range pcm {
 			pcm[i] = int16(uint16(b[2*i]) | uint16(b[2*i+1])<<8)
 		}
-		s := Sound{PCM: pcm, LoopFrom: -1, Gain: optFloat(m, "gain", 1)}
+		g, err := startGain("audio/sample", m)
+		if err != nil {
+			return vm.NIL, err
+		}
+		s := Sound{PCM: pcm, LoopFrom: -1, Gain: g}
 		if v := optFloat(m, "loop-from", -1); v >= 0 {
 			if int(v) >= len(pcm)/2 {
 				return vm.NIL, fmt.Errorf("audio/sample: :loop-from %d is past the last frame", int(v))
@@ -191,7 +200,7 @@ func installAudioNS() {
 		h, ok := vs[0].(vm.Int)
 		ok = ok || vs[0] == vm.NIL
 		g, ok2 := vm.ToFloat(vs[1])
-		if !ok || !ok2 || !(g >= 0) {
+		if !ok || !ok2 || !validGain(g) {
 			return vm.NIL, fmt.Errorf("audio/gain expects a handle and a gain of at least 0")
 		}
 		var fade time.Duration
@@ -241,6 +250,18 @@ func audioOpts(name string, vs []vm.Value, need int) (*vm.PersistentMap, error) 
 		return nil, fmt.Errorf("%s: options must be a map", name)
 	}
 	return m, nil
+}
+
+// validGain is a level a mixer can ramp to: finite and at least 0.
+func validGain(g float64) bool { return g >= 0 && !math.IsInf(g, 1) }
+
+// startGain reads a sound's starting :gain, 1 by default.
+func startGain(name string, m *vm.PersistentMap) (float64, error) {
+	g := optFloat(m, "gain", 1)
+	if !validGain(g) {
+		return 0, fmt.Errorf("%s: :gain must be finite and at least 0", name)
+	}
+	return g, nil
 }
 
 func optFloat(m *vm.PersistentMap, k string, def float64) float64 {

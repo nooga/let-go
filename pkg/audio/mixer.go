@@ -60,7 +60,7 @@ func (m *Mixer) add(v *voice, gain float64) rt.AudioHandle {
 	m.last++
 	v.h = m.last
 	v.target = gain
-	v.step = gain / edgeFrames
+	v.step = math.Abs(gain) / edgeFrames
 	m.voices = append(m.voices, v)
 	return v.h
 }
@@ -147,11 +147,11 @@ func (v *voice) render(mix []float64) {
 	if v.src != nil && cap(v.sbuf) < 4*frames {
 		v.sbuf = make([]byte, 4*frames)
 	}
+	// A short read still carries frames; the voice ends after mixing them.
+	ended := false
 	if v.src != nil {
 		got, err := io.ReadFull(v.src, v.sbuf[:4*frames])
-		if err != nil {
-			v.done = true
-		}
+		ended = err != nil
 		frames = got / 4
 	}
 	for i := 0; i < frames; i++ {
@@ -180,6 +180,13 @@ func (v *voice) render(mix []float64) {
 				}
 				v.pos = 2 * v.loopFrom
 			}
+			// A one-shot fades over its last edgeFrames, or its second half
+			// if shorter, so a sample ending on a loud frame does not click.
+			// A loop has no end to fade.
+			if rem := (len(v.pcm) - v.pos) / 2; v.loopFrom < 0 && !v.stopping && rem == min(edgeFrames, len(v.pcm)/4) {
+				v.stopping = true
+				v.target, v.step = 0, v.gain/float64(rem)
+			}
 			l, r = float64(v.pcm[v.pos]), float64(v.pcm[v.pos+1])
 			v.pos += 2
 		}
@@ -198,6 +205,9 @@ func (v *voice) render(mix []float64) {
 		if v.done {
 			return
 		}
+	}
+	if ended {
+		v.done = true
 	}
 }
 
