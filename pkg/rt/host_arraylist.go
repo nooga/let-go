@@ -38,10 +38,16 @@ func (l *hostArrayList) Type() vm.ValueType { return hostArrayListType }
 func (l *hostArrayList) Unbox() any         { return l }
 func (l *hostArrayList) HostShim()          {}
 
-// String renders like java.util.AbstractCollection.toString: [a, b, c].
+// String renders like java.util.AbstractCollection.toString: [a, b, c]. A
+// list that contains itself renders that element as "(this Collection)", as
+// the JVM does, instead of recursing forever.
 func (l *hostArrayList) String() string {
 	parts := make([]string, len(l.items))
 	for i, v := range l.items {
+		if v == vm.Value(l) {
+			parts[i] = "(this Collection)"
+			continue
+		}
 		parts[i] = strValue(v)
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
