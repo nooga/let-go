@@ -172,6 +172,12 @@
                     (topo-order-specs specs))]
     (mapv (fn [s] (assoc s :lf (get lfs (:path s)))) specs)))
 
+(defn emitted-spec?
+  "True when write-packages! writes spec s's package to disk, given its lowering
+   result r. emit-frame! imports exactly these packages."
+  [s r]
+  (boolean (and (seq (:lf s)) r (string? (:source r)))))
+
 (defn write-packages!
   "Writes each emitted package to disk. Returns the number of EMIT-FAILs so the
    caller can decide the exit code. gloat scrapes EMIT-FAIL from stdout."
@@ -183,15 +189,15 @@
             r  (nth results i)
             go (when r (:source r))]
         (cond
-          (empty? (:lf s)) (println (str (:path s) ": no lowerable defns — skipped"))
-          (string? go)     (let [dir (str out-dir "/" (:reldir s))
-                                 out (str dir "/" (:pkg s) ".go")]
-                             (mkdir dir)
-                             (spit out go)
-                             (println (str (:path s) " -> " out)))
-          :else            (do (swap! fails inc)
-                               (println (str "EMIT-FAIL " (:path s) " pkg=" (:pkg s)
-                                             " returned " (clojure.core/type r)))))))
+          (empty? (:lf s))    (println (str (:path s) ": no lowerable defns — skipped"))
+          (emitted-spec? s r) (let [dir (str out-dir "/" (:reldir s))
+                                    out (str dir "/" (:pkg s) ".go")]
+                                (mkdir dir)
+                                (spit out go)
+                                (println (str (:path s) " -> " out)))
+          :else               (do (swap! fails inc)
+                                  (println (str "EMIT-FAIL " (:path s) " pkg=" (:pkg s)
+                                                " returned " (clojure.core/type r)))))))
     @fails))
 
 (defn pick-entry-spec
@@ -207,7 +213,7 @@
   (let [blanks   (vec (keep (fn [pair]
                               (let [s (nth specs (first pair))
                                     r (second pair)]
-                                (when (and (seq (:lf s)) r (string? (:source r))) (:go-pkg s))))
+                                (when (emitted-spec? s r) (:go-pkg s))))
                             (map-indexed vector results)))
         frame    (ir.passes.entry-frame/emit-entry-frame-go
                    {:entry entry
