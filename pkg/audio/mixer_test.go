@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 	"time"
@@ -55,6 +56,47 @@ func TestSampleEndsAndIsDropped(t *testing.T) {
 	read(m, 400)
 	if len(m.voices) != 0 {
 		t.Errorf("%d voices still playing after the sample ended", len(m.voices))
+	}
+}
+
+// A one-shot sample that ends on a loud frame fades to silence instead of
+// cutting off: no frame steps far from the one before, and the last is near 0.
+func TestSampleFadesAtItsEnd(t *testing.T) {
+	m := NewMixer()
+	pcm := make([]int16, 2*300)
+	for i := range pcm {
+		pcm[i] = 10000
+	}
+	m.Play(rt.Sound{PCM: pcm, LoopFrom: -1, Gain: 1})
+	out := left(read(m, 400))
+	prev, worst := 0, 0
+	for _, x := range out {
+		worst = max(worst, abs(int(x)-prev))
+		prev = int(x)
+	}
+	if worst > 100 {
+		t.Errorf("the sample stepped the mix by %d in one frame: a click", worst)
+	}
+	if last := out[299]; last > 100 {
+		t.Errorf("the sample's last frame is %d, not near silence", last)
+	}
+}
+
+// A stream that runs dry partway through a mix plays every frame it returned
+// before it leaves the mix.
+func TestStreamPlaysItsFinalShortBuffer(t *testing.T) {
+	m := NewMixer()
+	pcm := make([]byte, 4*300)
+	for i := 0; i < len(pcm); i += 2 {
+		binary.LittleEndian.PutUint16(pcm[i:], 1000)
+	}
+	m.Stream(bytes.NewReader(pcm))
+	out := left(read(m, 400))
+	if out[250] != 1000 || out[299] != 1000 {
+		t.Errorf("frames 250 and 299 are %d and %d, want the stream's 1000", out[250], out[299])
+	}
+	if out[300] != 0 || len(m.voices) != 0 {
+		t.Errorf("after the stream ran dry: frame 300 is %d with %d voices, want 0 and none", out[300], len(m.voices))
 	}
 }
 
