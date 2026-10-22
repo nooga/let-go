@@ -113,7 +113,10 @@
     (is (= ["a" "b" " " "c" "d" ""] (vec (.split "ab cd" "x*|\\b" -1))))
     (is (= ["" "" "\n" "" "b" "\n" "b" ""] (vec (.split "a\nab\nb" "(?m)a*|^" -1))))
     (is (= ["" "" "a" "b" ""] (vec (.split "żab" "ż*|\\b" -1))))
-    (is (= ["" "bc"] (vec (.split "abc" "\\Aa*" -1)))))
+    (is (= ["" "bc"] (vec (.split "abc" "\\Aa*" -1))))
+    (is (= ["" "bc"] (vec (.split "abc" "\\Qa" -1))))
+    (is (= ["" "bc"] (vec (.split "a)bc" "\\Qa)" -1))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|\\Q" -1)))))
 
   (testing "split limit, as in the String.split javadoc"
     (is (= ["boo" "and:foo"] (vec (.split "boo:and:foo" ":" 2))))

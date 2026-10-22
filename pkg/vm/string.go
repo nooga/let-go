@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 	"unicode/utf8"
 )
@@ -502,13 +503,18 @@ func (l String) split(args []Value) (Value, error) {
 // anchoring \A(?s:.)(pat) at the rune before e, so group 1 is the match
 // starting at e and its assertions see the same left context: RE2's \b, \B
 // and (?m)^ look back one rune, and \A and ^ cannot match there since e > 0.
+// pat is spliced in as its parsed form, which closes any \Q quote that the
+// source leaves open to the end of the pattern.
 func javaMatches(re *regexp.Regexp, pat, str string) ([][]int, error) {
 	ms := re.FindAllStringIndex(str, -1)
 	var at *regexp.Regexp
 	emptyAt := func(e int) (bool, error) {
 		if at == nil {
-			var err error
-			if at, err = regexp.Compile(`\A(?s:.)(` + pat + `)`); err != nil {
+			parsed, err := syntax.Parse(pat, syntax.Perl)
+			if err != nil {
+				return false, err
+			}
+			if at, err = regexp.Compile(`\A(?s:.)(` + parsed.String() + `)`); err != nil {
 				return false, err
 			}
 		}
