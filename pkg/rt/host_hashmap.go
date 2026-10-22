@@ -62,9 +62,18 @@ func (h *hostHashMap) update(f func(vm.Associative) (vm.Associative, vm.Value)) 
 	return ret
 }
 
-// notFound marks an absent key in a lookup, so a key mapped to nil is told
-// apart from no key.
-var hashMapNotFound = vm.Keyword("let-go.host/not-found")
+// hashMapAbsent is the type of the absence sentinel. It is unexported and
+// compared by pointer identity, so no value user code can build or store
+// equals it.
+type hashMapAbsent struct{ _ byte }
+
+func (*hashMapAbsent) String() string     { return "#<absent>" }
+func (*hashMapAbsent) Type() vm.ValueType { return vm.NilType }
+func (*hashMapAbsent) Unbox() any         { return nil }
+
+// hashMapNotFound marks an absent key in a lookup, so a key mapped to nil
+// (or to any value a user can write) is told apart from no key.
+var hashMapNotFound vm.Value = &hashMapAbsent{}
 
 func (h *hostHashMap) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, error) {
 	switch string(name) {
