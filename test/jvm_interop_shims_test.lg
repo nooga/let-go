@@ -94,7 +94,25 @@
     (is (= ["a" "b" "c"] (vec (.split "abc" ""))))
     (is (= ["a" "b" "c" ""] (vec (.split "abc" "" -1))))
     (is (= [""] (vec (.split "" ","))))
-    (is (= ["a" "b" "c"] (vec (.split "a1b22c" "\\d+"))))))
+    (is (= ["a" "b" "c"] (vec (.split "a1b22c" "\\d+")))))
+
+  ;; Java's Matcher.find reports an empty match that touches the end of the
+  ;; previous match ("abc" on a*: [0,1) then [1,1) then [2,2) then [3,3)),
+  ;; which Go's regexp suppresses. Each result is derived from that sequence.
+  (testing "split sees an empty match adjacent to a non-empty one"
+    (is (= ["" "" "b" "c"] (vec (.split "abc" "a*"))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*" -1))))
+    (is (= ["" "bc"] (vec (.split "abc" "a*" 2))))
+    (is (= ["a"] (vec (.split "ab" "b*"))))
+    (is (= ["a" "" ""] (vec (.split "ab" "b*" -1)))))
+
+  (testing "split limit, as in the String.split javadoc"
+    (is (= ["boo" "and:foo"] (vec (.split "boo:and:foo" ":" 2))))
+    (is (= ["boo" "and" "foo"] (vec (.split "boo:and:foo" ":" 5))))
+    (is (= ["boo" "and" "foo"] (vec (.split "boo:and:foo" ":" -2))))
+    (is (= ["b" "" ":and:f" "" ""] (vec (.split "boo:and:foo" "o" 5))))
+    (is (= ["b" "" ":and:f" "" ""] (vec (.split "boo:and:foo" "o" -2))))
+    (is (= ["b" "" ":and:f"] (vec (.split "boo:and:foo" "o" 0))))))
 
 (deftest string-builder
   (let [b (StringBuilder. "héllo")]
@@ -205,6 +223,21 @@
       (.putAll m {:a 1})
       (.putAll m (map (fn [k] [k (.get m :a)]) [:b :c]))
       (is (= [1 1 1] [(.get m :a) (.get m :b) (.get m :c)])))))
+
+;; The JVM prints a collection that contains itself as "(this Collection)".
+(deftest array-list-self-reference
+  (let [l (java.util.ArrayList.)]
+    (.add l 1)
+    (.add l l)
+    (is (= "[1, (this Collection)]" (.toString l)))))
+
+;; An absence marker must not be a value user code can store.
+(deftest hash-map-absence-marker
+  (let [m (java.util.HashMap.)]
+    (.put m :a :let-go.host/not-found)
+    (is (true? (.containsKey m :a)))
+    (is (= :let-go.host/not-found (.getOrDefault m :a :d)))
+    (is (false? (.containsKey m :b)))))
 
 (deftest deque-and-builder-methods
   (let [d (doto (java.util.ArrayDeque.) (.push 1) (.push 2))]

@@ -470,7 +470,7 @@ func (l String) split(args []Value) (Value, error) {
 	}
 	var parts []Value
 	start := 0
-	for _, m := range re.FindAllStringIndex(str, -1) {
+	for _, m := range javaMatches(re, string(pat), str) {
 		if limit > 0 && len(parts) == limit-1 {
 			break
 		}
@@ -487,4 +487,39 @@ func (l String) split(args []Value) (Value, error) {
 		}
 	}
 	return NewObjectArrayFrom(parts), nil
+}
+
+// javaMatches returns the matches of re in str as Matcher.find enumerates
+// them. Go's FindAllStringIndex drops an empty match that touches the end of
+// the previous match; Java reports it, so "abc" split on "a*" sees [0,1) and
+// then [1,1). The dropped empties are restored here. Whether the pattern
+// matches empty at such a position is tested on the remaining text, which
+// loses the left context, so patterns that look left (^, \A, \b, \B) keep
+// Go's enumeration.
+func javaMatches(re *regexp.Regexp, pat, str string) [][]int {
+	ms := re.FindAllStringIndex(str, -1)
+	if strings.ContainsAny(pat, "^") || strings.Contains(pat, `\A`) ||
+		strings.Contains(pat, `\b`) || strings.Contains(pat, `\B`) {
+		return ms
+	}
+	emptyAt := func(e int) bool {
+		loc := re.FindStringIndex(str[e:])
+		return loc != nil && loc[0] == 0 && loc[1] == 0
+	}
+	out := make([][]int, 0, len(ms))
+	prevEnd := -1 // end of the previous non-empty match
+	for _, m := range ms {
+		if prevEnd >= 0 && m[0] != prevEnd && emptyAt(prevEnd) {
+			out = append(out, []int{prevEnd, prevEnd})
+		}
+		out = append(out, m)
+		prevEnd = -1
+		if m[1] > m[0] {
+			prevEnd = m[1]
+		}
+	}
+	if prevEnd >= 0 && emptyAt(prevEnd) {
+		out = append(out, []int{prevEnd, prevEnd})
+	}
+	return out
 }
