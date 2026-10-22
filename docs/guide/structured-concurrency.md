@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-09-19
+last-verified: 2026-10-20
 authoritative-for:
   - structured-concurrency
   - scope-lifecycle
@@ -69,32 +69,45 @@ value you can pass around, though it is only useful while the scope is open.
 This is the part worth reading twice. Go cannot force a goroutine to stop, so
 cancelling a scope does not kill anything. It does two things:
 
-1. Blocking runtime operations — `sleep`, channel take and put, `alts!` —
-   **return early** instead of staying parked. `alts!` belongs here rather than
-   with the `async` helpers above: it spawns nothing, selecting synchronously
-   over its channels *and* the current scope's `Done()`, so an `alts!` parked
-   inside a scoped `go` block is released when that scope closes and yields
-   `nil`.
+1. Blocking runtime operations — `sleep`, channel take and put, a
+   `promise-chan` take — stop waiting and **raise a `Cancelled` condition**
+   ([#924], which closed [#920]). `alts!` is the exception: it spawns
+   nothing, selecting synchronously over its channels *and* the current
+   scope's `Done()`, so an `alts!` parked inside a scoped `go` block is
+   released when that scope closes and yields `nil` rather than raising.
 2. `scope-cancelled?` starts answering `true`.
 
-A cancelled operation returns a value and execution continues with the next
-form. A take that was parked returns `nil`:
+A parked take that is cancelled raises, so the rest of the form does not run:
 
 ```clojure
 (def got (atom :none))
 (with-scope [s]
   (go (reset! got [:take-returned (<! (chan))])))
 (sleep 50)
-@got                     ;=> [:take-returned nil]
+@got                     ;=> :none
 ```
 
-The take never received anything; the scope closed underneath it, the take
-returned `nil`, and the `reset!` after it still ran. Likewise a `(sleep 10000)`
-inside a closing scope returns immediately and the following form executes.
+A `go` block catches `Cancelled` and prints nothing to `*err*`. It still prints
+any other error there.
 
-**The footgun.** A loop that sleeps but never asks whether it was cancelled does
-not stop on teardown — it runs to completion at full speed, because every
-`sleep` now returns instantly:
+`Cancelled` sits under `Throwable` beside `Exception` and `Error`.
+`(catch Throwable e ...)` and a bare `(catch e ...)` do not catch it; only
+`(catch Cancelled e ...)` does. `finally` runs in both cases:
+
+```clojure
+(def got (atom :none))
+(with-scope [s]
+  (go (reset! got [:take-returned (try (<! (chan))
+                                       (catch Cancelled e :cancelled))])))
+(sleep 50)
+@got                     ;=> [:take-returned :cancelled]
+```
+
+`(ex-cause e)` on a caught `Cancelled` returns the underlying Go context error
+(its message is `"context canceled"`). There is no constructor for `Cancelled`;
+the runtime is its only source.
+
+A loop that sleeps therefore stops at its next `sleep` after teardown:
 
 ```clojure
 (def n (atom 0))
@@ -105,26 +118,43 @@ not stop on teardown — it runs to completion at full speed, because every
           (sleep 20)
           (recur (inc i)))))
   (sleep 50))
-@n                       ;=> 100   ;; all of them, not the ~2 it had time for
+@n                       ;=> 3
 ```
 
-Add the check and it stops:
+**The footgun.** A loop that does not call `sleep` or a channel take or put
+receives no `Cancelled`, so teardown does not stop it. After the scope is
+cancelled, `alts!` returns `nil` without waiting, so a loop over `alts!` keeps
+iterating. This loop runs all 300000 iterations although the scope closes
+after one millisecond:
+
+```clojure
+(def n (atom 0))
+(with-scope [s]
+  (go (loop [i 0]
+        (when (< i 300000)
+          (swap! n inc)
+          (recur (inc i)))))
+  (sleep 1))
+@n                       ;=> 300000
+```
+
+With a `scope-cancelled?` check, the loop stops after cancellation; the count
+depends on timing:
 
 ```clojure
 (def m (atom 0))
 (with-scope [s]
   (go (loop [i 0]
-        (when (and (< i 100) (not (scope-cancelled?)))
+        (when (and (< i 300000) (not (scope-cancelled?)))
           (swap! m inc)
-          (sleep 20)
           (recur (inc i)))))
-  (sleep 50))
-@m                       ;=> 3
+  (sleep 1))
+@m                       ;=> fewer than 300000 (2597 in one run)
 ```
 
-So: **any loop whose exit condition is time or iteration count should also test
-`scope-cancelled?`.** A goroutine that only parks on a channel or a single sleep
-needs nothing — it unparks on its own.
+So: **a loop that does not block on `sleep` or a channel take or put — a busy
+loop, or one built on `alts!` — should test `scope-cancelled?`.** A goroutine
+that parks on a channel or a sleep needs nothing — it is released on its own.
 
 ## Draining and the timeout
 
@@ -145,8 +175,9 @@ it means work that neither parks on a cancellable operation nor polls
 `scope-cancelled?`.
 
 Put cleanup in `finally`, not in a `catch`. It runs on the cancellation path —
-a parked take returns, execution continues, and the `finally` fires — so it
-needs no handler. One hazard to know: a `finally` (or a `with-open` release)
+a parked take raises `Cancelled`, which a `catch Throwable` does not see, and
+the `finally` fires on the way out — so it needs no handler. One hazard to
+know: a `finally` (or a `with-open` release)
 that itself throws *replaces* the exception that was in flight rather than
 being attached to it, so a failing cleanup can hide the failure it was cleaning
 up after ([#919]). Keep release code from throwing where you can.
@@ -184,9 +215,10 @@ each other.
 directly only when the scope's lifetime cannot be a lexical block; you are then
 responsible for closing it on every exit path.
 
-`scope-cancelled?` is the only way let-go code can observe cancellation.
-Blocking natives return early and silently, so a coordinator parked on `sleep`
-cannot otherwise distinguish "woke up" from "was cancelled".
+let-go code observes cancellation two ways: a blocking native raises
+`Cancelled` (catch it with `(catch Cancelled e ...)` to tell "was cancelled"
+from "woke up"), and `scope-cancelled?` answers `true`. Code that never blocks,
+or blocks only on `alts!`, sees only the second.
 
 ## Embedding in Go
 
@@ -290,10 +322,6 @@ before you rely on a scope for anything load-bearing.
   delivered anywhere a supervisor could act on it: no equivalent of Erlang's
   exit signals or linking, no per-scope handler when a child dies, and no
   restart strategies. Siblings are not told.
-- **Cancellation is not observable as a failure** ([#920]). A cancelled
-  operation returns `nil` rather than raising, so it cannot be distinguished
-  from a legitimate `nil` except through `scope-cancelled?`. The cancel arms
-  discard `ctx.Err()` even though the natives have an error slot for it.
 - **Cancellation cannot be forced.** A goroutine that neither parks on a
   cancellable operation nor polls `scope-cancelled?` runs to completion. The
   drain timeout bounds how long anyone *waits*, not how long it *runs*.
@@ -316,4 +344,5 @@ before you rely on a scope for anything load-bearing.
 [#918]: https://github.com/nooga/let-go/issues/918
 [#919]: https://github.com/nooga/let-go/issues/919
 [#920]: https://github.com/nooga/let-go/issues/920
+[#924]: https://github.com/nooga/let-go/pull/924
 [#921]: https://github.com/nooga/let-go/issues/921
