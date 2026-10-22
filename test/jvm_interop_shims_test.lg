@@ -106,6 +106,15 @@
     (is (= ["a"] (vec (.split "ab" "b*"))))
     (is (= ["a" "" ""] (vec (.split "ab" "b*" -1)))))
 
+  (testing "the restored empty match sees its left context"
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|^" -1))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|\\b" -1))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|\\B" -1))))
+    (is (= ["a" "b" " " "c" "d" ""] (vec (.split "ab cd" "x*|\\b" -1))))
+    (is (= ["" "" "\n" "" "b" "\n" "b" ""] (vec (.split "a\nab\nb" "(?m)a*|^" -1))))
+    (is (= ["" "" "a" "b" ""] (vec (.split "żab" "ż*|\\b" -1))))
+    (is (= ["" "bc"] (vec (.split "abc" "\\Aa*" -1)))))
+
   (testing "split limit, as in the String.split javadoc"
     (is (= ["boo" "and:foo"] (vec (.split "boo:and:foo" ":" 2))))
     (is (= ["boo" "and" "foo"] (vec (.split "boo:and:foo" ":" 5))))
