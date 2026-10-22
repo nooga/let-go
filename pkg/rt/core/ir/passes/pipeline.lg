@@ -2,12 +2,16 @@
 ;;
 ;; `(optimize-fn f)` runs the enabled Lisp passes in a sensible order:
 ;;   1. constfold   — fold Const arithmetic, identities, canonicalize
-;;   2. cse         — same-block common-subexpression elimination
-;;   3. constfold   — again; CSE may expose new fold opportunities
-;;   4. licm        — hoist loop-invariant Insts to pre-headers
-;;   5. constfold   — again; LICM may rearrange uses such that more
+;;   2. branchfold  — branch-ifs with a known test become branches; the dead
+;;                    arm and anything only it reached go away; re-infers
+;;                    types when it changed something
+;;   3. cse         — same-block common-subexpression elimination
+;;   4. constfold   — again; CSE may expose new fold opportunities
+;;   5. licm        — hoist loop-invariant Insts to pre-headers
+;;   6. constfold   — again; LICM may rearrange uses such that more
 ;;                    folds become possible
-;;   6. dce         — drop pure Insts with zero uses (cleanup)
+;;   7. branchfold  — again, for tests the later constfolds settled
+;;   8. dce         — drop pure Insts with zero uses (cleanup)
 ;;
 ;; Build (Phase 3) now emits BlockArg params proactively for all cross-block
 ;; captures, eliminating the need for post-pass threading.
@@ -21,11 +25,12 @@
   (:require
    [graph :as g]
    [ir.build]
-   [ir.data]
+   [ir.data :refer [reset-types!]]
    [ir.forms :as forms]
    [ir.lattice :as lat]
    [ir.lower :as lower]
    [ir.lower-go :as lower-go]
+   [ir.passes.branchfold :refer [branchfold]]
    [ir.passes.constfold :refer [constfold]]
    [ir.passes.cse :refer [cse]]
    [ir.passes.dce :refer [dce]]
@@ -43,12 +48,63 @@
 ;; Bare require + resolve defers reference resolution to runtime, handling bootstrap module-load order.
 (lower-go/set-reachable-nids-fn! (resolve 'ir.passes.liveness/reachable-nids))
 
-(defn- run-typeinfra-epoch [f]
+(defn- infer-types! [f]
   (let [state0 (lat/seed-state-from-inst-types! (lat/new-typeinfra-state f) f)
         state1 (infer-arg-types f state0)
         state2 (typeinfer f state1)]
     (lat/flush-state-types! state2 f)
     f))
+
+;; Self-calls and the return type. A self-recursive fn's return type depends on
+;; what its self-calls return, so inference alone leaves both :unknown and fib's
+;; `(+ (fib …) (fib …))` boxed (#599). Typing the self-calls as T is sound
+;; exactly when the body then returns T on every path: the lowered Go fn returns
+;; T, which is what each self-call site assumed (induction on call depth).
+;;
+;; So T is a guess the body has to confirm: the declared return type when there
+;; is one (`(defn f ^long [n] …)`), otherwise (with *infer-self-returns* on)
+;; :int, then :float. A guess the body
+;; contradicts, an arm that returns nil say, is dropped and the self-calls stay
+;; boxed like the return. This must not depend on the declaration being bound:
+;; collect-ns-exports records the cross-package signature without it.
+(def ^:private self-return-guesses [:int :float])
+
+;; The guesses are opt-in; only a declared return type is checked by default.
+;; A guessed :int return moves unhinted recursive arithmetic from checked
+;; rt.AddValue onto raw Go operators, which wrap on overflow instead of
+;; throwing, so the default waits for checked integer lowering.
+(def ^:dynamic *infer-self-returns* false)
+
+(defn- has-self-call? [f]
+  (some (fn [nid]
+          (and (= :call (ir/op nid f))
+               (let [refs (ir/refs nid f)]
+                 (and (seq refs)
+                      (ir.passes.typeinfer/self-callee? (first refs) (dec (count refs)) f)))))
+        (range (ir/inst-count f))))
+
+(defn- infer-with-self-return! [f fname t]
+  (reset-types! f)
+  (binding [ir.passes.typeinfer/*declared-return-types*
+            (if t
+              (assoc (or ir.passes.typeinfer/*declared-return-types* {}) fname t)
+              (dissoc ir.passes.typeinfer/*declared-return-types* fname))]
+    (infer-types! f))
+  (or (nil? t) (lower-go/returns-as? f t)))
+
+(defn- run-typeinfra-epoch [f]
+  (infer-types! f)
+  (let [fname (str (ir/fn-name f))
+        decl  (get ir.passes.typeinfer/*declared-return-types* fname)]
+    (when-not (if decl
+                (lower-go/returns-as? f decl)
+                (or (not *infer-self-returns*)
+                    (not (has-self-call? f))
+                    (some (fn [t] (lower-go/returns-as? f t)) self-return-guesses)))
+      (or (some (fn [t] (infer-with-self-return! f fname t))
+                (if decl [] self-return-guesses))
+          (infer-with-self-return! f fname nil))))
+  f)
 
 ;; Runtime per-ns defn IR cache: when compile-form compiles a defn
 ;; under *ir-compile* with *enable-inline* bound, its built IR Function is
@@ -71,6 +127,17 @@
                (symbol fn-name) ir-fn))
     {} (get @*runtime-defn-ir-cache* ns-name {})))
 
+;; Branch folding, then a fresh typeinfra epoch when it folded anything. The
+;; epoch has to come straight away: the passes after it read types, and a join
+;; that lost an incoming edge keeps the wider type it had until typeinfer runs
+;; again from scratch (its facts only widen from their seed). Fns that fold
+;; nothing pay for one scan of their terminators.
+(defn- branchfold-retyped [f]
+  (when (branchfold f)
+    (reset-types! f)
+    (run-typeinfra-epoch f))
+  f)
+
 ;; Declarative pass list: each entry is [pass-fn validate-label], plus :epoch
 ;; on a typeinfra epoch. The marker, not the fn value, identifies an epoch: under
 ;; -tags gogen_ir the run-typeinfra-epoch Var gets its native override after this
@@ -83,11 +150,13 @@
 (def default-pass-list
   [[run-typeinfra-epoch "infer-arg-types" :epoch]
    [constfold           "constfold-1"]
+   [branchfold-retyped  "branchfold-1"    :branchfold]
    [cse                 "cse"]
    [fusion              "fusion"]
    [constfold           "constfold-2"]
    [licm                "licm"]
    [constfold           "constfold-3"]
+   [branchfold-retyped  "branchfold-2"    :branchfold]
    [dce                 "dce"]
    [run-typeinfra-epoch nil               :epoch]])
 
@@ -129,8 +198,14 @@
 ;; Skipping type inference keeps every inst :unknown → the whole body lowers
 ;; through the boxed vm.Value path → uniform ABI by construction.
 (def uniform-pass-list
-  (vec (filter (fn [entry] (not= :epoch (nth entry 2 nil)))
-               default-pass-list)))
+  (into []
+        (keep (fn [entry]
+                (case (nth entry 2 nil)
+                  :epoch      nil
+                  ;; fold without the re-inference
+                  :branchfold [(fn [f] (branchfold f) f) (nth entry 1)]
+                  entry)))
+        default-pass-list))
 
 (defn- optimize-fn-uniform [f]
   (legalize-fn! f)
