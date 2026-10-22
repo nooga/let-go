@@ -764,6 +764,7 @@ func installIoNS() {
 	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
 	ns.Exclude("slurp")
 	ns.Exclude("spit")
+	ns.Exclude("flush")
 
 	// Protocols
 	ns.Def("IReadable", ReadableProto)
