@@ -23,6 +23,7 @@ type config struct {
 	keys    rt.KeySource
 	store   rt.Storage
 	surface rt.Surface
+	audio   rt.Audio
 }
 
 // WithStdout configures the runtime to route output written via *out*
@@ -105,6 +106,20 @@ func WithSurface(s rt.Surface) Option {
 	return func(c *config) { c.surface = s }
 }
 
+// WithAudio routes the audio namespace through a for this instance: a native
+// embedder supplies its own backend, or a test records what the guest played.
+// a is an rt.Audio; see pkg/rt/audio.go. The embedder keeps a, so it can also
+// join it with a.Stream, which lg code never sees.
+//
+// Implementation: each Run pushes a as a dynamic binding on *audio*, popped on
+// return. Same process-global-binding-stack concurrency caveat as WithStdout.
+//
+// Default: the *audio* root, a no-op unless a backend is built in (pkg/audio,
+// -tags audio_oto).
+func WithAudio(a rt.Audio) Option {
+	return func(c *config) { c.audio = a }
+}
+
 // WithStorage routes the storage namespace through store for this instance.
 // The store receives app-local logical keys; callers should not encode host
 // filesystem or browser-origin details into those keys.
@@ -143,6 +158,7 @@ type LetGo struct {
 	keysHandle    vm.Value
 	storeHandle   vm.Value
 	surfaceHandle vm.Value
+	audioHandle   vm.Value
 }
 
 // NewLetGo constructs a runtime. With no options, behavior is exactly
@@ -185,6 +201,9 @@ func NewLetGo(ns string, opts ...Option) (*LetGo, error) {
 	}
 	if cfg.surface != nil {
 		ret.surfaceHandle = vm.NewBoxed(cfg.surface)
+	}
+	if cfg.audio != nil {
+		ret.audioHandle = vm.NewBoxed(cfg.audio)
 	}
 
 	return ret, nil
@@ -256,6 +275,12 @@ func (l *LetGo) Run(expr string) (vm.Value, error) {
 	if l.surfaceHandle != nil {
 		if v := rt.LookupCoreVar("*surface*"); v != nil {
 			v.PushBinding(l.surfaceHandle)
+			defer v.PopBinding()
+		}
+	}
+	if l.audioHandle != nil {
+		if v := rt.LookupCoreVar("*audio*"); v != nil {
+			v.PushBinding(l.audioHandle)
 			defer v.PopBinding()
 		}
 	}
