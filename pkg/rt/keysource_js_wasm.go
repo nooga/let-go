@@ -14,7 +14,7 @@
  * this worker (consumer). Layout MUST stay in sync with the producer in
  * pkg/rt/wasm/lg-host-core.js; the consts below mirror the JS side. The
  * producer writes slot [writeIdx % keyCapacity] then advances writeIdx; the
- * consumer waits on writeIdx, reads slot [readIdx % keyCapacity], then
+ * consumer polls writeIdx, reads slot [readIdx % keyCapacity], then
  * advances readIdx. The producer never blocks the main thread — when the
  * ring is full it drops.
  *
@@ -34,6 +34,7 @@ package rt
 import (
 	"fmt"
 	"syscall/js"
+	"time"
 )
 
 const (
@@ -43,6 +44,9 @@ const (
 	keyOffset    = 72 // byte offset of the keys region
 	readIdxCell  = 0  // Int32 index of the read pointer
 	writeIdxCell = 1  // Int32 index of the write pointer
+
+	// keyPollInterval bounds the latency a waiting read-key adds to a key.
+	keyPollInterval = 4 * time.Millisecond
 )
 
 // HostKeySource reads keys from the bundle's SharedArrayBuffer ring.
@@ -59,21 +63,19 @@ func (HostKeySource) ReadKey() (string, error) {
 		return "", fmt.Errorf("read-key: terminal input not available (no SharedArrayBuffer)")
 	}
 
-	// Flush output before parking on the key wait.
+	// Flush output before waiting for a key.
 	js.Global().Call("_lgFlush")
 
-	// Park while the ring is empty (writeIdx == readIdx). Atomics.wait
-	// returns ok / timed-out / not-equal; in every case we re-check the
-	// predicate, so spurious or early wakes just loop and re-wait. Passing
-	// the observed writeIdx as the expected value means a producer that
-	// advanced before we hit wait returns immediately with "not-equal".
+	// Wait while the ring is empty (writeIdx == readIdx) by sleeping in short
+	// slices rather than parking on Atomics.wait. Go's wasm runs every
+	// goroutine on the worker's one thread, so an untimed Atomics.wait froze
+	// all of them and the worker's event loop with them (#1086). time.Sleep
+	// lets the other goroutines run and, once none are runnable, returns to
+	// the event loop through setTimeout. Blocking only the caller matches
+	// native read-key, which waits on a condition variable.
 	r := jsLoadInt(atomics, keyInt32, readIdxCell)
-	for {
-		w := jsLoadInt(atomics, keyInt32, writeIdxCell)
-		if w != r {
-			break
-		}
-		atomics.Call("wait", keyInt32, writeIdxCell, w)
+	for jsLoadInt(atomics, keyInt32, writeIdxCell) == r {
+		time.Sleep(keyPollInterval)
 	}
 
 	slot := r % keyCapacity
