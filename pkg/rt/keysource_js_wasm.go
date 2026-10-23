@@ -33,6 +33,7 @@ package rt
 
 import (
 	"fmt"
+	"sync"
 	"syscall/js"
 	"time"
 )
@@ -51,6 +52,11 @@ const (
 
 // HostKeySource reads keys from the bundle's SharedArrayBuffer ring.
 type HostKeySource struct{}
+
+// hostKeyMu serializes ReadKey callers on the one global ring. A waiting
+// reader yields, so without it two readers holding the same readIdx would
+// both consume the first key that arrives.
+var hostKeyMu sync.Mutex
 
 // NewHostKeySource returns a HostKeySource for the *keys* root binding.
 func NewHostKeySource() *HostKeySource { return &HostKeySource{} }
@@ -73,6 +79,8 @@ func (HostKeySource) ReadKey() (string, error) {
 	// lets the other goroutines run and, once none are runnable, returns to
 	// the event loop through setTimeout. Blocking only the caller matches
 	// native read-key, which waits on a condition variable.
+	hostKeyMu.Lock()
+	defer hostKeyMu.Unlock()
 	r := jsLoadInt(atomics, keyInt32, readIdxCell)
 	for jsLoadInt(atomics, keyInt32, writeIdxCell) == r {
 		time.Sleep(keyPollInterval)
