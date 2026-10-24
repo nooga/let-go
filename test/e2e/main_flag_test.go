@@ -97,13 +97,29 @@ func TestMainFlagStorageID(t *testing.T) {
 	bin := buildLG(t)
 	dir := t.TempDir()
 	home := t.TempDir()
-	for name, body := range map[string]string{
-		"store.lg": `(ns store) (defn -main [] (prn (storage/get "k")))`,
-		"other.lg": `(ns other) (defn -main [] (prn (storage/get "k")))`,
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+	cases := []struct{ file, ns string }{
+		{"store.lg", "store"},
+		{"my_app.clj", "my-app"},
+		{"nested/cljc_app.cljc", "nested.cljc-app"},
+		{"literal-app.lg", "literal-app"},
+		{"choice_app.lg", "choice-app"},
+	}
+	for _, tc := range cases {
+		file := filepath.Join(dir, tc.file)
+		if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
 			t.Fatal(err)
 		}
+		body := "(ns " + tc.ns + `) (def saved (storage/get "k")) (defn -main [] (prn saved))`
+		if err := os.WriteFile(file, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The .lg underscore candidate takes precedence over the .clj hyphen candidate.
+	if err := os.WriteFile(filepath.Join(dir, "choice-app.clj"), []byte(`(ns choice-app) (defn -main [] (prn :wrong-file))`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "other.lg"), []byte(`(ns other) (defn -main [] (prn (storage/get "k")))`), 0644); err != nil {
+		t.Fatal(err)
 	}
 	run := func(args ...string) string {
 		t.Helper()
@@ -116,9 +132,17 @@ func TestMainFlagStorageID(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	run("-e", `(storage/set "k" "from-script")`, "store.lg")
-	if got := run("-source-paths", dir, "-m", "store"); got != `"from-script"` {
-		t.Fatalf("-m store read %s, want the script-mode value", got)
+	for _, tc := range cases {
+		t.Run(tc.ns, func(t *testing.T) {
+			run("-e", `(storage/set "k" "from-script")`, tc.file)
+			if got := run("-source-paths", dir, "-m", tc.ns); got != `"from-script"` {
+				t.Fatalf("-m %s read %s, want the script-mode value", tc.ns, got)
+			}
+		})
+	}
+	run("-storage-id", "custom", "-e", `(storage/set "k" "explicit")`)
+	if got := run("-storage-id", "custom", "-source-paths", dir, "-m", "my-app/-main"); got != `"explicit"` {
+		t.Fatalf("explicit store read %s, want explicit", got)
 	}
 	if got := run("-source-paths", dir, "-m", "other"); got != "nil" {
 		t.Fatalf("-m other read %s, want its own empty store", got)

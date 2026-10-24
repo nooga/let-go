@@ -670,7 +670,10 @@ func runMain() int {
 		// Key the store as if the namespace's file had been run as a script, so
 		// `lg -m app.core` and `lg src/app/core.lg` share one store.
 		ns, _, _ := parseMainTarget(mainTarget)
-		scriptForStorage = strings.ReplaceAll(ns, ".", "/") + ".lg"
+		scriptForStorage = nsResolver.SourcePath(ns)
+		if scriptForStorage == "" {
+			scriptForStorage = strings.ReplaceAll(ns, ".", "/") + ".lg"
+		}
 	} else if len(files) >= 1 {
 		scriptForStorage = files[0]
 	}
