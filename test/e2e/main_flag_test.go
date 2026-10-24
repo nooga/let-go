@@ -90,3 +90,37 @@ func TestMainFlag(t *testing.T) {
 		})
 	}
 }
+
+// -m keys persistent storage by namespace, the way script mode keys it by file,
+// so a program keeps its store whichever way it is launched.
+func TestMainFlagStorageID(t *testing.T) {
+	bin := buildLG(t)
+	dir := t.TempDir()
+	home := t.TempDir()
+	for name, body := range map[string]string{
+		"store.lg": `(ns store) (defn -main [] (prn (storage/get "k")))`,
+		"other.lg": `(ns other) (defn -main [] (prn (storage/get "k")))`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home, "APPDATA="+home)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("-e", `(storage/set "k" "from-script")`, "store.lg")
+	if got := run("-source-paths", dir, "-m", "store"); got != `"from-script"` {
+		t.Fatalf("-m store read %s, want the script-mode value", got)
+	}
+	if got := run("-source-paths", dir, "-m", "other"); got != "nil" {
+		t.Fatalf("-m other read %s, want its own empty store", got)
+	}
+}

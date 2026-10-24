@@ -444,7 +444,7 @@ func registerFlags() {
 	flag.BoolVar(&wasmHostEval, "w-host-eval", false, "for -w: expose LetGoHost.eval(code) to call into the loaded image and keep it live (park after the program's main returns); works in both boot modes. Pair with -w-shell none")
 	flag.StringVar(&wasmModule, "w-module", "", "for -w: build inside the Go module at this directory, whose go.mod and go.sum are used as they are (built -mod=readonly); lg writes only <dir>/lgprogram, and refuses that directory unless it carries lg's marker")
 	flag.Var(&wasmImports, "import", "for -w with -w-module: blank-import this Go package into the generated main package, so its init() registers its namespaces; repeatable. The module must already require it")
-	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script name, or current directory for main.lg)")
+	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script or -m namespace name, or current directory for main.lg)")
 	flag.StringVar(&sourcePaths, "source-paths", "",
 		"namespace search paths separated by the OS path-list separator "+
 			"(':' on Unix, ';' on Windows). When given, fully defines the search "+
@@ -666,7 +666,12 @@ func runMain() int {
 	}
 	rt.SetCommandLineArgs(userArgs)
 	scriptForStorage := ""
-	if !mainMode && len(files) >= 1 {
+	if mainMode {
+		// Key the store as if the namespace's file had been run as a script, so
+		// `lg -m app.core` and `lg src/app/core.lg` share one store.
+		ns, _, _ := parseMainTarget(mainTarget)
+		scriptForStorage = strings.ReplaceAll(ns, ".", "/") + ".lg"
+	} else if len(files) >= 1 {
 		scriptForStorage = files[0]
 	}
 	rt.InstallPersistentStorage(storageIDForScript(scriptForStorage))
