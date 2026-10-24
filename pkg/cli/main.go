@@ -66,12 +66,22 @@ func runNamespaceMain(target string, args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := rt.RequireNS(ns); err != nil {
+	namespace, err := rt.RequireNS(ns)
+	if err != nil {
 		return err
+	}
+	v := namespace.LookupLocal(vm.Symbol(name))
+	if v == nil {
+		return fmt.Errorf("-m: %s/%s not found", ns, name)
+	}
+	fn, ok := v.Deref().(vm.Fn)
+	if !ok {
+		return fmt.Errorf("-m: %s/%s is not callable", ns, name)
 	}
 	values := make([]vm.Value, len(args))
 	for i, arg := range args {
 		values[i] = vm.String(arg)
 	}
-	return rt.InvokeProgramEntry(vm.NewExecContext(), ns, name, values)
+	_, err = vm.NewExecContext().Invoke(fn, values)
+	return err
 }
