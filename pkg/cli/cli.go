@@ -379,6 +379,7 @@ var nreplPort int
 var runNREPL bool
 var runREPL bool
 var expr string
+var mainTarget string
 var debug bool
 var showVersion bool
 var compileOutput string
@@ -423,6 +424,8 @@ var flagsOnce sync.Once
 func registerFlags() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
 	flag.StringVar(&expr, "e", "", "eval given expression")
+	flag.StringVar(&mainTarget, "m", "", "call namespace/-main or namespace/fn with the remaining arguments")
+	flag.StringVar(&mainTarget, "main", "", "alias for -m")
 	flag.BoolVar(&debug, "d", false, "enable VM debug mode")
 	flag.BoolVar(&runNREPL, "n", false, "enable nREPL server")
 	flag.IntVar(&nreplPort, "p", 2137, "set nREPL port, default is 2137")
@@ -441,7 +444,7 @@ func registerFlags() {
 	flag.BoolVar(&wasmHostEval, "w-host-eval", false, "for -w: expose LetGoHost.eval(code) to call into the loaded image and keep it live (park after the program's main returns); works in both boot modes. Pair with -w-shell none")
 	flag.StringVar(&wasmModule, "w-module", "", "for -w: build inside the Go module at this directory, whose go.mod and go.sum are used as they are (built -mod=readonly); lg writes only <dir>/lgprogram, and refuses that directory unless it carries lg's marker")
 	flag.Var(&wasmImports, "import", "for -w with -w-module: blank-import this Go package into the generated main package, so its init() registers its namespaces; repeatable. The module must already require it")
-	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script name, or current directory for main.lg)")
+	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script or -m namespace name, or current directory for main.lg)")
 	flag.StringVar(&sourcePaths, "source-paths", "",
 		"namespace search paths separated by the OS path-list separator "+
 			"(':' on Unix, ';' on Windows). When given, fully defines the search "+
@@ -592,7 +595,25 @@ func runMain() int {
 		return runCompile(os.Args[2:])
 	}
 
-	flag.Parse()
+	if err := parseRunFlags(flag.CommandLine, os.Args[1:]); err != nil {
+		return 2
+	}
+	mainMode := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "m" || f.Name == "main" {
+			mainMode = true
+		}
+	})
+	if mainMode {
+		if _, _, err := parseMainTarget(mainTarget); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 2
+		}
+		if compileOutput != "" || bundleOutput != "" || wasmOutput != "" {
+			fmt.Fprintln(os.Stderr, "error: -m cannot be combined with -c, -b or -w")
+			return 2
+		}
+	}
 	if entryFrameEntry != "" {
 		slash := strings.LastIndexByte(entryFrameEntry, '/')
 		name := entryFrameEntry[slash+1:]
@@ -636,16 +657,21 @@ func runMain() int {
 	nsResolver := resolver.NewNSResolver(context, buildSearchPaths())
 	rt.SetNSLoader(nsResolver)
 
-	// files[0] is the script; the rest are the user's args. Set unconditionally
-	// so script, -e, compile, bundle, and wasm modes all see it, and before any
-	// user code runs.
+	// Bind arguments before initialization expressions or namespace loading run.
 	var userArgs []string
-	if len(files) >= 1 {
+	if mainMode {
+		userArgs = files
+	} else if len(files) >= 1 {
 		userArgs = files[1:]
 	}
 	rt.SetCommandLineArgs(userArgs)
 	scriptForStorage := ""
-	if len(files) >= 1 {
+	if mainMode {
+		// Key the store as if the namespace's file had been run as a script, so
+		// `lg -m app.core` and `lg src/app/core.lg` share one store.
+		ns, _, _ := parseMainTarget(mainTarget)
+		scriptForStorage = strings.ReplaceAll(ns, ".", "/") + ".lg"
+	} else if len(files) >= 1 {
 		scriptForStorage = files[0]
 	}
 	rt.InstallPersistentStorage(storageIDForScript(scriptForStorage))
@@ -717,7 +743,7 @@ func runMain() int {
 	// Any further positionals belong to the script (it reads os/args).
 	ranSomething := false
 	runFailed := false
-	if len(files) >= 1 {
+	if !mainMode && len(files) >= 1 {
 		if err := runScript(context, files[0]); err != nil {
 			fmt.Print(vm.FormatError(err))
 			runFailed = true
@@ -734,6 +760,16 @@ func runMain() int {
 		if err != nil {
 			fmt.Print(vm.FormatError(err))
 			runFailed = true
+		}
+		ranSomething = true
+	}
+
+	if mainMode {
+		if !runFailed {
+			if err := runNamespaceMain(mainTarget, userArgs); err != nil {
+				fmt.Fprint(os.Stderr, vm.FormatError(err))
+				runFailed = true
+			}
 		}
 		ranSomething = true
 	}
@@ -760,7 +796,7 @@ func runMain() int {
 }
 
 // Main is the whole lg command line: flag registration, argument handling, and
-// every mode the binary supports (eval, run, REPL, nREPL, -c compile, -b bundle,
+// every mode the binary supports (eval, run, -m main, REPL, nREPL, -c compile, -b bundle,
 // -w wasm, and the `lg compile` native build). It returns an exit code rather
 // than calling os.Exit itself, so an embedding main stays in control of
 // shutdown.
