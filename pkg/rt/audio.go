@@ -123,14 +123,12 @@ func installAudioNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		s := Sound{LoopFrom: -1, Gain: g, Tone: Tone{
-			Freq: optFloat(m, "freq", 0),
-			Dur:  time.Duration(optFloat(m, "ms", 0) * float64(time.Millisecond)),
-			Wave: optName(m, "wave", "sine"),
-		}}
-		if !(s.Tone.Freq > 0 && s.Tone.Dur > 0) {
-			return vm.NIL, fmt.Errorf("audio/tone needs a positive :freq and :ms")
+		freq := optFloat(m, "freq", 0)
+		dur, ok := msDuration(optFloat(m, "ms", 0))
+		if !(freq > 0 && !math.IsInf(freq, 1)) || !ok || dur <= 0 {
+			return vm.NIL, fmt.Errorf("audio/tone needs a finite positive :freq and :ms")
 		}
+		s := Sound{LoopFrom: -1, Gain: g, Tone: Tone{Freq: freq, Dur: dur, Wave: optName(m, "wave", "sine")}}
 		switch s.Tone.Wave {
 		case "sine", "square", "saw", "triangle":
 		default:
@@ -167,8 +165,8 @@ func installAudioNS() {
 		}
 		s := Sound{PCM: pcm, LoopFrom: -1, Gain: g}
 		if v := optFloat(m, "loop-from", -1); v >= 0 {
-			if int(v) >= len(pcm)/2 {
-				return vm.NIL, fmt.Errorf("audio/sample: :loop-from %d is past the last frame", int(v))
+			if v >= float64(len(pcm)/2) {
+				return vm.NIL, fmt.Errorf("audio/sample: :loop-from %v is past the last frame", v)
 			}
 			s.LoopFrom = int(v)
 		}
@@ -206,10 +204,12 @@ func installAudioNS() {
 		var fade time.Duration
 		if len(vs) == 3 {
 			ms, ok := vm.ToFloat(vs[2])
-			if !ok || !(ms >= 0) {
-				return vm.NIL, fmt.Errorf("audio/gain: fade-ms must be at least 0")
+			if ok {
+				fade, ok = msDuration(ms)
 			}
-			fade = time.Duration(ms * float64(time.Millisecond))
+			if !ok {
+				return vm.NIL, fmt.Errorf("audio/gain: fade-ms must be finite and at least 0")
+			}
 		}
 		if vs[0] != vm.NIL {
 			a.Gain(AudioHandle(h), g, fade)
@@ -254,6 +254,18 @@ func audioOpts(name string, vs []vm.Value, need int) (*vm.PersistentMap, error) 
 
 // validGain is a level a mixer can ramp to: finite and at least 0.
 func validGain(g float64) bool { return g >= 0 && !math.IsInf(g, 1) }
+
+// maxMs is the longest time.Duration, in ms.
+const maxMs = float64(math.MaxInt64 / int64(time.Millisecond))
+
+// msDuration converts ms to a Duration, refusing NaN, a negative, ##Inf or
+// anything a Duration cannot hold rather than converting it arch-dependently.
+func msDuration(ms float64) (time.Duration, bool) {
+	if !(ms >= 0 && ms <= maxMs) {
+		return 0, false
+	}
+	return time.Duration(ms * float64(time.Millisecond)), true
+}
 
 // startGain reads a sound's starting :gain, 1 by default.
 func startGain(name string, m *vm.PersistentMap) (float64, error) {

@@ -94,6 +94,13 @@ func TestAudioNoopWithoutBackend(t *testing.T) {
 		`(audio/tone {:freq 440 :ms 50 :gain -1})`,
 		`(audio/sample (byte-array [-24 3 -24 3]) {:loop-from 0 :gain -1})`,
 		`(audio/stop :h)`,
+		`(audio/tone {:freq ##Inf :ms 50})`,
+		`(audio/tone {:freq 440 :ms ##Inf})`,
+		`(audio/tone {:freq 440 :ms 1e300})`,
+		`(audio/sample (byte-array [1 0 2 0]) {:loop-from ##Inf})`,
+		`(audio/sample (byte-array [1 0 2 0]) {:loop-from 1e300})`,
+		`(audio/gain 1 0.5 ##Inf)`,
+		`(audio/gain 1 0.5 ##NaN)`,
 	} {
 		if _, err := lg.Run(bad); err == nil {
 			t.Errorf("%s: want an error", bad)

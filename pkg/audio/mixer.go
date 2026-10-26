@@ -12,6 +12,7 @@ package audio
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -65,8 +66,13 @@ func (m *Mixer) add(v *voice, gain float64) rt.AudioHandle {
 	return v.h
 }
 
-// Play starts a sample or a tone.
+// Play starts a sample or a tone. It refuses a sound it cannot render: PCM
+// that is not whole stereo frames, a loop frame past the end, or a gain or
+// frequency that is not finite.
 func (m *Mixer) Play(s rt.Sound) (rt.AudioHandle, error) {
+	if err := check(s); err != nil {
+		return 0, err
+	}
 	v := &voice{pcm: s.PCM, loopFrom: s.LoopFrom}
 	if s.Tone.Freq > 0 {
 		v.pcm, v.tone = nil, s.Tone
@@ -74,6 +80,24 @@ func (m *Mixer) Play(s rt.Sound) (rt.AudioHandle, error) {
 	}
 	return m.add(v, s.Gain), nil
 }
+
+func check(s rt.Sound) error {
+	switch {
+	case !finite(s.Gain):
+		return fmt.Errorf("audio: gain %v is not finite", s.Gain)
+	case s.Tone.Freq > 0:
+		if math.IsInf(s.Tone.Freq, 1) {
+			return fmt.Errorf("audio: tone frequency is not finite")
+		}
+	case len(s.PCM)%2 != 0:
+		return fmt.Errorf("audio: %d PCM samples is not a whole number of stereo frames", len(s.PCM))
+	case s.LoopFrom >= len(s.PCM)/2:
+		return fmt.Errorf("audio: loop frame %d is past the last frame", s.LoopFrom)
+	}
+	return nil
+}
+
+func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
 // Stream mixes src until it errors or the handle is stopped.
 func (m *Mixer) Stream(src io.Reader) (rt.AudioHandle, error) {
@@ -91,11 +115,12 @@ func (m *Mixer) Stop(h rt.AudioHandle) {
 }
 
 // Gain moves the sound's level to g over fade, or over edgeFrames when fade
-// is shorter, so a level change never clicks.
+// is shorter, so a level change never clicks. A g that is not finite is
+// ignored.
 func (m *Mixer) Gain(h rt.AudioHandle, g float64, fade time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if v := m.find(h); v != nil && !v.stopping {
+	if v := m.find(h); v != nil && !v.stopping && finite(g) {
 		frames := max(edgeFrames, fade.Seconds()*rt.AudioRate)
 		v.target, v.step = g, math.Abs(g-v.gain)/frames
 	}
@@ -167,6 +192,8 @@ func (v *voice) render(mix []float64) {
 			v.phase -= math.Floor(v.phase)
 			v.left--
 			if v.left == edgeFrames {
+				// stopping, so a Gain call cannot undo the end fade.
+				v.stopping = true
 				v.target, v.step = 0, v.gain/edgeFrames
 			}
 			if v.left == 0 {

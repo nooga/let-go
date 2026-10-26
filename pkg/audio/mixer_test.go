@@ -3,6 +3,7 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"testing"
 	"time"
 
@@ -154,6 +155,51 @@ func TestGainFades(t *testing.T) {
 	mid := read(m, rt.AudioRate/20)[2*(rt.AudioRate/20-1)]
 	if mid < 400 || mid > 600 {
 		t.Errorf("halfway through a 100 ms fade the level is %d, want about 500", mid)
+	}
+}
+
+// A Gain call during a tone's end fade does not undo it: the tone still ends
+// at silence instead of cutting off at the new level.
+func TestToneEndFadeOutlastsAGain(t *testing.T) {
+	m := NewMixer()
+	h, _ := m.Play(rt.Sound{LoopFrom: -1, Gain: 1, Tone: rt.Tone{Freq: 441, Dur: 50 * time.Millisecond, Wave: "square"}})
+	frames := rt.AudioRate / 20
+	read(m, frames-edgeFrames/2) // into the end fade
+	m.Gain(h, 1, 0)
+	out := read(m, edgeFrames)
+	if last := out[2*(edgeFrames/2-1)]; abs(int(last)) > 200 {
+		t.Errorf("the tone ends at %d after a Gain in its end fade, not near silence", last)
+	}
+}
+
+// Play refuses a sound it cannot render rather than panicking in the mix.
+func TestPlayRefusesWhatItCannotRender(t *testing.T) {
+	m := NewMixer()
+	for name, s := range map[string]rt.Sound{
+		"odd PCM":           {PCM: make([]int16, 3), LoopFrom: -1, Gain: 1},
+		"empty loop":        {LoopFrom: 0, Gain: 1},
+		"loop past the end": {PCM: make([]int16, 4), LoopFrom: 2, Gain: 1},
+		"NaN gain":          {PCM: make([]int16, 4), LoopFrom: -1, Gain: math.NaN()},
+		"infinite gain":     {PCM: make([]int16, 4), LoopFrom: -1, Gain: math.Inf(1)},
+		"infinite tone":     {LoopFrom: -1, Gain: 1, Tone: rt.Tone{Freq: math.Inf(1), Dur: time.Second}},
+	} {
+		if _, err := m.Play(s); err == nil {
+			t.Errorf("%s: Play accepted it", name)
+		}
+	}
+	if len(m.voices) != 0 {
+		t.Errorf("%d refused sounds were added to the mix", len(m.voices))
+	}
+}
+
+// Gain ignores a level that is not finite, so the mix never turns NaN.
+func TestGainIgnoresNaN(t *testing.T) {
+	m := NewMixer()
+	h, _ := m.Stream(constant(1000))
+	read(m, edgeFrames)
+	m.Gain(h, math.NaN(), 0)
+	if got := read(m, 10)[18]; got != 1000 {
+		t.Errorf("after Gain(NaN) the level is %d, want 1000", got)
 	}
 }
 

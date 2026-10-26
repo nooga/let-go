@@ -6,6 +6,7 @@ toolchain go1.27.1
 
 require (
 	github.com/chzyer/readline v1.5.1
+	github.com/ebitengine/oto/v3 v3.5.0
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260823155953-d41da22a9587
 	github.com/hajimehoshi/ebiten/v2 v2.10.2
@@ -80,7 +81,6 @@ require (
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/ebitengine/gomobile v0.0.0-20260820040257-d11f821a26a6 // indirect
 	github.com/ebitengine/hideconsole v1.0.0 // indirect
-	github.com/ebitengine/oto/v3 v3.5.0 // indirect
 	github.com/ebitengine/purego v0.11.0 // indirect
 	github.com/ettle/strcase v0.2.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect
