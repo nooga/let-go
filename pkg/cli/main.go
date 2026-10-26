@@ -8,8 +8,11 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/resolver"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -19,16 +22,11 @@ import (
 // flag parsing rules, including flags registered by an embedding main.
 func parseRunFlags(fs *flag.FlagSet, args []string) error {
 	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" || !strings.HasPrefix(arg, "-") || arg == "-" {
-			break
-		}
-		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
-		f := fs.Lookup(name)
+		f, hasValue := lookupRunFlag(fs, args[i])
 		if f == nil {
 			break
 		}
-		if name == "m" || name == "main" {
+		if f.Name == "m" || f.Name == "main" {
 			end := i + 1
 			if !hasValue {
 				end++
@@ -84,4 +82,87 @@ func runNamespaceMain(target string, args []string) error {
 	}
 	_, err = vm.NewExecContext().Invoke(fn, values)
 	return err
+}
+
+func lookupRunFlag(fs *flag.FlagSet, arg string) (*flag.Flag, bool) {
+	if arg == "--" || !strings.HasPrefix(arg, "-") || arg == "-" {
+		return nil, false
+	}
+	name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+	return fs.Lookup(name), hasValue
+}
+
+func validateMainMode(fs *flag.FlagSet) (bool, error) {
+	mainMode := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "m" || f.Name == "main" {
+			mainMode = true
+		}
+	})
+	if !mainMode {
+		return false, nil
+	}
+	if _, _, err := parseMainTarget(mainTarget); err != nil {
+		return true, err
+	}
+	if compileOutput != "" || bundleOutput != "" || wasmOutput != "" {
+		return true, fmt.Errorf("-m cannot be combined with -c, -b or -w")
+	}
+	return true, nil
+}
+
+func programStorageSource(nsResolver *resolver.NSResolver, files []string, mainMode bool) string {
+	if mainMode {
+		ns, _, _ := parseMainTarget(mainTarget)
+		if source := nsResolver.SourcePath(ns); source != "" {
+			return source
+		}
+		return strings.ReplaceAll(ns, ".", "/") + ".lg"
+	}
+	if len(files) > 0 {
+		return files[0]
+	}
+	return ""
+}
+
+func evalExpression(context *compiler.Context, expression string) error {
+	context.SetSource("EXPR")
+	val, err := runForm(context, expression)
+	if err != nil {
+		return err
+	}
+	return printResult(val)
+}
+
+// runProgram preserves script-then-expression ordering; namespace main runs
+// after the expression, and only if initialization succeeded.
+func runProgram(context *compiler.Context, files, userArgs []string, mainMode bool) (ranSomething, runFailed bool) {
+	if !mainMode && len(files) >= 1 {
+		if err := runScript(context, files[0]); err != nil {
+			fmt.Print(vm.FormatError(err))
+			runFailed = true
+		}
+		ranSomething = true
+	}
+
+	if expr != "" {
+		err := evalExpression(context, expr)
+		if err != nil {
+			fmt.Print(vm.FormatError(err))
+			runFailed = true
+		}
+		ranSomething = true
+	}
+
+	if !mainMode {
+		return ranSomething, runFailed
+	}
+	if runFailed {
+		return true, true
+	}
+	if err := runNamespaceMain(mainTarget, userArgs); err != nil {
+		fmt.Fprint(os.Stderr, vm.FormatError(err))
+		return true, true
+	}
+	return true, false
 }

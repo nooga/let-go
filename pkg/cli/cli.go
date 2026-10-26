@@ -598,21 +598,10 @@ func runMain() int {
 	if err := parseRunFlags(flag.CommandLine, os.Args[1:]); err != nil {
 		return 2
 	}
-	mainMode := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "m" || f.Name == "main" {
-			mainMode = true
-		}
-	})
-	if mainMode {
-		if _, _, err := parseMainTarget(mainTarget); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			return 2
-		}
-		if compileOutput != "" || bundleOutput != "" || wasmOutput != "" {
-			fmt.Fprintln(os.Stderr, "error: -m cannot be combined with -c, -b or -w")
-			return 2
-		}
+	mainMode, err := validateMainMode(flag.CommandLine)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
 	}
 	if entryFrameEntry != "" {
 		slash := strings.LastIndexByte(entryFrameEntry, '/')
@@ -665,19 +654,7 @@ func runMain() int {
 		userArgs = files[1:]
 	}
 	rt.SetCommandLineArgs(userArgs)
-	scriptForStorage := ""
-	if mainMode {
-		// Key the store as if the namespace's file had been run as a script, so
-		// `lg -m app.core` and `lg src/app/core.lg` share one store.
-		ns, _, _ := parseMainTarget(mainTarget)
-		scriptForStorage = nsResolver.SourcePath(ns)
-		if scriptForStorage == "" {
-			scriptForStorage = strings.ReplaceAll(ns, ".", "/") + ".lg"
-		}
-	} else if len(files) >= 1 {
-		scriptForStorage = files[0]
-	}
-	rt.InstallPersistentStorage(storageIDForScript(scriptForStorage))
+	rt.InstallPersistentStorage(storageIDForScript(programStorageSource(nsResolver, files, mainMode)))
 
 	// Dev/run resources: serve io/resource from the -resource-paths roots on
 	// the filesystem. (In a bundled binary this branch is never reached — the
@@ -742,40 +719,7 @@ func runMain() int {
 	// Default builds compile this to a no-op so the release binary stays small.
 	startProfiling()
 
-	// Script mode: treat only the first positional as the script to run.
-	// Any further positionals belong to the script (it reads os/args).
-	ranSomething := false
-	runFailed := false
-	if !mainMode && len(files) >= 1 {
-		if err := runScript(context, files[0]); err != nil {
-			fmt.Print(vm.FormatError(err))
-			runFailed = true
-		}
-		ranSomething = true
-	}
-
-	if expr != "" {
-		context.SetSource("EXPR")
-		val, err := runForm(context, expr)
-		if err == nil {
-			err = printResult(val)
-		}
-		if err != nil {
-			fmt.Print(vm.FormatError(err))
-			runFailed = true
-		}
-		ranSomething = true
-	}
-
-	if mainMode {
-		if !runFailed {
-			if err := runNamespaceMain(mainTarget, userArgs); err != nil {
-				fmt.Fprint(os.Stderr, vm.FormatError(err))
-				runFailed = true
-			}
-		}
-		ranSomething = true
-	}
+	ranSomething, runFailed := runProgram(context, files, userArgs, mainMode)
 
 	if !ranSomething || runREPL {
 		motd()
