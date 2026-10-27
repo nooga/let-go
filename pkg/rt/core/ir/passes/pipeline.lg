@@ -1,6 +1,8 @@
 ;; The Lisp optimization-pass pipeline driver.
 ;;
 ;; `(optimize-fn f)` runs the enabled Lisp passes in a sensible order:
+;;   0. branchfold  — constant tests only (`(if :else x nil)`), before types exist,
+;;                    so the first typeinfra epoch infers the folded CFG
 ;;   1. constfold   — fold Const arithmetic, identities, canonicalize
 ;;   2. branchfold  — branch-ifs with a known test become branches; the dead
 ;;                    arm and anything only it reached go away; re-infers
@@ -30,7 +32,7 @@
    [ir.lattice :as lat]
    [ir.lower :as lower]
    [ir.lower-go :as lower-go]
-   [ir.passes.branchfold :refer [branchfold]]
+   [ir.passes.branchfold :refer [branchfold branchfold-constants]]
    [ir.passes.constfold :refer [constfold]]
    [ir.passes.cse :refer [cse]]
    [ir.passes.dce :refer [dce]]
@@ -145,10 +147,12 @@
 ;; value never matches. A nil label runs the pass without a validate step after
 ;; it (matching the original hardcoded order, where the trailing typeinfra epoch
 ;; had no validate call).
-;; This list is the seam the fusion-placement permutation harness manipulates;
-;; the default order below is byte-identical to the pre-refactor sequence.
+;; This list is the seam the fusion-placement permutation harness manipulates.
+;; Find entries by their marker, not their position: branchfold-0 comes before
+;; the first epoch.
 (def default-pass-list
-  [[run-typeinfra-epoch "infer-arg-types" :epoch]
+  [[branchfold-constants "branchfold-0"]
+   [run-typeinfra-epoch "infer-arg-types" :epoch]
    [constfold           "constfold-1"]
    [branchfold-retyped  "branchfold-1"    :branchfold]
    [cse                 "cse"]

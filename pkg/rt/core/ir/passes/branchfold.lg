@@ -97,28 +97,34 @@
 (defn- known-truth
   "true / false when the branch-if test `nid` always has that truthiness, else
    nil. A constant is read directly; anything else goes by its inferred type,
-   unless that type traces back to an argument."
-  [f nid]
+   unless that type traces back to an argument. Without types? only constants
+   are read."
+  [f nid types?]
   (cond
     (= :const (ir/op nid f))
     (let [v (ir/aux nid f)]
       (not (or (nil? v) (false? v))))
 
-    (arg-derived? f nid) nil
+    (not types?) nil
 
     :else
-    (let [t (ir/type-of nid f)]
-      (cond
-        (ti/truthy-type? t) true
-        (ti/falsey-type? t) false
-        :else               nil))))
+    ;; The type is checked first: arg-derived? walks block params back through
+    ;; their predecessors and resolves callee vars, and only matters for the
+    ;; few tests whose type would fold.
+    (let [t     (ir/type-of nid f)
+          truth (cond
+                  (ti/truthy-type? t) true
+                  (ti/falsey-type? t) false
+                  :else               nil)]
+      (when (and (some? truth) (not (arg-derived? f nid)))
+        truth))))
 
-(defn- fold-branch! [f bid]
+(defn- fold-branch! [f bid types?]
   "Rewrite bid's :branch-if to a :branch when its test is known. Returns true
    when it did."
   (let [term (ir/block-term bid f)]
     (when (and term (= :branch-if (ir/op term f)))
-      (let [truth (known-truth f (first (ir/refs term f)))]
+      (let [truth (known-truth f (first (ir/refs term f)) types?)]
         (when-not (nil? truth)
           (let [a    (ir/aux term f)
                 kept (if truth (ir/cond-target-true a) (ir/cond-target-false a))
@@ -237,13 +243,22 @@
 
 ;; --- driver -----------------------------------------------------------
 
-(defn branchfold [f]
-  "Fold known branch-if tests, prune what that leaves unreachable, splice
-   straight-line chains. Returns true when f changed."
-  (let [folded (reduce (fn [acc b] (or (fold-branch! f b) acc))
+(defn- fold-all! [f types?]
+  (let [folded (reduce (fn [acc b] (or (fold-branch! f b types?) acc))
                        false (ir/blocks f))]
     (if folded
       (do (prune-unreachable! f)
           (merge-chains! f)
           true)
       false)))
+
+(defn branchfold [f]
+  "Fold known branch-if tests, prune what that leaves unreachable, splice
+   straight-line chains. Returns true when f changed."
+  (fold-all! f true))
+
+(defn branchfold-constants [f]
+  "branchfold for constant tests only, so it needs no types: it can run before
+   the first typeinfra epoch, which then infers the folded CFG once. Returns f."
+  (fold-all! f false)
+  f)
