@@ -9,6 +9,7 @@ package audio
 
 import (
 	"io"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,12 +28,24 @@ type Device struct {
 	player *oto.Player // kept in a field: oto closes an unreachable player mid-playback (oto#293)
 }
 
-// The latency budget measured for undertone's native player (its
-// nativeaudio/latency.go): a 512-frame device buffer, which oto takes as a
+// The latency budget follows undertone's native player (its
+// nativeaudio/latency.go): a 1024-frame device buffer, which oto takes as a
 // duration and truncates back, so it is rounded up to survive the round trip,
-// and 40 ms of player read-ahead in place of oto's 500. Tap to sound measured
-// about 130 ms, against about 820 ms with oto's defaults.
-const deviceBuffer = time.Duration((512*8*int64(time.Second) + rt.AudioRate*4 - 1) / (rt.AudioRate * 4))
+// and a short player read-ahead in place of oto's 500 ms. Measured 2026-10-26
+// on a MacBook Air (speakers into its own mic, trigger to onset), 40 ms of
+// read-ahead gave 150-158 ms and 24 ms gave 119-128 ms; 24 ms over a
+// 512-frame device crackled under a busy main thread. Only macOS has been
+// heard at 24 ms, so other platforms keep 40 ms.
+const deviceFrames = 1024
+
+const deviceBuffer = time.Duration((deviceFrames*int64(time.Second) + rt.AudioRate - 1) / rt.AudioRate)
+
+func readAheadMS() int {
+	if runtime.GOOS == "darwin" { // GOOS is "ios" on iOS, which keeps 40 ms
+		return 24
+	}
+	return 40
+}
 
 var device = &Device{Mixer: NewMixer()}
 
@@ -61,7 +74,7 @@ func (d *Device) open() error {
 			return
 		}
 		d.player = ctx.NewPlayer(d.Mixer)
-		d.player.SetBufferSize(rt.AudioRate * 4 * 40 / 1000)
+		d.player.SetBufferSize(rt.AudioRate * 4 * readAheadMS() / 1000)
 		d.player.Play()
 	})
 	return d.err
