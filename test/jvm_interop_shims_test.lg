@@ -1,0 +1,262 @@
+(ns test.jvm-interop-shims-test
+  (:require [test :refer :all])
+  (:import [java.util ArrayList Collections]))
+
+;; JVM interop a Clojure runtime written for the JVM reaches for (niva's
+;; niva.core is the motivating case). Each assertion is what the JVM returns.
+
+(deftest number-parses
+  (testing "parseLong and parseInt take a radix"
+    (is (= 255 (Long/parseLong "ff" 16)))
+    (is (= -5 (Long/parseLong "-101" 2)))
+    (is (= 5 (Long/parseLong "+101" 2)))
+    (is (= 2147483647 (Integer/parseInt "7fffffff" 16)))
+    (is (= 42 (Long/parseLong "42"))))
+
+  (testing "a bad number throws NumberFormatException"
+    (is (= "For input string: \"zz\" under radix 16"
+           (try (Long/parseLong "zz" 16) (catch NumberFormatException e (ex-message e)))))
+    (is (= :nfe (try (Integer/parseInt "80000000" 16) (catch NumberFormatException _ :nfe))))
+    (is (= :nfe (try (Long/parseLong "1" 37) (catch NumberFormatException _ :nfe))))
+    (is (= "For input string: \"x\""
+           (try (Double/parseDouble "x") (catch NumberFormatException e (ex-message e)))))
+    (is (= :iae (try (Float/parseFloat "x") (catch IllegalArgumentException _ :iae))))))
+
+(deftest boolean-to-string
+  (is (= ["true" "false"] [(Boolean/toString true) (Boolean/toString false)])))
+
+(deftest character-statics
+  (testing "predicates take a char or an int code point"
+    (is (Character/isLetter \a))
+    (is (Character/isLetter (int \é)))
+    (is (not (Character/isLetterOrDigit \-)))
+    (is (Character/isLetterOrDigit \7))
+    (is (Character/isLowerCase \a))
+    (is (Character/isUpperCase 65))
+    (is (Character/isWhitespace \space))
+    (is (Character/isWhitespace 0x2028))
+    (is (not (Character/isWhitespace 0xA0)) "non-breaking space is not whitespace"))
+
+  (testing "case mappings return the kind they were given"
+    (is (= \a (Character/toLowerCase \A)))
+    (is (= 233 (Character/toLowerCase 201)))
+    (is (= \A (Character/toUpperCase \a)))
+    (is (= 65 (Character/toUpperCase 97))))
+
+  (testing "digit"
+    (is (= [7 15 15 -1 -1] [(Character/digit \7 10) (Character/digit \f 16)
+                            (Character/digit \F 16) (Character/digit \g 16)
+                            (Character/digit \5 1)]))
+    (is (= 3 (Character/digit (int \٣) 10)) "Arabic-Indic three")
+    (is (= 1 (Character/digit 0x1D7D9 10)) "mathematical double-struck one")))
+
+(deftest system-set-property
+  (is (nil? (System/setProperty "let-go.test.shim" "1")))
+  (is (= "1" (System/getProperty "let-go.test.shim")))
+  (is (= "1" (System/setProperty "let-go.test.shim" "2")))
+  (is (= "2" (get (System/getProperties) "let-go.test.shim"))))
+
+(deftest pattern-quote
+  (is (= "\\Qa.b\\E" (java.util.regex.Pattern/quote "a.b")))
+  (is (= "a.b" (re-find (re-pattern (Pattern/quote "a.b")) "xa.by")))
+  (is (nil? (re-find (re-pattern (Pattern/quote "a.b")) "axb")))
+  (is (= ["a" "c"] (vec (.split "a\\Ec" (Pattern/quote "\\E"))))))
+
+(deftest iatom-instance
+  (is (instance? clojure.lang.IAtom (atom 1)))
+  (is (not (instance? clojure.lang.IAtom 1))))
+
+(deftest core-flush
+  (is (= "x" (with-out-str (print "x") (flush)))))
+
+(deftest string-methods
+  (testing "lastIndexOf"
+    (is (= [3 3 1 -1 2 3 -1]
+           [(.lastIndexOf "a.b.c" ".") (.lastIndexOf "a.b.c" \.) (.lastIndexOf "a.b.c" "." 2)
+            (.lastIndexOf "abc" "z") (.lastIndexOf "héé" "é") (.lastIndexOf "abc" "")
+            (.lastIndexOf "abc" "a" -1)])))
+
+  (testing "code points"
+    (is (= [104 233 108 108 111 128512] (vec (.toArray (.codePoints "héllo😀")))))
+    (is (= 2 (.count (.codePoints "a😀"))))
+    (is (= 6 (.codePointCount "héllo😀" 0 6))))
+
+  (testing "strip and isBlank use Character/isWhitespace"
+    (is (= ["a" "a " " a"] [(.strip " \t a \n") (.stripLeading "  a ") (.stripTrailing " a  ")]))
+    (is (= " a" (.strip " a ")))
+    (is (= [true false true] [(.isBlank " \t") (.isBlank " a") (.isBlank "")])))
+
+  (testing "split takes a regex and a limit"
+    (is (= ["a" "b" "" "c"] (vec (.split "a,b,,c,," ","))))
+    (is (= ["a" "b" "" "c" "" ""] (vec (.split "a,b,,c,," "," -1))))
+    (is (= ["a" "b,c"] (vec (.split "a,b,c" "," 2))))
+    (is (= ["" "a"] (vec (.split ",a" ","))))
+    (is (= ["a" "b" "c"] (vec (.split "abc" ""))))
+    (is (= ["a" "b" "c" ""] (vec (.split "abc" "" -1))))
+    (is (= [""] (vec (.split "" ","))))
+    (is (= ["a" "b" "c"] (vec (.split "a1b22c" "\\d+")))))
+
+  ;; Java's Matcher.find reports an empty match that touches the end of the
+  ;; previous match ("abc" on a*: [0,1) then [1,1) then [2,2) then [3,3)),
+  ;; which Go's regexp suppresses. Each result is derived from that sequence.
+  (testing "split sees an empty match adjacent to a non-empty one"
+    (is (= ["" "" "b" "c"] (vec (.split "abc" "a*"))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*" -1))))
+    (is (= ["" "bc"] (vec (.split "abc" "a*" 2))))
+    (is (= ["a"] (vec (.split "ab" "b*"))))
+    (is (= ["a" "" ""] (vec (.split "ab" "b*" -1)))))
+
+  (testing "the restored empty match sees its left context"
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|^" -1))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|\\b" -1))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|\\B" -1))))
+    (is (= ["a" "b" " " "c" "d" ""] (vec (.split "ab cd" "x*|\\b" -1))))
+    (is (= ["" "" "\n" "" "b" "\n" "b" ""] (vec (.split "a\nab\nb" "(?m)a*|^" -1))))
+    (is (= ["" "" "a" "b" ""] (vec (.split "żab" "ż*|\\b" -1))))
+    (is (= ["" "bc"] (vec (.split "abc" "\\Aa*" -1))))
+    (is (= ["" "bc"] (vec (.split "abc" "\\Qa" -1))))
+    (is (= ["" "bc"] (vec (.split "a)bc" "\\Qa)" -1))))
+    (is (= ["" "" "b" "c" ""] (vec (.split "abc" "a*|\\Q" -1)))))
+
+  (testing "split limit, as in the String.split javadoc"
+    (is (= ["boo" "and:foo"] (vec (.split "boo:and:foo" ":" 2))))
+    (is (= ["boo" "and" "foo"] (vec (.split "boo:and:foo" ":" 5))))
+    (is (= ["boo" "and" "foo"] (vec (.split "boo:and:foo" ":" -2))))
+    (is (= ["b" "" ":and:f" "" ""] (vec (.split "boo:and:foo" "o" 5))))
+    (is (= ["b" "" ":and:f" "" ""] (vec (.split "boo:and:foo" "o" -2))))
+    (is (= ["b" "" ":and:f"] (vec (.split "boo:and:foo" "o" 0))))))
+
+(deftest string-builder
+  (let [b (StringBuilder. "héllo")]
+    (.appendCodePoint b 128512)
+    (is (= "héllo😀" (.toString b)))
+    (.setLength b 3)
+    (is (= "hél" (.toString b)))
+    (.setLength b 5)
+    (is (= "hél\u0000\u0000" (.toString b))))
+  (testing "str, format and print show the contents, as toString does (#1069)"
+    (let [b (doto (StringBuilder.) (.append "a") (.append 1))]
+      (is (= ["a1" "a1" "a1" "a1"]
+             [(str b) (format "%s" b) (with-out-str (print b)) (.toString b)]))
+      (is (= "x a1" (str "x " b)))
+      (is (= "\"a1\"" (pr-str b))))))
+
+(deftest array-list
+  (testing "a mutable list that vec, seq and count read"
+    (let [l (ArrayList. [1 2 3])]
+      (is (true? (.add l 4)))
+      (.add l 0 0)
+      (is (= [0 1 2 3 4] (vec l)))
+      (is (= 5 (count l) (.size l)))
+      (is (= 2 (.get l 2)))
+      (is (= 0 (.set l 0 :z)))
+      (is (= "[:z, 1, 2, 3, 4]" (str l)))
+      (is (.contains l 3))
+      (is (= -1 (.indexOf l 9)))
+      (is (instance? java.util.ArrayList l))
+      (.clear l)
+      (is (.isEmpty l))
+      (is (nil? (seq l)))))
+
+  (testing "capacity and copy constructors"
+    (is (= [] (vec (java.util.ArrayList. 10))))
+    (is (= [0 1 2] (vec (doto (ArrayList.) (.addAll (range 3)))))))
+
+  (testing "out of range index throws IndexOutOfBoundsException"
+    (is (= "Index 0 out of bounds for length 0"
+           (try (.get (ArrayList.) 0) (catch IndexOutOfBoundsException e (ex-message e))))))
+
+  (testing ".remove takes an index or an element"
+    (let [l (ArrayList. [:a :b :c :b])]
+      (is (= :a (.remove l 0)))
+      (is (true? (.remove l :b)))
+      (is (false? (.remove l :z)))
+      (is (= [:c :b] (vec l)))
+      (is (thrown? IndexOutOfBoundsException (.remove l 2)))))
+
+  (testing "args no overload takes throw, rather than reaching a core fn of the same name"
+    (doseq [f [#(.get (ArrayList. [1 2]) :a)
+               #(.get (ArrayList. [1 2]) 0 :not-found)
+               #(.set (ArrayList. [1 2]) :a 3)
+               #(.add (ArrayList. [1 2]) :a 3)
+               #(.remove (ArrayList.))]]
+      (is (thrown? IllegalArgumentException (f))))))
+
+(deftest collections-statics
+  (let [l (ArrayList. (range 50))]
+    (Collections/shuffle l)
+    (is (= (range 50) (sort (vec l))))
+    (is (not= (range 50) (vec l))))
+  (is (= [3 2 1] (vec (doto (ArrayList. [1 2 3]) (java.util.Collections/reverse)))))
+  (is (= :uoe (try (Collections/shuffle [1 2]) (catch UnsupportedOperationException _ :uoe)))
+      "persistent collections are immutable"))
+
+;; A shim's methods are the ones it implements. Any other call throws what
+;; Clojure's reflective call throws; it never reaches a let-go fn of the same
+;; name (.get with two args is not clojure.core/get with a not-found).
+(deftest shims-fail-like-the-jvm
+  (testing "a call no overload takes throws IllegalArgumentException"
+    (doseq [f [#(.get (java.util.HashMap.) :a :b)
+               #(.first (ArrayList. [1 2]))
+               #(.peek (java.util.ArrayDeque.) 1)
+               #(.append (StringBuilder.) "a" "b")
+               #(.first (StringBuilder.))
+               #(.map (.codePoints "ab") inc)]]
+      (is (thrown? IllegalArgumentException (f)))))
+  (testing "failures inside a method throw the JVM's class"
+    (is (thrown? java.util.NoSuchElementException (.pop (java.util.ArrayDeque.))))
+    (is (thrown? java.util.NoSuchElementException (.next (.iterator []))))
+    (is (thrown? UnsupportedOperationException (.remove (.iterator [1]))))
+    (is (thrown? ClassCastException (.putAll (java.util.HashMap.) 7)))
+    (is (thrown? IndexOutOfBoundsException (.setLength (StringBuilder.) -1)))
+    (is (thrown? IllegalArgumentException (.appendCodePoint (StringBuilder.) -1)))
+    (is (thrown? UnsupportedOperationException (.getName (Thread/currentThread)))))
+  (testing "Object and Iterable methods still answer"
+    (is (= "[1, 2]" (.toString (ArrayList. [1 2]))))
+    (let [it (.iterator (ArrayList. [1 2]))]
+      (is (= [1 2] [(.next it) (.next it)]))
+      (is (false? (.hasNext it))))))
+
+(deftest hash-map-shim
+  (let [m (java.util.HashMap.)]
+    (is (nil? (.put m :a 1)))
+    (is (= 1 (.put m :a 2)))
+    (.put m :n nil)
+    (is (true? (.containsKey m :n)))
+    (is (false? (.containsKey m :z)))
+    (is (= :d (.getOrDefault m :z :d)))
+    (is (= 2 (.size m)))
+    (is (= 2 (.remove m :a)))
+    (is (nil? (.remove m :a)))
+    (.clear m)
+    (is (.isEmpty m)))
+  (testing "putAll realizes a lazy source that reads the same map"
+    (let [m (java.util.HashMap.)]
+      (.putAll m {:a 1})
+      (.putAll m (map (fn [k] [k (.get m :a)]) [:b :c]))
+      (is (= [1 1 1] [(.get m :a) (.get m :b) (.get m :c)])))))
+
+;; The JVM prints a collection that contains itself as "(this Collection)".
+(deftest array-list-self-reference
+  (let [l (java.util.ArrayList.)]
+    (.add l 1)
+    (.add l l)
+    (is (= "[1, (this Collection)]" (.toString l)))))
+
+;; An absence marker must not be a value user code can store.
+(deftest hash-map-absence-marker
+  (let [m (java.util.HashMap.)]
+    (.put m :a :let-go.host/not-found)
+    (is (true? (.containsKey m :a)))
+    (is (= :let-go.host/not-found (.getOrDefault m :a :d)))
+    (is (false? (.containsKey m :b)))))
+
+(deftest deque-and-builder-methods
+  (let [d (doto (java.util.ArrayDeque.) (.push 1) (.push 2))]
+    (is (= 2 (.size d)))
+    (.clear d)
+    (is (.isEmpty d)))
+  (let [b (doto (StringBuilder.) (.append "abc"))]
+    (is (= \b (.charAt b 1)))
+    (is (thrown? IndexOutOfBoundsException (.charAt b 3)))
+    (is (= "cba" (str (.reverse b))))))

@@ -310,6 +310,8 @@ func installTermNS() {
 
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
+	// term/flush is the same flush as clojure.core/flush.
+	ns.Exclude("flush")
 
 	// raw-mode! — enter raw terminal mode
 	//   (term/raw-mode!)         → TRUE, stores global state (stdin)
@@ -691,31 +693,37 @@ func installTermNS() {
 	// (before *out* is installed). Pre-#223 this synced os.Stdout directly,
 	// which diverged once the term/* ops started honoring *out*.
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-		var (
-			err        error
-			fileBacked bool
-		)
-		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
-			err = h.Sync()
-			fileBacked = h.File() != nil
-		} else {
-			err = os.Stdout.Sync()
-			fileBacked = true
-		}
-		// fsync on terminals and pipes returns ENOTTY, EBADF, or EINVAL
-		// depending on the platform; flushing those fds is a no-op, so swallow
-		// them. Only for a file-backed *out* -- an embedder writer's Sync goes
-		// through Flush() and must surface its own errors. A regular file's
-		// fsync never returns these, so real I/O errors (EIO, ENOSPC, etc.)
-		// still propagate.
-		if fileBacked && (errors.Is(err, syscall.ENOTTY) ||
-			errors.Is(err, syscall.EBADF) ||
-			errors.Is(err, syscall.EINVAL)) {
-			err = nil
-		}
-		return vm.NIL, err
+		return vm.NIL, flushOut(ec)
 	})
 	ns.Def("flush", flushFn)
 
 	RegisterNS(ns)
+}
+
+// flushOut syncs the active *out* binding; term/flush and clojure.core/flush
+// share it.
+func flushOut(ec *vm.ExecContext) error {
+	var (
+		err        error
+		fileBacked bool
+	)
+	if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+		err = h.Sync()
+		fileBacked = h.File() != nil
+	} else {
+		err = os.Stdout.Sync()
+		fileBacked = true
+	}
+	// fsync on terminals and pipes returns ENOTTY, EBADF, or EINVAL
+	// depending on the platform; flushing those fds is a no-op, so swallow
+	// them. Only for a file-backed *out* -- an embedder writer's Sync goes
+	// through Flush() and must surface its own errors. A regular file's
+	// fsync never returns these, so real I/O errors (EIO, ENOSPC, etc.)
+	// still propagate.
+	if fileBacked && (errors.Is(err, syscall.ENOTTY) ||
+		errors.Is(err, syscall.EBADF) ||
+		errors.Is(err, syscall.EINVAL)) {
+		err = nil
+	}
+	return err
 }

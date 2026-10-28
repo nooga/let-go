@@ -8,6 +8,7 @@ package rt
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -36,7 +37,11 @@ type hostStringBuilder struct{ b strings.Builder }
 
 func (s *hostStringBuilder) Type() vm.ValueType { return hostStringBuilderType }
 func (s *hostStringBuilder) Unbox() any         { return s }
-func (s *hostStringBuilder) String() string     { return "#<java.lang.StringBuilder>" }
+func (s *hostStringBuilder) HostShim()          {}
+
+// String is the builder's contents, as StringBuilder.toString is, so str,
+// format's %s and print show what was built.
+func (s *hostStringBuilder) String() string { return s.b.String() }
 
 // appendString renders a value the way StringBuilder.append does: strings
 // append their content, characters their rune, nil appends "null" (Java
@@ -71,6 +76,60 @@ func (s *hostStringBuilder) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Va
 		if len(args) == 0 {
 			// Rune count, matching the string host methods' index space.
 			return vm.Int(utf8.RuneCountInString(s.b.String())), nil
+		}
+	case "appendCodePoint":
+		if len(args) == 1 {
+			cp, ok := args[0].(vm.Int)
+			if !ok {
+				return vm.NIL, noMatchingMethod("java.lang.StringBuilder", "appendCodePoint", args)
+			}
+			if cp < 0 || cp > unicode.MaxRune {
+				return vm.NIL, throwHost(vm.ClassIllegalArgument, "Not a valid Unicode code point: 0x%X", uint32(cp))
+			}
+			s.b.WriteRune(rune(cp))
+			return s, nil
+		}
+	case "setLength":
+		if len(args) == 1 {
+			n, ok := args[0].(vm.Int)
+			if !ok {
+				return vm.NIL, noMatchingMethod("java.lang.StringBuilder", "setLength", args)
+			}
+			if n < 0 {
+				return vm.NIL, throwHost(vm.ClassIndexOutOfBounds, "String index out of range: %d", int64(n))
+			}
+			// Truncate to n runes, or pad with NUL as Java does.
+			runes := []rune(s.b.String())
+			if int(n) <= len(runes) {
+				runes = runes[:n]
+			} else {
+				runes = append(runes, make([]rune, int(n)-len(runes))...)
+			}
+			s.b.Reset()
+			s.b.WriteString(string(runes))
+			return vm.NIL, nil
+		}
+	case "charAt":
+		if len(args) == 1 {
+			i, ok := args[0].(vm.Int)
+			if !ok {
+				return vm.NIL, noMatchingMethod("java.lang.StringBuilder", "charAt", args)
+			}
+			runes := []rune(s.b.String())
+			if i < 0 || int(i) >= len(runes) {
+				return vm.NIL, throwHost(vm.ClassIndexOutOfBounds, "index %d,length %d", int64(i), len(runes))
+			}
+			return vm.Char(runes[i]), nil
+		}
+	case "reverse":
+		if len(args) == 0 {
+			runes := []rune(s.b.String())
+			for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+				runes[i], runes[j] = runes[j], runes[i]
+			}
+			s.b.Reset()
+			s.b.WriteString(string(runes))
+			return s, nil
 		}
 	}
 	return vm.NIL, fmt.Errorf("java.lang.StringBuilder has no method .%s/%d", name, len(args))

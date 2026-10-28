@@ -37,6 +37,7 @@ func newHostArrayDeque() *hostArrayDeque { return &hostArrayDeque{} }
 func (d *hostArrayDeque) Type() vm.ValueType { return hostArrayDequeType }
 func (d *hostArrayDeque) Unbox() any         { return d }
 func (d *hostArrayDeque) String() string     { return "#<java.util.ArrayDeque>" }
+func (d *hostArrayDeque) HostShim()          {}
 
 func (d *hostArrayDeque) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, error) {
 	switch string(name) {
@@ -49,7 +50,7 @@ func (d *hostArrayDeque) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value
 		if len(args) == 0 {
 			n := len(d.items)
 			if n == 0 {
-				return vm.NIL, fmt.Errorf("java.util.ArrayDeque: pop on empty deque")
+				return vm.NIL, throwHost(vm.ClassNoSuchElement, "java.util.ArrayDeque: pop on an empty deque")
 			}
 			v := d.items[n-1]
 			d.items = d.items[:n-1]
@@ -65,6 +66,15 @@ func (d *hostArrayDeque) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value
 	case "isEmpty":
 		if len(args) == 0 {
 			return vm.Boolean(len(d.items) == 0), nil
+		}
+	case "size":
+		if len(args) == 0 {
+			return vm.MakeInt(len(d.items)), nil
+		}
+	case "clear":
+		if len(args) == 0 {
+			d.items = nil
+			return vm.NIL, nil
 		}
 	}
 	return vm.NIL, fmt.Errorf("java.util.ArrayDeque has no method .%s/%d", name, len(args))
