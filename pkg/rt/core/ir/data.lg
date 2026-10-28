@@ -637,6 +637,34 @@
   (swap! f update-in [:blocks bid :preds]
          (fn [ps] (vec (map (fn [p] (if (= p old-pred) new-pred p)) ps)))))
 
+(defn remove-block-pred! [f bid pred]
+  "Drop ONE occurrence of pred from block bid's :preds — one CFG edge. A block
+   whose two branch-if arms both target bid lists it twice, once per edge.
+
+   NOT interned into the blanket `ir` namespace — require it explicitly."
+  (swap! f update-in [:blocks bid :preds]
+         (fn [ps]
+           (let [i (first (keep-indexed (fn [ix p] (when (= p pred) ix)) ps))]
+             (if i
+               (vec (concat (subvec ps 0 i) (subvec ps (inc i))))
+               ps)))))
+
+(defn detach-block! [f bid]
+  "Empty block bid's :params, :preds and :term, leaving an orphan the validator
+   and lowering skip. The caller has already removed its insts and the edges
+   that left it.
+
+   NOT interned into the blanket `ir` namespace — require it explicitly."
+  (swap! f update-in [:blocks bid] assoc :params [] :preds [] :term nil))
+
+(defn reset-types! [f]
+  "Forget every inferred type, so the next typeinfra epoch infers from scratch
+   as it does right after build. For a pass that removes CFG edges: a join that
+   lost an incoming value can only narrow, and typeinfer's facts only widen.
+
+   NOT interned into the blanket `ir` namespace — require it explicitly."
+  (swap! f assoc :types (transient [])))
+
 ;; --- def→use index ---------------------------------------------------
 
 ;; --- uses-cache build ------------------------------------------------
