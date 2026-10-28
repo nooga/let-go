@@ -15,3 +15,23 @@
     (doseq [f fs]
       (is (= ["0.0" "NaN" "-0.0" "0"]
              (mapv (comp pr-str @f) [1.5 ##NaN -2.0 3]))))))
+
+;; A ^long hint is not proof x is an Int either: a double passed to it still
+;; comes back a double, so a type-guarded fold would be wrong too.
+(deftest ir-compiled-mul-by-zero-ignores-long-hint
+  (let [fs (binding [*ir-compile* true
+                     *ir-compile-strict* true]
+             [(eval '(defn ir-mul-zero-long-right [^long x] (* x 0)))
+              (eval '(defn ir-mul-zero-long-left [^long x] (* 0 x)))])]
+    (doseq [f fs]
+      (is (= ["0.0" "NaN" "-0.0" "0"]
+             (mapv (comp pr-str @f) [1.5 ##NaN -2.0 3]))))))
+
+(deftest ir-compiled-mul-by-double-zero-is-a-double
+  (let [fs (binding [*ir-compile* true
+                     *ir-compile-strict* true]
+             [(eval '(defn ir-mul-dzero-right [x] (* x 0.0)))
+              (eval '(defn ir-mul-dzero-left [x] (* 0.0 x)))])]
+    (doseq [f fs]
+      (is (= ["0.0" "NaN" "-0.0" "0.0"]
+             (mapv (comp pr-str @f) [1.5 ##NaN -2.0 3]))))))
