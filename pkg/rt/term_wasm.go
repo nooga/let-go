@@ -69,10 +69,7 @@ func installTermNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		if s == "" {
-			return vm.NIL, nil
-		}
-		return vm.String(s), nil
+		return keyValue(s), nil
 	})
 	ns.Def("read-key", readKey)
 
@@ -272,10 +269,8 @@ func installTermNS() {
 
 	// enable-mouse / disable-mouse — same SGR mouse-reporting escapes as the
 	// native term ns (term.go). xterm.js honors \e[?1000;1006h and forwards
-	// clicks back through onData → the SAB → read-key. The WASM read-key does
-	// not yet decode the report into a tagged map (Phase 3), so a click surfaces
-	// as the raw escape string — enough for "any key/click" prompts like the
-	// title screen; in-game click-to-move needs the decode. Defined here so the
+	// clicks back through onData → the SAB → read-key, which decodes each
+	// report into the same tagged map as native (keyValue). Defined here so the
 	// shared xsofy lifecycle (init/shutdown-terminal) resolves them in WASM too.
 	enableMouse := vm.NewCtxNativeFn("enable-mouse", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		return vm.NIL, WriteToOut(ec, "\033[?1000;1006h")

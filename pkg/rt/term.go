@@ -276,30 +276,6 @@ func (nativeKeySource) rawPending() bool {
 	return false
 }
 
-// mouseEventMap renders a decoded SGR mouse report as the tagged map read-key
-// hands to Clojure: {:type :mouse :action :press :button :left :x 10 :y 5
-// :mods #{:shift}}. :mods is an empty set when no modifier is held.
-func mouseEventMap(ev MouseEvent) vm.Value {
-	var mods []vm.Value
-	if ev.Shift {
-		mods = append(mods, vm.Keyword("shift"))
-	}
-	if ev.Ctrl {
-		mods = append(mods, vm.Keyword("ctrl"))
-	}
-	if ev.Meta {
-		mods = append(mods, vm.Keyword("meta"))
-	}
-	m := vm.EmptyPersistentMap
-	m = m.Assoc(vm.Keyword("type"), vm.Keyword("mouse")).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("action"), vm.Keyword(ev.Action)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("button"), vm.Keyword(ev.Button)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("x"), vm.MakeInt(ev.X)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("y"), vm.MakeInt(ev.Y)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("mods"), vm.NewPersistentSet(mods)).(*vm.PersistentMap)
-	return m
-}
-
 func init() { RegisterInstaller(installTermNS) }
 
 // nolint
@@ -385,16 +361,7 @@ func installTermNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		if s == "" {
-			return vm.NIL, nil
-		}
-		// Hybrid return: plain keys stay strings (no caller churn), an SGR
-		// mouse report becomes a tagged map. Mouse reports only arrive once
-		// enable-mouse has been called, so string-only callers are unaffected.
-		if ev, ok := decodeSGRMouse(s); ok {
-			return mouseEventMap(ev), nil
-		}
-		return vm.String(s), nil
+		return keyValue(s), nil
 	})
 	ns.Def("read-key", readKey)
 
