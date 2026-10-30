@@ -13,9 +13,11 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -42,15 +44,40 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// buildLG builds the lg binary once into a temp dir and returns its path. The
-// build runs from the repo root so `go build .` targets the root main package.
+var (
+	lgOnce sync.Once
+	lgBin  string
+	lgErr  error
+)
+
+// TestMain owns the directory the shared lg binary lives in, so it outlives
+// any one test's t.TempDir.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "lg-e2e-")
+	if err != nil {
+		panic(err)
+	}
+	lgBin = filepath.Join(dir, "lg")
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// buildLG builds the lg binary once per package run and returns its path.
+// Building per test cost about half a second each, which is most of this
+// package's wall time. The build runs from the repo root so `go build .`
+// targets the root main package.
 func buildLG(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "lg")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = repoRoot(t)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build lg: %v\n%s", err, out)
+	lgOnce.Do(func() {
+		cmd := exec.Command("go", "build", "-o", lgBin, ".")
+		cmd.Dir = repoRoot(t)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			lgErr = fmt.Errorf("build lg: %v\n%s", err, out)
+		}
+	})
+	if lgErr != nil {
+		t.Fatal(lgErr)
 	}
-	return bin
+	return lgBin
 }
