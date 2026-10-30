@@ -44,40 +44,73 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// lgBuild is one cached build of the lg binary for a tag set.
+type lgBuild struct {
+	once sync.Once
+	bin  string
+	err  error
+}
+
 var (
-	lgOnce sync.Once
-	lgBin  string
-	lgErr  error
+	lgDir    string
+	lgMu     sync.Mutex
+	lgBuilds = map[string]*lgBuild{}
 )
 
-// TestMain owns the directory the shared lg binary lives in, so it outlives
+// TestMain owns the directory the shared lg binaries live in, so they outlive
 // any one test's t.TempDir.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "lg-e2e-")
 	if err != nil {
 		panic(err)
 	}
-	lgBin = filepath.Join(dir, "lg")
+	lgDir = dir
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
 
-// buildLG builds the lg binary once per package run and returns its path.
-// Building per test cost about half a second each, which is most of this
-// package's wall time. The build runs from the repo root so `go build .`
-// targets the root main package.
+// buildLG builds the default lg binary once per package run and returns its
+// path. Building per test cost about half a second each, which is most of
+// this package's wall time.
 func buildLG(t *testing.T) string {
 	t.Helper()
-	lgOnce.Do(func() {
-		cmd := exec.Command("go", "build", "-o", lgBin, ".")
-		cmd.Dir = repoRoot(t)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			lgErr = fmt.Errorf("build lg: %v\n%s", err, out)
-		}
-	})
-	if lgErr != nil {
-		t.Fatal(lgErr)
+	return buildLGTags(t, "")
+}
+
+// buildLGTags builds lg with the given build tags ("" = default bytecode;
+// "gogen_ir" = generated-core engine variant) once per package run. It does
+// not AOT-compile fixtures. The build runs from the repo root so `go build .`
+// targets the root main package. repoRoot is resolved before the Once: its
+// t.Fatal would otherwise mark the Once done with neither a binary nor an
+// error, and every later caller would get a path that was never written.
+func buildLGTags(t *testing.T, tags string) string {
+	t.Helper()
+	root := repoRoot(t)
+	lgMu.Lock()
+	b := lgBuilds[tags]
+	if b == nil {
+		b = &lgBuild{}
+		lgBuilds[tags] = b
 	}
-	return lgBin
+	lgMu.Unlock()
+	b.once.Do(func() {
+		name, args := "lg", []string{"build"}
+		if tags != "" {
+			name = "lg-" + tags
+			args = append(args, "-tags", tags)
+		}
+		bin := filepath.Join(lgDir, name)
+		cmd := exec.Command("go", append(args, "-o", bin, ".")...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			b.err = fmt.Errorf("build lg (tags=%q): %v\n%s", tags, err, out)
+			return
+		}
+		b.bin = bin
+	})
+	if b.err != nil {
+		t.Fatal(b.err)
+	}
+	return b.bin
 }
