@@ -1,0 +1,74 @@
+;; read-string rejects a data map literal with two = keys, whatever its size.
+;; Past 32 keys the reader compares keys by hash bucket, so the property draws
+;; maps of distinct keys around each power of two and adds, at random places,
+;; copies of keys, copies written another way, and = pairs whose hashes
+;; differ (#1034). The verdict is checked against a pairwise = over the keys.
+(ns test.read-string-map-keys-test
+  (:require [string :as str]
+            [check :as c]))
+
+(def kinds [:keyword :string :symbol :int :float :vector])
+
+(defn key-form
+  "The i-th distinct key, of kind k."
+  [k i]
+  (case k
+    :keyword (str ":k" i)
+    :string (str "\"k" i "\"")
+    :symbol (str "k" i)
+    :int (str i)
+    :float (str i ".5")
+    :vector (str "[:v " i "]")))
+
+(defn twin-form
+  "A form = to (key-form k i), written another way where there is one."
+  [k i]
+  (case k
+    :int (str i "N")
+    :vector (str "(:v " i ")")
+    (key-form k i)))
+
+;; = pairs whose hashes differ (#1034)
+(def apart-pairs [["[]" "()"] ["0.0" "-0.0"] ["[[]]" "[()]"]])
+
+(defn insert-at [fs at f]
+  (let [at (mod at (inc (count fs)))]
+    (vec (concat (take at fs) [f] (drop at fs)))))
+
+;; each step adds a key: a copy of one (:same, or :twin written another way),
+;; both halves of an apart pair, or one half alone
+(def gen-step
+  (c/gen-tuple (c/gen-elements [:same :twin :apart-pair :apart-one])
+               (c/gen-int 0 1000) (c/gen-int 0 1000) (c/gen-int 0 1000)))
+
+(def gen-map-keys
+  (c/gen-let [p (c/gen-int 0 7)
+              off (c/gen-int -1 1)
+              ks (c/gen-vector (c/gen-elements kinds) (max 0 (+ (bit-shift-left 1 p) off)))
+              steps (c/gen-vector gen-step 0 3)]
+    (reduce (fn [fs [how a b c]]
+              (case how
+                :apart-pair (let [[x y] (apart-pairs (mod c (count apart-pairs)))]
+                              (insert-at (insert-at fs a x) b y))
+                :apart-one (insert-at fs a ((apart-pairs (mod c (count apart-pairs))) (mod b 2)))
+                (if (empty? ks)
+                  fs
+                  (let [i (mod a (count ks)) k (ks i)]
+                    (insert-at fs b (if (= how :twin) (twin-form k i) (key-form k i)))))))
+            (vec (map-indexed (fn [i k] (key-form k i)) ks))
+            steps)))
+
+(defn map-source [ks]
+  (str "{" (str/join " " (map-indexed (fn [i k] (str k " " i)) ks)) "}"))
+
+(defn two-equal? [ks]
+  (let [vs (mapv read-string ks)]
+    (boolean (some (fn [i] (some (fn [j] (= (vs i) (vs j))) (range (inc i) (count vs))))
+                   (range (count vs))))))
+
+(defn rejected? [src]
+  (try (read-string src) false (catch Exception _ true)))
+
+(c/defprop a-data-map-rejects-exactly-two-equal-keys
+  [ks gen-map-keys]
+  (= (two-equal? ks) (rejected? (map-source ks))))

@@ -6,6 +6,7 @@
 package compiler
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -456,4 +457,20 @@ func TestDataReaderFollowsClojureDataSemantics(t *testing.T) {
 	code, err := ReadString(`#{1 2}`)
 	assert.NoError(t, err)
 	assert.Equal(t, vm.SetType, code.Type())
+}
+
+// A data map's duplicate-key check runs in linear time: a 5000-key map reads
+// in about the time of 5000 small ones.
+func BenchmarkReadDataStringWideMap(b *testing.B) {
+	src := "{"
+	for i := 0; i < 5000; i++ {
+		src += fmt.Sprintf(" [:k %d] %d", i, i)
+	}
+	src += "}"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ReadDataString(src); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
