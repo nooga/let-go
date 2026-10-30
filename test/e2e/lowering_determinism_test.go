@@ -51,7 +51,10 @@ func TestLoweringDeterminism(t *testing.T) {
 	// gitignored and regenerated on demand). In a clean checkout they don't
 	// exist, `-tags gogen_ir` selects no additional files, and "hot" compiles
 	// identically to "cold" — the gate would compare cold against itself.
+	// The materialized tree doubles as the cold side of the comparison below,
+	// so cold lowers once; a full lowering is most of this test's run time.
 	materializeNativeLowering(t, root, cold)
+	coldDir := filepath.Join(root, "pkg", "rt", "core_go_lowered")
 
 	hot := buildLgbgenTags(t, root, "bootstrap gogen_ir")
 	assertNativeLoweringLinked(t, root)
@@ -64,13 +67,6 @@ func TestLoweringDeterminism(t *testing.T) {
 	// never-bails-on-core test onto lowerings the gate already performs.
 	const bailMsg = "typeinfer: hit *typeinfer-max-drains*"
 
-	coldDir, coldOut, err := generateLoweredTree(root, cold, filepath.Join(base, "cold"))
-	if err != nil {
-		t.Fatalf("cold lgbgen: %v", err)
-	}
-	if strings.Contains(coldOut, bailMsg) {
-		t.Fatalf("typeinfer bailed during COLD lowering — *typeinfer-max-drains* cap hit on real core (should never happen). Raise the cap or investigate. saw: %q", bailMsg)
-	}
 	hotDir, hotOut, err := generateLoweredTree(root, hot, filepath.Join(base, "hot"))
 	if err != nil {
 		t.Fatalf("hot lgbgen: %v", err)
@@ -122,9 +118,8 @@ func materializeNativeLowering(t *testing.T, repoRoot, coldBin string) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("materialize native lowering (--target=go): %v\nstderr:\n%s", err, stderr.String())
 	}
-	// Same bail assertion as the cold/hot passes: a bail here would embed
-	// degraded native passes in the hot binary. The cold pass would bail
-	// identically and catch it, but fail at the source with the diagnostics.
+	// This run is the cold pass, so it carries the cold bail assertion: a bail
+	// here would also embed degraded native passes in the hot binary.
 	if strings.Contains(stdout.String(), "typeinfer: hit *typeinfer-max-drains*") {
 		t.Fatalf("typeinfer bailed while materializing the native lowering:\n%s", stdout.String())
 	}
