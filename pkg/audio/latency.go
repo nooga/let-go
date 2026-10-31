@@ -48,13 +48,15 @@ func defaultQueue() time.Duration {
 // Two environment variables override Options without a rebuild, for tuning a
 // stock tagged lg by ear: LETGO_AUDIO_QUEUE, a Go duration such as "30ms", and
 // LETGO_AUDIO_DEVICE_FRAMES. They win over Options, since whoever sets them is
-// tuning the program that set Options. A bad value is an error when the device
-// opens, not a silent fallback, so a tuning run never measures the default by
-// mistake.
+// tuning the program that set Options. A bad value fails the device's open,
+// with the reason on stderr, rather than falling back to the default, so a
+// tuning run never measures the default by mistake.
 const (
 	envQueue        = "LETGO_AUDIO_QUEUE"
 	envDeviceFrames = "LETGO_AUDIO_DEVICE_FRAMES"
 )
+
+func noEnv(string) string { return "" }
 
 // latency is Options resolved against the environment and the defaults.
 type latency struct {

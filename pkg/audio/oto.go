@@ -9,6 +9,7 @@ package audio
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -42,9 +43,10 @@ func init() { rt.SetAudioRoot(device) }
 // Configure sets the device's latency budget. It must come before the first
 // sound, since oto fixes the device buffer when it opens; after that it
 // returns an error and changes nothing. LETGO_AUDIO_QUEUE and
-// LETGO_AUDIO_DEVICE_FRAMES still win over opt (see Options).
+// LETGO_AUDIO_DEVICE_FRAMES still win over opt (see Options); they are
+// checked when the device opens, so an error here is always about opt.
 func (d *Device) Configure(opt Options) error {
-	if _, err := resolve(opt, os.Getenv); err != nil {
+	if _, err := resolve(opt, noEnv); err != nil {
 		return err
 	}
 	d.mu.Lock()
@@ -64,6 +66,10 @@ func (d *Device) open() error {
 		d.mu.Unlock()
 		l, err := resolve(opt, os.Getenv)
 		if err != nil {
+			// audio/enabled? can only answer false, and a game that checks it
+			// turns sound off quietly, so a tuning run would hear silence and
+			// never learn why. Say it once here.
+			fmt.Fprintln(os.Stderr, err)
 			d.err = err
 			return
 		}
