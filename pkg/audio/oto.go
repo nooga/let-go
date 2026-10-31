@@ -58,6 +58,9 @@ func (d *Device) Configure(opt Options) error {
 	return nil
 }
 
+// noEnv lets Configure check the host's Options without the overrides.
+func noEnv(string) string { return "" }
+
 func (d *Device) open() error {
 	d.once.Do(func() {
 		d.mu.Lock()

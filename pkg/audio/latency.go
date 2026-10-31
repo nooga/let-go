@@ -56,8 +56,6 @@ const (
 	envDeviceFrames = "LETGO_AUDIO_DEVICE_FRAMES"
 )
 
-func noEnv(string) string { return "" }
-
 // latency is Options resolved against the environment and the defaults.
 type latency struct {
 	queue  time.Duration
