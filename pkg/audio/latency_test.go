@@ -20,8 +20,8 @@ func TestDefaultsAreTheSeamsMeasuredBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.frames != 1024 || l.queue != defaultQueue() {
-		t.Fatalf("got %d frames, %v queue; want 1024, %v", l.frames, l.queue, defaultQueue())
+	if l.frames != 1024 || l.queue != 40*time.Millisecond {
+		t.Fatalf("got %d frames, %v queue; want 1024, 40ms", l.frames, l.queue)
 	}
 }
 

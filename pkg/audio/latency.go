@@ -7,7 +7,6 @@ package audio
 
 import (
 	"fmt"
-	"runtime"
 	"strconv"
 	"time"
 
@@ -18,8 +17,8 @@ import (
 // these belong to the host embedding let-go, not to any one sound source. Zero
 // fields take the defaults in brackets.
 type Options struct {
-	// Queue is how far the player reads ahead of the device [24 ms on macOS,
-	// else 40 ms, stretched to one device buffer where that is longer].
+	// Queue is how far the player reads ahead of the device [40 ms,
+	// stretched to one device buffer where that is longer].
 	// Shorter hears a trigger sooner; longer survives a stalled main thread.
 	// A set value shorter than one device buffer is an error.
 	Queue time.Duration
@@ -34,16 +33,13 @@ type Options struct {
 // The defaults follow undertone's native player (its nativeaudio/latency.go).
 // Measured 2026-10-26 on a MacBook Air (speakers into its own mic, trigger to
 // onset), 40 ms of read-ahead gave 150-158 ms and 24 ms gave 119-128 ms; 24 ms
-// over a 512-frame device crackled under a busy main thread. Only macOS has
-// been heard at 24 ms, so other platforms keep 40 ms.
-const defaultDeviceFrames = 1024
-
-func defaultQueue() time.Duration {
-	if runtime.GOOS == "darwin" { // GOOS is "ios" on iOS, which keeps 40 ms
-		return 24 * time.Millisecond
-	}
-	return 40 * time.Millisecond
-}
+// over a 512-frame device crackled under a busy main thread. 24 ms over 1024
+// frames played clean in one terminal game and crackled in a heavier one
+// (2026-10-31), so it is a host's choice through Options, not the default.
+const (
+	defaultDeviceFrames = 1024
+	defaultQueue        = 40 * time.Millisecond
+)
 
 // Two environment variables override Options without a rebuild, for tuning a
 // stock tagged lg by ear: LETGO_AUDIO_QUEUE, a Go duration such as "30ms", and
@@ -88,7 +84,7 @@ func resolve(opt Options, getenv func(string) string) (latency, error) {
 	// a buffer is longer, so the default alone is never an error.
 	buf := deviceBuffer(l.frames)
 	if l.queue == 0 {
-		l.queue = max(defaultQueue(), buf)
+		l.queue = max(defaultQueue, buf)
 	}
 	// Shorter than one device buffer can't help (the device drains whole
 	// buffers), and under one frame it rounds to 0 bytes, which oto reads as
