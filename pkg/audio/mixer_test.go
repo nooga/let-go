@@ -182,6 +182,11 @@ func TestPlayRefusesWhatItCannotRender(t *testing.T) {
 		"NaN gain":          {PCM: make([]int16, 4), LoopFrom: -1, Gain: math.NaN()},
 		"infinite gain":     {PCM: make([]int16, 4), LoopFrom: -1, Gain: math.Inf(1)},
 		"infinite tone":     {LoopFrom: -1, Gain: 1, Tone: rt.Tone{Freq: math.Inf(1), Dur: time.Second}},
+		// LoopFrom 0 is the Go zero value; an empty tone used to reach the
+		// looping PCM path and index an empty slice.
+		"zero-length tone": {Gain: 1, Tone: rt.Tone{Freq: 440}},
+		"negative tone":    {Gain: 1, Tone: rt.Tone{Freq: 440, Dur: -time.Second}},
+		"sub-frame tone":   {Gain: 1, Tone: rt.Tone{Freq: 440, Dur: time.Nanosecond}},
 	} {
 		if _, err := m.Play(s); err == nil {
 			t.Errorf("%s: Play accepted it", name)
@@ -201,6 +206,71 @@ func TestGainIgnoresNaN(t *testing.T) {
 	if got := read(m, 10)[18]; got != 1000 {
 		t.Errorf("after Gain(NaN) the level is %d, want 1000", got)
 	}
+}
+
+// A negative gain, which Play and Gain accept, still fades to silence on a
+// stop and leaves the mix.
+func TestStopSilencesANegativeGain(t *testing.T) {
+	pcm := make([]int16, 2*100)
+	for i := range pcm {
+		pcm[i] = 1000
+	}
+	for name, start := range map[string]func(m *Mixer) rt.AudioHandle{
+		"loop": func(m *Mixer) rt.AudioHandle {
+			h, _ := m.Play(rt.Sound{PCM: pcm, Gain: -1})
+			return h
+		},
+		"stream faded through zero": func(m *Mixer) rt.AudioHandle {
+			h, _ := m.Stream(constant(1000))
+			read(m, edgeFrames)
+			m.Gain(h, -1, 0)
+			return h
+		},
+	} {
+		m := NewMixer()
+		h := start(m)
+		read(m, 2*edgeFrames)
+		m.Stop(h)
+		out := left(read(m, edgeFrames+10))
+		if last := out[len(out)-1]; last != 0 {
+			t.Errorf("%s: after the stop fade the level is %d, want 0", name, last)
+		}
+		if len(m.voices) != 0 {
+			t.Errorf("%s: the stopped voice is still in the mix", name)
+		}
+	}
+}
+
+// A tone too short for a full edgeFrames attack and release fits both into
+// its duration, so it is still audible, lasts its length, and ends at silence.
+func TestShortTonesFitTheirEnvelope(t *testing.T) {
+	for _, n := range []int{100, 219, 220, 221, 224, 440, 441} {
+		m := NewMixer()
+		tone := rt.Tone{Freq: 441, Dur: framesDur(n), Wave: "square"}
+		if got := toneFrames(tone); got != n {
+			t.Fatalf("framesDur(%d) is %d frames", n, got)
+		}
+		m.Play(rt.Sound{LoopFrom: -1, Gain: 1, Tone: tone})
+		out := left(read(m, n))
+		peak := 0
+		for _, x := range out {
+			peak = max(peak, abs(int(x)))
+		}
+		if peak < 16383/2 {
+			t.Errorf("%d frames: the tone peaks at %d, want at least half its level", n, peak)
+		}
+		if last := out[n-1]; abs(int(last)) > 200 {
+			t.Errorf("%d frames: the tone ends at %d, not near silence", n, last)
+		}
+		if len(m.voices) != 0 {
+			t.Errorf("%d frames: the tone is still playing after its duration", n)
+		}
+	}
+}
+
+// framesDur is a duration that toneFrames counts as exactly n frames.
+func framesDur(n int) time.Duration {
+	return time.Duration(math.Ceil(float64(n)*float64(time.Second)/rt.AudioRate)) + 1
 }
 
 // left is the left channel of interleaved samples.

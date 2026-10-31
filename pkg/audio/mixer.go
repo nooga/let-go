@@ -53,33 +53,40 @@ type voice struct {
 
 	gain, target, step float64
 	stopping, done     bool
+
+	// edge is a tone's attack and release length: edgeFrames, or half the
+	// tone when it is shorter, so a short tone still rises and falls.
+	edge int
 }
 
-func (m *Mixer) add(v *voice, gain float64) rt.AudioHandle {
+func (m *Mixer) add(v *voice, gain float64, edge int) rt.AudioHandle {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.last++
 	v.h = m.last
 	v.target = gain
-	v.step = math.Abs(gain) / edgeFrames
+	v.step = math.Abs(gain) / float64(edge)
 	m.voices = append(m.voices, v)
 	return v.h
 }
 
 // Play starts a sample or a tone. It refuses a sound it cannot render: PCM
 // that is not whole stereo frames, a loop frame past the end, or a gain or
-// frequency that is not finite.
+// frequency that is not finite, or a tone shorter than one frame.
 func (m *Mixer) Play(s rt.Sound) (rt.AudioHandle, error) {
 	if err := check(s); err != nil {
 		return 0, err
 	}
-	v := &voice{pcm: s.PCM, loopFrom: s.LoopFrom}
+	v := &voice{pcm: s.PCM, loopFrom: s.LoopFrom, edge: edgeFrames}
 	if s.Tone.Freq > 0 {
 		v.pcm, v.tone = nil, s.Tone
-		v.left = int(s.Tone.Dur.Seconds() * rt.AudioRate)
+		v.left = toneFrames(s.Tone)
+		v.edge = max(1, min(edgeFrames, v.left/2))
 	}
-	return m.add(v, s.Gain), nil
+	return m.add(v, s.Gain, v.edge), nil
 }
+
+func toneFrames(t rt.Tone) int { return int(t.Dur.Seconds() * rt.AudioRate) }
 
 func check(s rt.Sound) error {
 	switch {
@@ -88,6 +95,10 @@ func check(s rt.Sound) error {
 	case s.Tone.Freq > 0:
 		if math.IsInf(s.Tone.Freq, 1) {
 			return fmt.Errorf("audio: tone frequency is not finite")
+		}
+		// A tone with no frame would fall through to the empty-PCM path.
+		if toneFrames(s.Tone) < 1 {
+			return fmt.Errorf("audio: a tone of %v is shorter than one frame", s.Tone.Dur)
 		}
 	case len(s.PCM)%2 != 0:
 		return fmt.Errorf("audio: %d PCM samples is not a whole number of stereo frames", len(s.PCM))
@@ -101,7 +112,7 @@ func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
 // Stream mixes src until it errors or the handle is stopped.
 func (m *Mixer) Stream(src io.Reader) (rt.AudioHandle, error) {
-	return m.add(&voice{src: src}, 1), nil
+	return m.add(&voice{src: src}, 1, edgeFrames), nil
 }
 
 // Stop fades the sound out over edgeFrames and drops it.
@@ -109,9 +120,17 @@ func (m *Mixer) Stop(h rt.AudioHandle) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if v := m.find(h); v != nil {
-		v.stopping = true
-		v.target, v.step = 0, max(v.gain, v.target)/edgeFrames
+		v.release(edgeFrames)
 	}
+}
+
+// release fades the voice to silence over frames and marks it stopping, so a
+// Gain call cannot undo the fade. The step is a magnitude because render
+// moves gain toward target by it; a negative gain's signed step would move
+// away from silence and the voice would never end.
+func (v *voice) release(frames int) {
+	v.stopping = true
+	v.target, v.step = 0, max(math.Abs(v.gain), math.Abs(v.target))/float64(frames)
 }
 
 // Gain moves the sound's level to g over fade, or over edgeFrames when fade
@@ -191,10 +210,8 @@ func (v *voice) render(mix []float64) {
 			v.phase += v.tone.Freq / rt.AudioRate
 			v.phase -= math.Floor(v.phase)
 			v.left--
-			if v.left == edgeFrames {
-				// stopping, so a Gain call cannot undo the end fade.
-				v.stopping = true
-				v.target, v.step = 0, v.gain/edgeFrames
+			if v.left == v.edge {
+				v.release(v.edge)
 			}
 			if v.left == 0 {
 				v.done = true
@@ -211,8 +228,7 @@ func (v *voice) render(mix []float64) {
 			// if shorter, so a sample ending on a loud frame does not click.
 			// A loop has no end to fade.
 			if rem := (len(v.pcm) - v.pos) / 2; v.loopFrom < 0 && !v.stopping && rem == min(edgeFrames, len(v.pcm)/4) {
-				v.stopping = true
-				v.target, v.step = 0, v.gain/float64(rem)
+				v.release(rem)
 			}
 			l, r = float64(v.pcm[v.pos]), float64(v.pcm[v.pos+1])
 			v.pos += 2
