@@ -8,10 +8,10 @@
 package audio
 
 import (
+	"errors"
 	"io"
-	"runtime"
+	"os"
 	"sync"
-	"time"
 
 	"github.com/ebitengine/oto/v3"
 
@@ -23,28 +23,12 @@ import (
 // touches the audio system.
 type Device struct {
 	*Mixer
+	mu     sync.Mutex // guards opt and opened, which Configure reads
+	opt    Options
+	opened bool
 	once   sync.Once
 	err    error
 	player *oto.Player // kept in a field: oto closes an unreachable player mid-playback (oto#293)
-}
-
-// The latency budget follows undertone's native player (its
-// nativeaudio/latency.go): a 1024-frame device buffer, which oto takes as a
-// duration and truncates back, so it is rounded up to survive the round trip,
-// and a short player read-ahead in place of oto's 500 ms. Measured 2026-10-26
-// on a MacBook Air (speakers into its own mic, trigger to onset), 40 ms of
-// read-ahead gave 150-158 ms and 24 ms gave 119-128 ms; 24 ms over a
-// 512-frame device crackled under a busy main thread. Only macOS has been
-// heard at 24 ms, so other platforms keep 40 ms.
-const deviceFrames = 1024
-
-const deviceBuffer = time.Duration((deviceFrames*int64(time.Second) + rt.AudioRate - 1) / rt.AudioRate)
-
-func readAheadMS() int {
-	if runtime.GOOS == "darwin" { // GOOS is "ios" on iOS, which keeps 40 ms
-		return 24
-	}
-	return 40
 }
 
 var device = &Device{Mixer: NewMixer()}
@@ -55,13 +39,39 @@ func Default() *Device { return device }
 
 func init() { rt.SetAudioRoot(device) }
 
+// Configure sets the device's latency budget. It must come before the first
+// sound, since oto fixes the device buffer when it opens; after that it
+// returns an error and changes nothing. LETGO_AUDIO_QUEUE and
+// LETGO_AUDIO_DEVICE_FRAMES still win over opt (see Options).
+func (d *Device) Configure(opt Options) error {
+	if _, err := resolve(opt, os.Getenv); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.opened {
+		return errors.New("audio: the device is already open; configure it before the first sound")
+	}
+	d.opt = opt
+	return nil
+}
+
 func (d *Device) open() error {
 	d.once.Do(func() {
+		d.mu.Lock()
+		d.opened = true
+		opt := d.opt
+		d.mu.Unlock()
+		l, err := resolve(opt, os.Getenv)
+		if err != nil {
+			d.err = err
+			return
+		}
 		ctx, ready, err := oto.NewContext(&oto.NewContextOptions{
 			SampleRate:   rt.AudioRate,
 			ChannelCount: 2,
 			Format:       oto.FormatSignedInt16LE,
-			BufferSize:   deviceBuffer,
+			BufferSize:   deviceBuffer(l.frames),
 		})
 		if err != nil {
 			d.err = err
@@ -74,7 +84,7 @@ func (d *Device) open() error {
 			return
 		}
 		d.player = ctx.NewPlayer(d.Mixer)
-		d.player.SetBufferSize(rt.AudioRate * 4 * readAheadMS() / 1000)
+		d.player.SetBufferSize(playerBytes(l.queue))
 		d.player.Play()
 	})
 	return d.err
