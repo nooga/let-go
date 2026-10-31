@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/genmanifest"
 )
 
 // TestLoweringDeterminism verifies that cold and hot lowering are byte-identical
@@ -51,7 +53,15 @@ func TestLoweringDeterminism(t *testing.T) {
 	// gitignored and regenerated on demand). In a clean checkout they don't
 	// exist, `-tags gogen_ir` selects no additional files, and "hot" compiles
 	// identically to "cold" — the gate would compare cold against itself.
+	// The materialized tree doubles as the cold side of the comparison below,
+	// so cold lowers once; a full lowering is most of this test's run time.
+	// The comparison reads the tree manifest lgbgen writes over its staging
+	// dir, so it covers exactly the generated files: anything else in the
+	// checkout tree (a .DS_Store, a co-tenant fixture package) is not part of
+	// it. The cold sums are read now, so a regen in this checkout while the
+	// hot side runs cannot change them.
 	materializeNativeLowering(t, root, cold)
+	coldSums := readTreeSums(t, filepath.Join(root, "pkg", "rt", "core_go_lowered"))
 
 	hot := buildLgbgenTags(t, root, "bootstrap gogen_ir")
 	assertNativeLoweringLinked(t, root)
@@ -64,13 +74,6 @@ func TestLoweringDeterminism(t *testing.T) {
 	// never-bails-on-core test onto lowerings the gate already performs.
 	const bailMsg = "typeinfer: hit *typeinfer-max-drains*"
 
-	coldDir, coldOut, err := generateLoweredTree(root, cold, filepath.Join(base, "cold"))
-	if err != nil {
-		t.Fatalf("cold lgbgen: %v", err)
-	}
-	if strings.Contains(coldOut, bailMsg) {
-		t.Fatalf("typeinfer bailed during COLD lowering — *typeinfer-max-drains* cap hit on real core (should never happen). Raise the cap or investigate. saw: %q", bailMsg)
-	}
 	hotDir, hotOut, err := generateLoweredTree(root, hot, filepath.Join(base, "hot"))
 	if err != nil {
 		t.Fatalf("hot lgbgen: %v", err)
@@ -79,7 +82,7 @@ func TestLoweringDeterminism(t *testing.T) {
 		t.Fatalf("typeinfer bailed during HOT lowering — *typeinfer-max-drains* cap hit on real core. saw: %q", bailMsg)
 	}
 
-	diffs := compareDirectories(t, coldDir, hotDir)
+	diffs := compareTreeSums(coldSums, readTreeSums(t, hotDir))
 	if len(diffs) > 0 {
 		t.Errorf("cold vs hot lowering not byte-identical: %d files differ", len(diffs))
 		for _, d := range diffs[:min(len(diffs), 5)] {
@@ -122,9 +125,8 @@ func materializeNativeLowering(t *testing.T, repoRoot, coldBin string) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("materialize native lowering (--target=go): %v\nstderr:\n%s", err, stderr.String())
 	}
-	// Same bail assertion as the cold/hot passes: a bail here would embed
-	// degraded native passes in the hot binary. The cold pass would bail
-	// identically and catch it, but fail at the source with the diagnostics.
+	// This run is the cold pass, so it carries the cold bail assertion: a bail
+	// here would also embed degraded native passes in the hot binary.
 	if strings.Contains(stdout.String(), "typeinfer: hit *typeinfer-max-drains*") {
 		t.Fatalf("typeinfer bailed while materializing the native lowering:\n%s", stdout.String())
 	}
@@ -156,7 +158,8 @@ func assertNativeLoweringLinked(t *testing.T, repoRoot string) {
 // the run from the real checkout: it never rewrites the tracked
 // pkg/rt/core_go_lowered tree OR the wireup files (lg_gogen_ir.go, …) that
 // `go test ./...` builds elsewhere (e.g. TestGogenAOTDiff's -tags gogen_ir
-// build). The full isolation is also what lets two runs execute independently.
+// build). Only the hot pass runs this way; the cold side is the tree
+// materializeNativeLowering installs in the checkout.
 //
 // Returns the lowered-tree dir, stdout (typeinfer diagnostics), and an error.
 func generateLoweredTree(repoRoot, bin, runDir string) (string, string, error) {
@@ -178,57 +181,47 @@ func generateLoweredTree(repoRoot, bin, runDir string) (string, string, error) {
 	return outDir, stdout.String(), nil
 }
 
-// compareDirectories recursively compares two directory trees and returns
-// a list of relative paths that differ in content or presence.
-func compareDirectories(t *testing.T, dir1, dir2 string) []string {
+// readTreeSums verifies the lowered tree at dir against its lgbgen tree
+// manifest and returns the manifest as relpath -> sha256. Checking first means
+// a torn or hand-edited tree fails here rather than comparing stale sums.
+func readTreeSums(t *testing.T, dir string) map[string]string {
 	t.Helper()
+	if err := genmanifest.CheckTreeManifest(dir); err != nil {
+		t.Fatalf("lowered tree manifest: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, genmanifest.TreeManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sums := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		sum, rel, ok := strings.Cut(line, "  ")
+		if !ok {
+			t.Fatalf("malformed %s line: %q", genmanifest.TreeManifestName, line)
+		}
+		sums[rel] = sum
+	}
+	return sums
+}
+
+// compareTreeSums returns the sorted relative paths whose sums differ between
+// the two manifests, or that only one of them lists.
+func compareTreeSums(cold, hot map[string]string) []string {
 	var diffs []string
-
-	err := filepath.Walk(dir1, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(dir1, path)
-		other := filepath.Join(dir2, rel)
-
-		if info.IsDir() {
-			return nil // Walk handles recursion
-		}
-
-		// Compare file contents.
-		b1, err1 := os.ReadFile(path)
-		b2, err2 := os.ReadFile(other)
-
-		if err1 != nil || err2 != nil || !bytes.Equal(b1, b2) {
+	for rel, sum := range cold {
+		other, ok := hot[rel]
+		switch {
+		case !ok:
+			diffs = append(diffs, rel+" (missing in hot)")
+		case other != sum:
 			diffs = append(diffs, rel)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk dir1: %v", err)
 	}
-
-	// Also check for files in dir2 that don't exist in dir1.
-	err = filepath.Walk(dir2, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	for rel := range hot {
+		if _, ok := cold[rel]; !ok {
+			diffs = append(diffs, rel+" (missing in cold)")
 		}
-		rel, _ := filepath.Rel(dir2, path)
-		other := filepath.Join(dir1, rel)
-
-		if info.IsDir() {
-			return nil
-		}
-
-		if _, err := os.Stat(other); os.IsNotExist(err) {
-			diffs = append(diffs, rel+" (missing in run1)")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk dir2: %v", err)
 	}
-
 	sort.Strings(diffs)
 	return diffs
 }
