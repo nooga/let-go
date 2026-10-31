@@ -20,7 +20,8 @@ type Options struct {
 	// Queue is how far the player reads ahead of the device [40 ms,
 	// stretched to one device buffer where that is longer].
 	// Shorter hears a trigger sooner; longer survives a stalled main thread.
-	// A set value shorter than one device buffer is an error.
+	// A set value shorter than one device buffer, or longer than 10 s, is an
+	// error.
 	Queue time.Duration
 	// DeviceFrames is the device buffer in frames [1024]: a power of two from
 	// 64 to 16384, the range a browser's ScriptProcessor accepts, so a value
@@ -39,6 +40,9 @@ type Options struct {
 const (
 	defaultDeviceFrames = 1024
 	defaultQueue        = 40 * time.Millisecond
+	// maxQueue is far past any read-ahead a program would want, and keeps
+	// playerBytes well clear of overflow.
+	maxQueue = 10 * time.Second
 )
 
 // Two environment variables override Options without a rebuild, for tuning a
@@ -68,9 +72,11 @@ func resolve(opt Options, getenv func(string) string) (latency, error) {
 		l.queue = d
 	}
 	if v := getenv(envDeviceFrames); v != "" {
+		// A zero here would fall through to the default below, silently
+		// undoing both the override and any DeviceFrames the host set.
 		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return latency{}, fmt.Errorf("audio: %s=%q is not an integer", envDeviceFrames, v)
+		if err != nil || n <= 0 {
+			return latency{}, fmt.Errorf("audio: %s=%q is not a positive integer", envDeviceFrames, v)
 		}
 		l.frames = n
 	}
@@ -91,6 +97,12 @@ func resolve(opt Options, getenv func(string) string) (latency, error) {
 	// "use the half-second default", the silent fallback this rejects.
 	if l.queue < buf {
 		return latency{}, fmt.Errorf("audio: a queue of %v is shorter than the %d-frame device buffer (%v)", l.queue, l.frames, buf)
+	}
+	// playerBytes multiplies nanoseconds by the byte rate, which overflows
+	// int64 past about 52 s and hands oto a negative size: silence while
+	// audio/enabled? says true.
+	if l.queue > maxQueue {
+		return latency{}, fmt.Errorf("audio: a queue of %v is longer than the %v maximum", l.queue, maxQueue)
 	}
 	return l, nil
 }

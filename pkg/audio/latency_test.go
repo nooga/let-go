@@ -78,6 +78,10 @@ func TestBadValuesAreErrorsNotDefaults(t *testing.T) {
 		{"queue env not a duration", Options{}, map[string]string{envQueue: "fast"}, envQueue},
 		{"queue env not positive", Options{}, map[string]string{envQueue: "0s"}, envQueue},
 		{"frames env not an int", Options{}, map[string]string{envDeviceFrames: "1k"}, envDeviceFrames},
+		{"frames env zero over set options", Options{DeviceFrames: 512}, map[string]string{envDeviceFrames: "0"}, envDeviceFrames},
+		{"frames env negative", Options{}, map[string]string{envDeviceFrames: "-1024"}, envDeviceFrames},
+		{"queue past the maximum", Options{Queue: 24 * time.Hour}, nil, "longer than"},
+		{"queue env past the maximum", Options{}, map[string]string{envQueue: "1m"}, "longer than"},
 		{"frames not a power of two", Options{DeviceFrames: 1000}, nil, "power of two"},
 		{"frames too small", Options{DeviceFrames: 32}, nil, "power of two"},
 		{"frames too large", Options{DeviceFrames: 32768}, nil, "power of two"},
@@ -95,7 +99,7 @@ func TestBadValuesAreErrorsNotDefaults(t *testing.T) {
 }
 
 func TestPlayerBytesAlignToAFrame(t *testing.T) {
-	for _, q := range []time.Duration{24 * time.Millisecond, 40 * time.Millisecond, 23219955} {
+	for _, q := range []time.Duration{24 * time.Millisecond, 40 * time.Millisecond, 23219955, maxQueue} {
 		if n := playerBytes(q); n%4 != 0 || n <= 0 {
 			t.Errorf("%v gave %d bytes", q, n)
 		}
