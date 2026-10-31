@@ -4,9 +4,10 @@
  *
  * The audio namespace — a handle-based host capability (let-go #255, Audio).
  * The guest names a sound; the host plays it and hands back a handle the guest
- * can stop or fade later. Fire-and-forget: nothing about playback flows back
- * into the guest, so a deterministic guest replays identically with or without
- * sound.
+ * can stop or fade later. Fire-and-forget: no playback state (position,
+ * level, whether a sound has ended) flows back into the guest. A guest can
+ * still observe its handles, audio/enabled? and refused calls, so it replays
+ * identically with or without sound only if it does not branch on those.
  *
  * Bound at the *audio* root by the host, the same binding discipline as
  * *surface*: a backend that registers itself (pkg/audio, built with
@@ -66,7 +67,9 @@ type Audio interface {
 	// block.
 	Stream(src io.Reader) (AudioHandle, error)
 	Stop(AudioHandle)
-	// Gain moves a sound's level to g over fade; a zero fade sets it at once.
+	// Gain moves a sound's level to g over fade. A backend may smooth a zero
+	// or very short fade over a few milliseconds so the change does not
+	// click; pkg/audio's mixer does.
 	Gain(h AudioHandle, g float64, fade time.Duration)
 	// Enabled reports whether sound can be heard: a backend is built in and
 	// it opened a device.
