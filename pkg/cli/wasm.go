@@ -198,7 +198,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string, moduleDir string, imports []string) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, audio bool, storeID string, customShellTemplate string, moduleDir string, imports []string) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	var chunk *vm.CodeChunk
@@ -276,7 +276,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	if err := os.WriteFile(filepath.Join(srcDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval)), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval, audio)), 0644); err != nil {
 		return err
 	}
 	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {

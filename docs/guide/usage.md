@@ -101,6 +101,13 @@ service worker that supplies the COOP/COEP headers GitHub Pages needs for
 SharedArrayBuffer. Programs that use the `term` namespace get full terminal
 emulation via xterm.js: ANSI colors, cursor positioning, raw keyboard input.
 
+Add `-w-audio` for sound: `audio/tone` and `audio/sample` play through an
+AudioWorklet, and `audio/enabled?` is true once the page has one. Browsers
+start audio only from a user gesture, so sound begins at the first click, tap
+or key; sounds triggered before that are dropped, not saved up. A native `lg`
+plays the same calls when built with `-tags audio_oto`; without either, every
+`audio/` call is a silent no-op.
+
 ## Native binaries
 
 `lg compile` builds a program into a standalone native executable through the
