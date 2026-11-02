@@ -817,6 +817,83 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 	return result, nil
 }
 
+// duplicateMapKey finds a key of kvs (alternating keys and values) equal to
+// an earlier one. Past pairwiseMapKeys keys it compares keys of the kinds whose hash
+// agrees with = (hashSafe) only within a hash bucket, so a large data map of
+// such keys reads in linear time; any other key is compared with every key,
+// since some = values still hash apart (empty list and vector, -0.0 and 0.0).
+// pairwiseMapKeys: a map of at most this many keys is checked pairwise.
+const pairwiseMapKeys = 32
+
+func duplicateMapKey(kvs []vm.Value) (vm.Value, bool) {
+	if len(kvs) <= 2*pairwiseMapKeys {
+		for i := 0; i < len(kvs); i += 2 {
+			for j := i + 2; j < len(kvs); j += 2 {
+				if vm.ValueEquals(kvs[i], kvs[j]) {
+					return kvs[i], true
+				}
+			}
+		}
+		return nil, false
+	}
+	seen := make(map[uint32][]int, len(kvs)/2)
+	var other []int
+	for i := 0; i < len(kvs); i += 2 {
+		if !hashSafe(kvs[i], 0) {
+			other = append(other, i)
+			continue
+		}
+		h := vm.HashValue(kvs[i])
+		for _, j := range seen[h] {
+			if vm.ValueEquals(kvs[j], kvs[i]) {
+				return kvs[j], true
+			}
+		}
+		seen[h] = append(seen[h], i)
+	}
+	for _, i := range other {
+		for j := 0; j < len(kvs); j += 2 {
+			if j != i && vm.ValueEquals(kvs[j], kvs[i]) {
+				return kvs[min(i, j)], true
+			}
+		}
+	}
+	return nil, false
+}
+
+// hashSafe: v is a keyword, symbol, string, char or fixnum, or a non-empty
+// vector or list of such values, kinds whose = and hash agree.
+func hashSafe(v vm.Value, depth int) bool {
+	if depth > 4 {
+		return false
+	}
+	switch x := v.(type) {
+	case vm.Keyword, vm.Symbol, vm.String, vm.Char, vm.Int:
+		return true
+	case vm.ArrayVector:
+		if len(x) == 0 {
+			return false
+		}
+		for _, e := range x {
+			if !hashSafe(e, depth+1) {
+				return false
+			}
+		}
+		return true
+	case *vm.List:
+		if x.RawCount() == 0 {
+			return false
+		}
+		for s := vm.Seq(x); s != nil; s = s.Next() {
+			if !hashSafe(s.First(), depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func readMap(r *LispReader, _ rune) (vm.Value, error) {
 	startLine := r.line
 	startCol := max(r.column-1, 0)
@@ -850,15 +927,11 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 	if len(ret)%2 != 0 {
 		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
 	}
-	if r.data {
+	if r.data && vm.ValueEquals != nil {
 		// Clojure rejects duplicate keys in a map literal; code reading keeps
 		// last-wins so existing sources are unaffected.
-		for i := 0; i < len(ret); i += 2 {
-			for j := i + 2; j < len(ret); j += 2 {
-				if vm.ValueEquals != nil && vm.ValueEquals(ret[i], ret[j]) {
-					return vm.NIL, NewReaderError(r, "duplicate key in map literal: "+ret[i].String())
-				}
-			}
+		if dup, ok := duplicateMapKey(ret); ok {
+			return vm.NIL, NewReaderError(r, "duplicate key in map literal: "+dup.String())
 		}
 	}
 	result := vm.NewArrayMap(ret)
