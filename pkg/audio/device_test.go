@@ -1,4 +1,4 @@
-//go:build audio_oto && !js
+//go:build (audio_oto && !js) || (js && wasm)
 
 /*
  * Copyright (c) 2026 Matt Parrett

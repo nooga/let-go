@@ -18,16 +18,17 @@ import (
 // fields take the defaults in brackets.
 type Options struct {
 	// Queue is how far the player reads ahead of the device [40 ms,
-	// stretched to one device buffer where that is longer].
+	// stretched to one device buffer where that is longer; in a browser 60,
+	// 80 or 120 ms by path, see web.go].
 	// Shorter hears a trigger sooner; longer survives a stalled main thread.
 	// A set value shorter than one device buffer, or longer than 10 s, is an
 	// error.
 	Queue time.Duration
 	// DeviceFrames is the device buffer in frames [1024]: a power of two from
-	// 64 to 16384, the range a browser's ScriptProcessor accepts, so a value
-	// tuned here carries over to a browser backend. Raise it first if
-	// dropouts appear; 512 crackled in a terminal game on macOS, where it is
-	// four AudioQueue buffers of 2.9 ms.
+	// 64 to 16384. Raise it first if dropouts appear; 512 crackled in a
+	// terminal game on macOS, where it is four AudioQueue buffers of 2.9 ms.
+	// A browser has no such buffer to size (its worklet renders 128-frame
+	// quanta), so there only Queue applies.
 	DeviceFrames int64
 }
 

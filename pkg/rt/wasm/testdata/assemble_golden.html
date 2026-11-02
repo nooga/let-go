@@ -136,6 +136,102 @@ window.LetGoHost = (function() {
   };
 })();
 
+// --- Audio (the page side of pkg/audio's browser backend, -w-audio) ---
+// The Go side renders into a ring and calls _lgAudioOpen(spec); this opens
+// the AudioContext and the worklet that plays the ring. spec is
+// {sampleRate, cap} plus, where SharedArrayBuffer is available, {data, ctrl}:
+// the ring itself (cap stereo float32 frames) and an Int32Array buffer of
+// [write, read, underruns]. Without them the ring lives in the worklet,
+// slices arrive through handle.push(Float32Array), and the worklet reports
+// what it has played in handle.played. Layout MUST stay in sync with
+// pkg/audio/web.go. A bundle built without -w-audio never calls this.
+const LG_AUDIO_WORKLET = `
+class LgAudioShared extends AudioWorkletProcessor {
+  constructor(o) { super(); this.cap = o.processorOptions.cap; this.buf = new Float32Array(o.processorOptions.data);
+    this.c = new Int32Array(o.processorOptions.ctrl); this.started = false; }
+  process(_, outs) { const L = outs[0][0], R = outs[0][1], c = this.c, cap = this.cap;
+    const w = Atomics.load(c, 0); let r = c[1], avail = (w - r + cap) % cap, short = false;
+    for (let i = 0; i < L.length; i++) {
+      if (avail > 0) { L[i] = this.buf[r * 2]; R[i] = this.buf[r * 2 + 1]; r = (r + 1) % cap; avail--; this.started = true; }
+      else { L[i] = 0; R[i] = 0; short = true; } }
+    Atomics.store(c, 1, r);
+    if (short && this.started) Atomics.add(c, 2, 1);
+    return true; } }
+registerProcessor('lg-audio-shared', LgAudioShared);
+// The message ring never allocates while playing: it is sized once, and a
+// slice that would overflow it is dropped and counted (the pump counts slices
+// in flight, so this is a guard, not a path).
+class LgAudioRing extends AudioWorkletProcessor {
+  constructor(o) { super(); this.cap = o.processorOptions.cap; this.buf = new Float32Array(this.cap * 2);
+    this.w = 0; this.r = 0; this.fill = 0; this.played = 0; this.under = 0; this.over = 0; this.n = 0;
+    this.port.onmessage = (e) => { const d = e.data, f = d.length / 2;
+      if (this.fill + f > this.cap) { this.over++; return; }
+      for (let i = 0; i < f; i++) { this.buf[this.w * 2] = d[i * 2]; this.buf[this.w * 2 + 1] = d[i * 2 + 1]; this.w = (this.w + 1) % this.cap; }
+      this.fill += f; }; }
+  process(_, outs) { const L = outs[0][0], R = outs[0][1]; let short = false;
+    for (let i = 0; i < L.length; i++) {
+      if (this.fill > 0) { L[i] = this.buf[this.r * 2]; R[i] = this.buf[this.r * 2 + 1]; this.r = (this.r + 1) % this.cap; this.fill--; this.played++; }
+      else { L[i] = 0; R[i] = 0; short = true; } }
+    if (short && this.played > 0) this.under++;
+    if (++this.n % 4 === 0) this.port.postMessage([this.played, this.under, this.over]);
+    return true; } }
+registerProcessor('lg-audio-ring', LgAudioRing);
+`;
+const lgAudio = (() => {
+  const all = new Set(); // every open AudioContext, for the gesture unlock
+  let moduleURL = null;
+  // Browsers start audio only from a user gesture. resume() alone is not
+  // reliable on iOS Safari for a context created before the gesture; starting
+  // a one-frame silent source inside the same gesture is the long-standing
+  // unlock. The listeners stay, so a context the OS suspends later (iOS does
+  // on interruptions) resumes on the next tap.
+  const unlock = () => {
+    for (const ctx of all) {
+      if (ctx.state === 'running') continue;
+      ctx.resume();
+      const s = ctx.createBufferSource();
+      s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      s.connect(ctx.destination);
+      s.start(0);
+    }
+  };
+  let listening = false;
+  return {
+    open(spec) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      const ctx = new AC({ sampleRate: spec.sampleRate });
+      if (!ctx.audioWorklet) { ctx.close(); return null; } // Safari: secure contexts only
+      all.add(ctx);
+      if (!listening) {
+        listening = true;
+        for (const ev of ['touchend', 'mouseup', 'keyup', 'click']) document.addEventListener(ev, unlock, true);
+      }
+      const shared = !!spec.data;
+      let node = null;
+      const pending = [];
+      const handle = {
+        played: 0, underruns: 0,
+        push(a) { if (node) node.port.postMessage(a, [a.buffer]); else pending.push(a); },
+      };
+      moduleURL ??= URL.createObjectURL(new Blob([LG_AUDIO_WORKLET], { type: 'application/javascript' }));
+      ctx.audioWorklet.addModule(moduleURL).then(() => {
+        node = new AudioWorkletNode(ctx, shared ? 'lg-audio-shared' : 'lg-audio-ring', {
+          outputChannelCount: [2],
+          processorOptions: shared ? { cap: spec.cap, data: spec.data, ctrl: spec.ctrl } : { cap: spec.cap },
+        });
+        if (!shared) {
+          node.port.onmessage = (e) => { handle.played = e.data[0]; handle.underruns = e.data[1]; };
+          for (const a of pending.splice(0)) node.port.postMessage(a, [a.buffer]);
+        }
+        node.connect(ctx.destination);
+        ctx.resume(); // succeeds outright where autoplay is allowed
+      }).catch((err) => console.error('lg audio:', err));
+      return handle;
+    },
+  };
+})();
+
 // --- LetGoHost request/eval plumbing (-w-host-eval bundles only) ---
 // runtimeReady resolves once the wasm runtime has installed its _lgEval/_lgRequest
 // hooks and called _lgRuntimeReady (wired per boot mode below). requestImpl is
@@ -296,6 +392,13 @@ async function startWorkerMode() {
       try { postMessage({t:'surface', w, h, d: arr.buffer}, [arr.buffer]); }
       catch (err) { console.error('lg surface:', err); }
     };
+    // Worker side of the audio bridge: a worker has no AudioContext, so the
+    // shared ring goes to the page, which plays it (lgAudio.open). The worker
+    // keeps rendering into it.
+    globalThis._lgAudioOpen = function(spec) {
+      postMessage({t:'audio-open', spec});
+      return {};
+    };
     // Host-eval (worker): the runtime sets globalThis._lgEval, then calls this to
     // announce readiness; relay to the main thread so it can resolve the gate.
     globalThis._lgRuntimeReady = function() {
@@ -417,6 +520,10 @@ async function startWorkerMode() {
   worker.onmessage = (e) => {
     if (e.data.t === 'out') window.LetGoHost._output(e.data.d);
     if (e.data.t === 'exit') window.LetGoHost._output('\r\n\x1b[90m[program exited]\x1b[0m\r\n');
+    if (e.data.t === 'audio-open') {
+      try { lgAudio.open(e.data.spec); }
+      catch (err) { console.error('lg audio relay:', err); }
+    }
     if (e.data.t === 'emit') {
       try { window.LetGoHost._emit(e.data.name, JSON.parse(e.data.data)); }
       catch (err) { console.error('lg emit relay:', err); }
@@ -564,6 +671,9 @@ async function startMainThreadMode() {
     try { window.LetGoHost._surface(arr.buffer, w, h); }
     catch (err) { console.error('lg surface:', err); }
   };
+  // Main-thread side of the audio bridge: Go shares the page, so it opens
+  // the context directly and pushes slices through the returned handle.
+  globalThis._lgAudioOpen = (spec) => lgAudio.open(spec);
   // Main-thread mode: Go and the sink share globalThis, so set the readiness
   // flag directly when the shell wires (or drops) onSurface.
   globalThis._lgSurfaceNotify = (ready) => { globalThis._lgSurfaceReady = ready; };
