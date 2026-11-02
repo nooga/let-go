@@ -38,9 +38,19 @@ func hashValue(v Value) uint32 {
 }
 
 // computeHash is the fallback for types that don't implement Hashable.
+// A finite seq (a seq over a vector, a map or a set, a range) hashes as an
+// ordered collection, as *List does, so it finds a list or vector of = elements
+// in a set; an infinite one keeps the printed form, which does not realize it.
 func computeHash(v Value) uint32 {
 	if v == NIL {
 		return 0
+	}
+	switch v.(type) {
+	case *InfiniteRange, *Iterate:
+	default:
+		if s, ok := v.(Seq); ok {
+			return hashOrdered(s)
+		}
 	}
 	return hashBytes([]byte(v.String()))
 }
