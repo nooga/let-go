@@ -141,9 +141,9 @@ window.LetGoHost = (function() {
 // the AudioContext and the worklet that plays the ring. spec is
 // {sampleRate, cap} plus, where SharedArrayBuffer is available, {data, ctrl}:
 // the ring itself (cap stereo float32 frames) and an Int32Array buffer of
-// [write, read, underruns]. Without them the ring lives in the worklet,
-// slices arrive through handle.push(Float32Array), and the worklet reports
-// what it has played in handle.played. Layout MUST stay in sync with
+// [write, read, underruns, page state]. Without them the ring lives in the
+// worklet, slices arrive through handle.push(Float32Array), and the worklet
+// reports what it has played in handle.played. Layout MUST stay in sync with
 // pkg/audio/web.go. A bundle built without -w-audio never calls this.
 const LG_AUDIO_WORKLET = `
 class LgAudioShared extends AudioWorkletProcessor {
@@ -198,22 +198,29 @@ const lgAudio = (() => {
   let listening = false;
   return {
     open(spec) {
+      // The page's state goes back to the pump, which fills the ring only
+      // while it plays: 0 opening, 1 running, 2 stopped (suspended), 3 failed.
+      // Shared: ctrl[3]. Messages: handle.state. Constants in pkg/audio/web.go.
+      const shared = !!spec.data;
+      const c32 = shared ? new Int32Array(spec.ctrl) : null;
+      const handle = { played: 0, underruns: 0, state: 0, push() {} };
+      const setState = (v) => { handle.state = v; if (c32) Atomics.store(c32, 3, v); };
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return null;
+      if (!AC) { setState(3); return null; }
       const ctx = new AC({ sampleRate: spec.sampleRate });
-      if (!ctx.audioWorklet) { ctx.close(); return null; } // Safari: secure contexts only
+      if (!ctx.audioWorklet) { ctx.close(); setState(3); return null; } // Safari: secure contexts only
       all.add(ctx);
       if (!listening) {
         listening = true;
         for (const ev of ['touchend', 'mouseup', 'keyup', 'click']) document.addEventListener(ev, unlock, true);
       }
-      const shared = !!spec.data;
       let node = null;
       const pending = [];
-      const handle = {
-        played: 0, underruns: 0,
-        push(a) { if (node) node.port.postMessage(a, [a.buffer]); else pending.push(a); },
-      };
+      handle.push = (a) => { if (node) node.port.postMessage(a, [a.buffer]); else pending.push(a); };
+      // Running only once the worklet is connected: a context that autoplays
+      // before addModule resolves has nothing reading the ring yet.
+      const report = () => setState(node && ctx.state === 'running' ? 1 : 2);
+      ctx.onstatechange = report;
       moduleURL ??= URL.createObjectURL(new Blob([LG_AUDIO_WORKLET], { type: 'application/javascript' }));
       ctx.audioWorklet.addModule(moduleURL).then(() => {
         node = new AudioWorkletNode(ctx, shared ? 'lg-audio-shared' : 'lg-audio-ring', {
@@ -225,8 +232,16 @@ const lgAudio = (() => {
           for (const a of pending.splice(0)) node.port.postMessage(a, [a.buffer]);
         }
         node.connect(ctx.destination);
+        report();
         ctx.resume(); // succeeds outright where autoplay is allowed
-      }).catch((err) => console.error('lg audio:', err));
+      }).catch((err) => {
+        // A blocked blob: module (a strict CSP) lands here; tell the pump so
+        // audio/enabled? stops claiming sound.
+        console.error('lg audio:', err);
+        all.delete(ctx);
+        ctx.close();
+        setState(3);
+      });
       return handle;
     },
   };

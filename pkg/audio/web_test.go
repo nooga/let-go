@@ -84,13 +84,23 @@ func TestWebStartNeedsTheAudioHost(t *testing.T) {
 	}
 }
 
+func voices(m *Mixer) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.voices)
+}
+
+func tone(t *testing.T, d *Device, dur time.Duration) {
+	t.Helper()
+	if _, err := d.Mixer.Play(rt.Sound{Tone: rt.Tone{Freq: 440, Dur: dur, Wave: "sine"}, Gain: 0.5}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWebSharedRingInAWorker(t *testing.T) {
 	asWorker(t)
 	spec := fakeHost(t, js.Global().Get("Object").New())
 	d := &Device{Mixer: NewMixer()}
-	if _, err := d.Mixer.Play(rt.Sound{Tone: rt.Tone{Freq: 440, Dur: time.Second, Wave: "sine"}, Gain: 0.5}); err != nil {
-		t.Fatal(err)
-	}
 	b, err := d.start(latency{queue: defaultQueue, frames: defaultDeviceFrames}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -99,10 +109,19 @@ func TestWebSharedRingInAWorker(t *testing.T) {
 	if !o.shared || spec.Get("data").IsUndefined() || spec.Get("ctrl").IsUndefined() {
 		t.Fatalf("worker took the message path; spec %v", spec.Get("data"))
 	}
-	// Primed before the page saw the ring: at least the worker's queue.
-	if q := o.queued(); q < frames(webQueueWorker) {
-		t.Fatalf("handed over %d frames queued, want the %v worker queue (%d)", q, webQueueWorker, frames(webQueueWorker))
+	// Nothing is queued before the page plays: a sound rendered now would be
+	// heard stale at the first gesture.
+	time.Sleep(30 * time.Millisecond)
+	if q := o.queued(); q != 0 {
+		t.Fatalf("%d frames queued before the page ran", q)
 	}
+
+	// The page starts; the pump fills the worker's queue with what plays now.
+	tone(t, d, time.Second)
+	ctrl := js.Global().Get("Int32Array").New(spec.Get("ctrl"))
+	atomics := js.Global().Get("Atomics")
+	atomics.Call("store", ctrl, 3, pageRunning)
+	eventually(t, "the pump never filled the running ring", func() bool { return o.queued() >= frames(webQueueWorker) })
 	samples := js.Global().Get("Float32Array").New(spec.Get("data"))
 	heard := false
 	for i := 0; i < 2*int(o.queued()); i++ {
@@ -112,28 +131,34 @@ func TestWebSharedRingInAWorker(t *testing.T) {
 		}
 	}
 	if !heard {
-		t.Fatal("the primed ring holds only silence; the tone was not rendered into it")
+		t.Fatal("the ring holds only silence; the tone was not rendered into it")
 	}
 
 	// Play out what is queued, as the worklet does, and the pump refills.
-	ctrl := js.Global().Get("Int32Array").New(spec.Get("ctrl"))
-	js.Global().Get("Atomics").Call("store", ctrl, 1, ctrl.Index(0).Int())
+	atomics.Call("store", ctrl, 1, ctrl.Index(0).Int())
 	eventually(t, "the pump never refilled a drained ring", func() bool { return o.queued() >= o.queue })
 }
 
-func TestWebMessagePathOnAPage(t *testing.T) {
-	asPage(t)
-	var pushed int
-	handle := js.Global().Get("Object").New()
+// messageHost is a fake page handle for the message path.
+func messageHost(t *testing.T) (handle js.Value, pushed *int) {
+	t.Helper()
+	pushed = new(int)
+	handle = js.Global().Get("Object").New()
 	handle.Set("played", 0)
+	handle.Set("state", pageOpening)
 	push := js.FuncOf(func(_ js.Value, a []js.Value) any {
-		pushed += a[0].Get("length").Int() / 2
+		*pushed += a[0].Get("length").Int() / 2
 		return nil
 	})
 	t.Cleanup(push.Release)
 	handle.Set("push", push)
-	spec := fakeHost(t, handle)
+	return handle, pushed
+}
 
+func TestWebMessagePathOnAPage(t *testing.T) {
+	asPage(t)
+	handle, pushed := messageHost(t)
+	spec := fakeHost(t, handle)
 	d := &Device{Mixer: NewMixer()}
 	b, err := d.start(latency{queue: defaultQueue, frames: defaultDeviceFrames}, false)
 	if err != nil {
@@ -143,33 +168,59 @@ func TestWebMessagePathOnAPage(t *testing.T) {
 	if o.shared || !spec.Get("data").IsUndefined() {
 		t.Fatal("an unisolated page was handed a shared ring")
 	}
-	if int64(pushed) < frames(webQueueMessage) {
-		t.Fatalf("pushed %d frames, want the %v message queue (%d)", pushed, webQueueMessage, frames(webQueueMessage))
-	}
+	handle.Set("state", pageRunning)
+	eventually(t, "the pump never pushed the message queue", func() bool { return int64(*pushed) >= frames(webQueueMessage) })
 	// The worklet reports it played everything; the pump tops up.
-	before := pushed
-	handle.Set("played", pushed)
-	eventually(t, "the pump never pushed after the worklet played", func() bool { return pushed >= before+int(frames(webQueueMessage)) })
+	before := *pushed
+	handle.Set("played", before)
+	eventually(t, "the pump never pushed after the worklet played", func() bool { return *pushed >= before+int(frames(webQueueMessage)) })
 }
 
 // Before the first gesture nothing drains the ring. A sound triggered then
 // must still end on time, not wait at the mixer's stopped clock and burst out
 // with every other sound once playback starts.
-func TestWebStalledConsumerKeepsTheMixersClock(t *testing.T) {
+func TestWebStoppedPageKeepsTheMixersClock(t *testing.T) {
 	asWorker(t)
 	fakeHost(t, js.Global().Get("Object").New())
 	d := &Device{Mixer: NewMixer()}
 	if _, err := d.start(latency{queue: defaultQueue, frames: defaultDeviceFrames}, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Mixer.Play(rt.Sound{Tone: rt.Tone{Freq: 440, Dur: 100 * time.Millisecond, Wave: "sine"}, Gain: 0.5}); err != nil {
+	tone(t, d, 100*time.Millisecond)
+	eventually(t, "a 100 ms tone was still playing in the mixer before the page ran", func() bool { return voices(d.Mixer) == 0 })
+}
+
+// A running page whose position reports are late (a busy VM on its thread
+// delays them) must not look stalled: the pump waits, discarding nothing that
+// is still due to play.
+func TestWebLateReportsDiscardNothing(t *testing.T) {
+	asPage(t)
+	handle, _ := messageHost(t)
+	handle.Set("state", pageRunning)
+	fakeHost(t, handle)
+	d := &Device{Mixer: NewMixer()}
+	if _, err := d.start(latency{queue: defaultQueue, frames: defaultDeviceFrames}, false); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "a 100 ms tone was still playing in the mixer with the consumer stalled", func() bool {
-		d.Mixer.mu.Lock()
-		defer d.Mixer.mu.Unlock()
-		return len(d.Mixer.voices) == 0
-	})
+	tone(t, d, 300*time.Millisecond)
+	time.Sleep(500 * time.Millisecond) // played never moves
+	if voices(d.Mixer) == 0 {
+		t.Fatal("the tone was discarded while the page ran with its reports late")
+	}
+}
+
+// The page may only learn it can't play after the device opened (a worker's
+// relay, a blocked worklet module); audio/enabled? must then turn false.
+func TestWebLatePageFailureDisables(t *testing.T) {
+	asWorker(t)
+	spec := fakeHost(t, js.Global().Get("Object").New())
+	d := &Device{Mixer: NewMixer()}
+	if !d.Enabled() {
+		t.Fatal("not enabled before the page reported anything")
+	}
+	ctrl := js.Global().Get("Int32Array").New(spec.Get("ctrl"))
+	js.Global().Get("Atomics").Call("store", ctrl, 3, pageFailed)
+	eventually(t, "audio/enabled? stayed true after the page failed", func() bool { return !d.Enabled() })
 }
 
 func TestWebAskedQueueWins(t *testing.T) {

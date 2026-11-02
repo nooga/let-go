@@ -101,7 +101,14 @@ func (d *Device) Stream(src io.Reader) (rt.AudioHandle, error) {
 }
 
 // Enabled opens the device if it is not open yet, and reports whether that
-// worked.
-func (d *Device) Enabled() bool { return d.open() == nil }
+// worked and the backend has not since found it can't play (a browser page
+// may only learn that after the device opened).
+func (d *Device) Enabled() bool {
+	if d.open() != nil {
+		return false
+	}
+	l, ok := d.backend.(interface{ Lost() bool })
+	return !ok || !l.Lost()
+}
 
 var _ rt.Audio = (*Device)(nil)

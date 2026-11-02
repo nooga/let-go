@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"sync/atomic"
 	"syscall/js"
 	"time"
 
@@ -60,15 +61,25 @@ type webOut struct {
 	cap   int   // ring size in frames, a whole number of slices
 
 	shared  bool
-	ctrl    js.Value   // shared: Int32Array of [write, read, underruns], in frames
+	ctrl    js.Value   // shared: Int32Array of [write, read, underruns, page state]
 	views   []js.Value // shared: one Uint8Array per slice-sized slot of the ring
 	atomics js.Value
 
-	handle js.Value // message path: the page's handle, with push() and played
+	handle js.Value // message path: the page's handle, with push(), played and state
 	sent   int64    // message path: frames posted
 
-	raw, f32 []byte // one slice of mixer frames, and as float32
+	lost     atomic.Bool // the page reported it can't play
+	raw, f32 []byte      // one slice of mixer frames, and as float32
 }
+
+// The page's state, which lg-host-core.js publishes in ctrl[3] or
+// handle.state. The pump fills the ring only while the page plays it.
+const (
+	pageOpening = 0 // the worklet is loading
+	pageRunning = 1 // the context runs and the worklet is connected
+	pageStopped = 2 // suspended: before the first gesture, or interrupted
+	pageFailed  = 3 // no AudioContext or worklet; nothing will ever play
+)
 
 func (d *Device) start(l latency, asked bool) (any, error) {
 	g := js.Global()
@@ -101,7 +112,7 @@ func (d *Device) start(l latency, asked bool) (any, error) {
 	spec := map[string]any{"sampleRate": rt.AudioRate, "cap": o.cap}
 	if shared {
 		sab := g.Get("SharedArrayBuffer")
-		samples, ctrl := sab.New(o.cap*8), sab.New(12)
+		samples, ctrl := sab.New(o.cap*8), sab.New(16)
 		o.ctrl = g.Get("Int32Array").New(ctrl)
 		o.atomics = g.Get("Atomics")
 		data := g.Get("Uint8Array").New(samples)
@@ -110,19 +121,29 @@ func (d *Device) start(l latency, asked bool) (any, error) {
 			o.views[i] = data.Call("subarray", i*webSlice*8, (i+1)*webSlice*8)
 		}
 		spec["data"], spec["ctrl"] = samples, ctrl
-		// Prime before the page sees the ring, so its first quantum has sound.
-		o.prime()
 	}
+	// In a worker this is a relay to the page, which reports a failure later
+	// through the state cell; on the page it fails here.
 	h := open.Invoke(spec)
+	if !worker && (h.IsNull() || h.IsUndefined()) {
+		return nil, errors.New("audio: the page could not open an AudioWorklet (it needs HTTPS or localhost)")
+	}
 	if !shared {
-		if h.IsNull() || h.IsUndefined() {
-			return nil, errors.New("audio: the page could not open an AudioWorklet (it needs HTTPS or localhost)")
-		}
 		o.handle = h
-		o.prime()
 	}
 	go o.pump()
 	return o, nil
+}
+
+// Lost reports that the page can't play, which it may only learn after
+// start returned (in a worker, or when the worklet fails to load).
+func (o *webOut) Lost() bool { return o.lost.Load() }
+
+func (o *webOut) state() int {
+	if o.shared {
+		return o.atomics.Call("load", o.ctrl, 3).Int()
+	}
+	return o.handle.Get("state").Int()
 }
 
 // queued counts frames handed over and not yet played. On the message path
@@ -136,14 +157,6 @@ func (o *webOut) queued() int64 {
 	return o.sent - int64(o.handle.Get("played").Int())
 }
 
-// prime fills the whole queue, with no budget: nothing plays yet, so there is
-// no deadline to yield to, and a part-filled ring would start short.
-func (o *webOut) prime() {
-	for o.queued() < o.queue {
-		o.push()
-	}
-}
-
 // fill renders slices until the queue is full or the budget runs out.
 func (o *webOut) fill() {
 	t0 := time.Now()
@@ -152,49 +165,41 @@ func (o *webOut) fill() {
 	}
 }
 
-// pump keeps the queue full. Sleeping hands the thread back to the page (or
-// the worker's VM).
+// pump keeps the queue full while the page plays it. Sleeping hands the
+// thread back to the page (or the worker's VM).
 //
-// Before the page's first gesture, or while the tab is hidden, the worklet
-// plays nothing and the queue stays full. The mixer's clock only advances as
-// it renders, so without more, every sound triggered meanwhile would start at
-// the same mixer instant and play as one burst when output resumes. While the
-// consumer is stalled the pump renders and discards in step with the wall
-// clock instead, as a native device would keep playing: a sound nobody could
-// hear is gone, not saved up.
+// While the page doesn't play (before its first gesture, or suspended) the
+// mixer's clock would stand still, since it only advances as it renders, and
+// every sound triggered meanwhile would start at the same instant and burst
+// out together on resume. So the pump renders and discards in step with the
+// wall clock instead, as a native device keeps playing: a sound nobody could
+// hear is gone, not saved up. Nothing is queued before the first gesture, so
+// the first sound heard is current; after a suspension the queue already
+// handed over (at most Queue) still plays on resume.
+//
+// The page reports its state rather than the pump inferring it from the
+// worklet's position: a busy VM on the page's thread delays the position
+// reports, which would look like a stall and discard audio still due to play.
 func (o *webOut) pump() {
 	last := time.Now()
-	lastPos := o.played()
 	for {
-		o.fill()
 		now := time.Now()
-		if pos := o.played(); pos != lastPos {
-			lastPos, last = pos, now
-		} else if stalled := now.Sub(last); stalled > webStall {
-			o.discard(int(int64(stalled) * rt.AudioRate / int64(time.Second)))
-			last = now
+		switch o.state() {
+		case pageRunning:
+			o.fill()
+		case pageFailed:
+			o.lost.Store(true)
+			return
+		default:
+			o.discard(int(int64(now.Sub(last)) * rt.AudioRate / int64(time.Second)))
 		}
-		if o.queued() < o.queue {
+		last = now
+		if o.state() == pageRunning && o.queued() < o.queue {
 			time.Sleep(time.Millisecond) // behind: yield, come straight back
 		} else {
 			time.Sleep(8 * time.Millisecond) // about a frame
 		}
 	}
-}
-
-// webStall is how long the consumer may stand still before the pump keeps
-// the mixer's clock moving itself: well past one 8 ms tick and a render
-// quantum, so steady playback never discards.
-const webStall = 50 * time.Millisecond
-
-// played is the consumer's position: the shared ring's read index, or the
-// frames the message worklet reports. Only change matters, so the ring's
-// wrap is harmless.
-func (o *webOut) played() int {
-	if o.shared {
-		return o.atomics.Call("load", o.ctrl, 1).Int()
-	}
-	return o.handle.Get("played").Int()
 }
 
 // discard renders frames of the mix and drops them.
