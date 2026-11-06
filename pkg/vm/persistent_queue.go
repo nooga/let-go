@@ -157,21 +157,42 @@ func (q *PersistentQueue) Hash() uint32 {
 	return hashOrdered(q.Seq())
 }
 
-// Equals implements value equality — another queue with the same elements in
-// the same FIFO order.
+// Equals implements value equality — another queue, a vector or another
+// sequential value with the same elements in the same FIFO order, as = has
+// it, so a queue inside a map or a set equals a vector from either side.
 func (q *PersistentQueue) Equals(other Value) bool {
-	o, ok := other.(*PersistentQueue)
-	if !ok || q.count != o.count {
-		return false
+	var b Seq
+	switch o := other.(type) {
+	case *PersistentQueue:
+		if q.count != o.count {
+			return false
+		}
+		b = o.Seq()
+	case ArrayVector:
+		if q.count != len(o) {
+			return false
+		}
+		b = o.Seq()
+	case PersistentVector:
+		if q.count != o.count {
+			return false
+		}
+		b = o.Seq()
+	default:
+		s, ok := sequentialSeq(other)
+		if !ok {
+			return false
+		}
+		b = s
 	}
-	a, b := q.Seq(), o.Seq()
+	a := q.Seq()
 	for a != nil && a != EmptyList {
-		if !valueEquiv(a.First(), b.First()) {
+		if b == nil || b == EmptyList || !valueEquiv(a.First(), b.First()) {
 			return false
 		}
 		a, b = a.Next(), b.Next()
 	}
-	return true
+	return b == nil || b == EmptyList
 }
 
 func (q *PersistentQueue) String() string {

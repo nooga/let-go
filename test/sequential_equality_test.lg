@@ -11,7 +11,8 @@
   {:list #(apply list %)
    :lazy #(map identity %)
    :cons #(if (seq %) (cons (first %) (rest %)) ())
-   :seq seq})
+   :seq seq
+   :queue #(into clojure.lang.PersistentQueue/EMPTY %)})
 
 (def wrappers
   {:bare identity
