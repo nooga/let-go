@@ -1,0 +1,62 @@
+;; = between a vector and another sequential value holding the same elements
+;; is true from either side, also inside a map, a set or another collection,
+;; where the comparison runs through the stored value's own Equals (#810).
+;; Lengths straddle each power of two up to 64, so both vector kinds (an
+;; array vector up to 32 elements, a persistent vector past that) are drawn.
+(ns test.sequential-equality-test
+  (:require [check :as c]
+            [test :refer [deftest is]]))
+
+(def seq-forms
+  {:list #(apply list %)
+   :lazy #(map identity %)
+   :cons #(if (seq %) (cons (first %) (rest %)) ())
+   :seq seq
+   :queue #(into clojure.lang.PersistentQueue/EMPTY %)})
+
+(def wrappers
+  {:bare identity
+   :set-elem hash-set
+   :map-val #(hash-map :k %)
+   :map-key #(hash-map % :v)
+   :vec-elem vector
+   :nested #(hash-map :options (vector (hash-map :xs %)))})
+
+(def gen-elems
+  (c/gen-let [p (c/gen-int 0 6)
+              off (c/gen-int -1 1)
+              xs (c/gen-vector (c/gen-int -3 3) (max 1 (+ (bit-shift-left 1 p) off)))]
+    xs))
+
+(def gen-case
+  (c/gen-tuple gen-elems
+               (c/gen-elements (vec (keys seq-forms)))
+               (c/gen-elements (vec (keys wrappers)))
+               (c/gen-bool)))
+
+(c/defprop vector-equals-a-sequential-value-from-either-side
+  [[xs form wrap differ] gen-case]
+  (let [w (wrappers wrap)
+        ys (if differ (conj xs 9) xs)
+        a (w (vec xs))
+        b (w ((seq-forms form) ys))
+        same (not differ)]
+    (and (= same (= a b))
+         (= same (= b a)))))
+
+(c/defprop a-set-holding-one-finds-the-other
+  [[xs form _ _] gen-case]
+  (let [v (vec xs)
+        s ((seq-forms form) xs)]
+    (and (contains? #{v} s)
+         (contains? #{s} v))))
+
+;; an infinite seq hashes by what defines it, without walking its elements;
+;; a counted repeat still hashes as the list of its elements
+(deftest infinite-seqs-hash
+  (is (= 1 (count (hash-set (repeat 1)))))
+  (is (= 1 (count (hash-set (iterate inc 0)))))
+  (is (= 1 (count (hash-set (range)))))
+  (is (= (hash (repeat 2)) (hash (repeat 2))))
+  (is (not= (hash (repeat 1)) (hash (repeat 2))))
+  (is (= (hash (repeat 3 7)) (hash '(7 7 7)))))
