@@ -60,3 +60,15 @@
   (is (= (hash (repeat 2)) (hash (repeat 2))))
   (is (not= (hash (repeat 1)) (hash (repeat 2))))
   (is (= (hash (repeat 3 7)) (hash '(7 7 7)))))
+
+;; a queue against a list, lazy seq, cons or seq agrees from either side too:
+;; neither side is a vector, and a list or lazy seq has no Equals of its own
+(c/defprop queue-equals-a-sequential-value-from-either-side
+  [[xs form wrap differ] gen-case]
+  (let [w (wrappers wrap)
+        ys (if differ (conj xs 9) xs)
+        a (w (into clojure.lang.PersistentQueue/EMPTY xs))
+        b (w ((seq-forms form) ys))
+        same (not differ)]
+    (and (= same (= a b))
+         (= same (= b a)))))

@@ -232,6 +232,12 @@ func valueEquiv(a, b Value) bool {
 	if eq, ok := a.(interface{ Equals(Value) bool }); ok {
 		return eq.Equals(b)
 	}
+	// A queue is not a Seq, so with a list or lazy seq (which have no Equals)
+	// on the left nothing below compares it; the queue's Equals takes any
+	// sequential value.
+	if q, ok := b.(*PersistentQueue); ok {
+		return q.Equals(a)
+	}
 	// Fallback to full value equality for sequential types only
 	// (avoids infinite recursion: valueEquals→map compare→valueEquiv→valueEquals)
 	if ValueEquals != nil {
