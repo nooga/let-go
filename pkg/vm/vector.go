@@ -125,12 +125,65 @@ func (l ArrayVector) Equals(other Value) bool {
 		}
 		return true
 	default:
-		return false
+		return vectorEqualsSequential(len(l), func(i int) Value { return l[i] }, other)
 	}
 }
 
 func nilListEquivalent(a, b Value) bool {
 	return (a == NIL && b == EmptyList) || (a == EmptyList && b == NIL)
+}
+
+// sequentialSeq returns the elements of a sequential value other than a
+// vector (a list, cons, lazy seq, range, queue or other seq), nil when it is
+// empty. ok is false for a string, a map, a set or nil, which no vector
+// equals. It accepts what rt's isSequentialType and toSeq accept, so a
+// vector's Equals agrees with = on either side.
+func sequentialSeq(v Value) (s Seq, ok bool) {
+	switch o := v.(type) {
+	case String, *Nil, Map, Set, *PersistentMap, *PersistentSet, *SortedMap, *SortedSet:
+		return nil, false
+	case *LazySeq:
+		return o.Resolve(), true
+	case *PersistentQueue:
+		if o.RawCount() == 0 {
+			return nil, true
+		}
+		return o.Seq(), true
+	case Seq:
+		if c, counted := o.(Counted); counted && c.RawCount() == 0 {
+			return nil, true
+		}
+		return o, true
+	}
+	return nil, false
+}
+
+// vectorEqualsSequential compares a vector's n elements, read by at, with a
+// sequential value. A vector equals a list or seq of = elements, as in
+// Clojure; without this, = through a collection's own Equals (a set lookup,
+// a map's values) depended on which side held the vector.
+func vectorEqualsSequential(n int, at func(int) Value, other Value) bool {
+	s, ok := sequentialSeq(other)
+	if !ok {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		if s == nil || s == EmptyList {
+			return false
+		}
+		v, ov := at(i), s.First()
+		if !nilListEquivalent(v, ov) && (ValueEquals == nil || !ValueEquals(v, ov)) {
+			if eq, ok := v.(interface{ Equals(Value) bool }); ok {
+				if !eq.Equals(ov) {
+					return false
+				}
+			} else if v != ov {
+				return false
+			}
+		}
+		s = s.Next()
+	}
+	return s == nil || s == EmptyList
 }
 
 // First implements Seq

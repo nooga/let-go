@@ -120,8 +120,16 @@ func TestQueueEquals(t *testing.T) {
 	if a.Equals(mkQueue(3, 2, 1)) {
 		t.Fatalf("order-different queues must not be Equals")
 	}
-	if a.Equals(NewList([]Value{Int(1), Int(2), Int(3)})) {
-		t.Fatalf("a queue must not equal a non-queue value")
+	// A queue equals any sequential value with the same elements in order, as
+	// = has it, so the comparison holds from either side inside a collection.
+	if !a.Equals(NewList([]Value{Int(1), Int(2), Int(3)})) {
+		t.Fatalf("a queue should equal a list with the same elements")
+	}
+	if !a.Equals(ArrayVector{Int(1), Int(2), Int(3)}) {
+		t.Fatalf("a queue should equal a vector with the same elements")
+	}
+	if a.Equals(NewPersistentSet([]Value{Int(1), Int(2), Int(3)})) {
+		t.Fatalf("a queue must not equal a set")
 	}
 }
 
