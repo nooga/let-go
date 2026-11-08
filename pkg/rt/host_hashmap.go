@@ -7,7 +7,7 @@ package rt
 
 import (
 	"fmt"
-	"sync/atomic"
+	"sync"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -30,57 +30,141 @@ var hostHashMapType = &theHostHashMapType{}
 
 // hostHashMap is a mutable map backing (java.util.HashMap.). malli.registry's
 // fast-registry builds one with (doto (HashMap. n f) (.putAll m)) and reads it
-// with (.get fm type) — so only putAll and get are exercised. The backing map is
-// an immutable let-go map held in an atomic.Value: putAll accumulates into a new
-// map and swaps it in, get reads the current one. atomic.Value keeps the
-// write/read pair safe (let-go futures run on goroutines) rather than relying on
-// callers happening to build-once-then-read. Every stored value is a
-// *vm.PersistentMap, so atomic.Value's same-concrete-type rule holds.
-type hostHashMap struct{ m atomic.Value }
+// with (.get fm type). The backing map is an immutable let-go map behind a
+// mutex: writes build a new map and swap it in, reads take the current one, so
+// a write racing a read from another goroutine (let-go futures) is safe.
+type hostHashMap struct {
+	mu sync.Mutex
+	m  vm.Associative
+}
 
 func newHostHashMap() *hostHashMap {
-	h := &hostHashMap{}
-	h.m.Store(vm.EmptyPersistentMap)
-	return h
+	return &hostHashMap{m: vm.EmptyPersistentMap}
 }
 
 func (h *hostHashMap) Type() vm.ValueType { return hostHashMapType }
 func (h *hostHashMap) Unbox() any         { return h }
 func (h *hostHashMap) String() string     { return "#<java.util.HashMap>" }
+func (h *hostHashMap) HostShim()          {}
+
+func (h *hostHashMap) load() vm.Associative {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.m
+}
+
+// update swaps in f's result, returning what f returned besides the map.
+func (h *hostHashMap) update(f func(vm.Associative) (vm.Associative, vm.Value)) vm.Value {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	m, ret := f(h.m)
+	h.m = m
+	return ret
+}
+
+// hashMapAbsent is the type of the absence sentinel. It is unexported and
+// compared by pointer identity, so no value user code can build or store
+// equals it.
+type hashMapAbsent struct{ _ byte }
+
+func (*hashMapAbsent) String() string     { return "#<absent>" }
+func (*hashMapAbsent) Type() vm.ValueType { return vm.NilType }
+func (*hashMapAbsent) Unbox() any         { return nil }
+
+// hashMapNotFound marks an absent key in a lookup, so a key mapped to nil
+// (or to any value a user can write) is told apart from no key.
+var hashMapNotFound vm.Value = &hashMapAbsent{}
 
 func (h *hostHashMap) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, error) {
 	switch string(name) {
 	case "putAll":
 		if len(args) == 1 {
 			// Java putAll(Map) copies the source's entries or throws — it must not
-			// silently succeed with an unchanged map. A source we can't enumerate
-			// (not Sequable — e.g. another java.util.HashMap) is a hard error, not
-			// a no-op, so the data loss is never silent.
+			// silently succeed with an unchanged map.
 			sq, ok := args[0].(vm.Sequable)
-			if !ok {
-				return vm.NIL, fmt.Errorf("java.util.HashMap.putAll: source %s is not enumerable", args[0].Type().Name())
+			if !ok || args[0] == vm.NIL {
+				return vm.NIL, throwHost(vm.ClassClassCastException,
+					"class %s cannot be cast to class java.util.Map", args[0].Type().Name())
 			}
-			acc, ok := h.m.Load().(vm.Associative)
-			if !ok {
-				acc = vm.EmptyPersistentMap
-			}
+			// Realize the source before taking the lock: a lazy source may read
+			// this map, and h.mu is not reentrant.
+			var kvs []vm.Value
 			for s := sq.Seq(); !vm.SeqIsEmpty(s); s = s.Next() {
 				if k, v, ok := vm.MapEntryKV(s.First()); ok {
-					acc = acc.Assoc(k, v)
+					kvs = append(kvs, k, v)
 				}
 			}
-			h.m.Store(acc)
+			h.update(func(acc vm.Associative) (vm.Associative, vm.Value) {
+				for i := 0; i < len(kvs); i += 2 {
+					acc = acc.Assoc(kvs[i], kvs[i+1])
+				}
+				return acc, vm.NIL
+			})
 			return vm.NIL, nil
 		}
 	case "get":
 		if len(args) == 1 {
-			if l, ok := h.m.Load().(vm.Lookup); ok {
-				return l.ValueAt(args[0]), nil
-			}
+			return h.lookup(args[0], vm.NIL), nil
+		}
+	case "getOrDefault":
+		if len(args) == 2 {
+			return h.lookup(args[0], args[1]), nil
+		}
+	case "put":
+		if len(args) == 2 {
+			// Returns the previous value, or nil when the key was absent.
+			return h.update(func(m vm.Associative) (vm.Associative, vm.Value) {
+				prev := valueAtOr(m, args[0], vm.NIL)
+				return m.Assoc(args[0], args[1]), prev
+			}), nil
+		}
+	case "remove":
+		if len(args) == 1 {
+			return h.update(func(m vm.Associative) (vm.Associative, vm.Value) {
+				prev := valueAtOr(m, args[0], vm.NIL)
+				return m.Dissoc(args[0]), prev
+			}), nil
+		}
+	case "containsKey":
+		if len(args) == 1 {
+			return vm.Boolean(h.lookup(args[0], hashMapNotFound) != hashMapNotFound), nil
+		}
+	case "size":
+		if len(args) == 0 {
+			return countOf(h.load()), nil
+		}
+	case "isEmpty":
+		if len(args) == 0 {
+			c, ok := h.load().(vm.Counted)
+			return vm.Boolean(!ok || c.RawCount() == 0), nil
+		}
+	case "clear":
+		if len(args) == 0 {
+			h.update(func(vm.Associative) (vm.Associative, vm.Value) {
+				return vm.EmptyPersistentMap, vm.NIL
+			})
 			return vm.NIL, nil
 		}
 	}
 	return vm.NIL, fmt.Errorf("java.util.HashMap has no method .%s/%d", name, len(args))
+}
+
+func (h *hostHashMap) lookup(k, notFound vm.Value) vm.Value {
+	return valueAtOr(h.load(), k, notFound)
+}
+
+func valueAtOr(m vm.Associative, k, notFound vm.Value) vm.Value {
+	if l, ok := m.(vm.Lookup); ok {
+		return l.ValueAtOr(k, notFound)
+	}
+	return notFound
+}
+
+func countOf(m vm.Associative) vm.Value {
+	if c, ok := m.(vm.Counted); ok {
+		return c.Count()
+	}
+	return vm.Int(0)
 }
 
 // installHostHashMap registers the (java.util.HashMap. …) constructor forms.

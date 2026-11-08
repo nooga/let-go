@@ -17,7 +17,7 @@ import (
 // user's args — the positionals after the script — verbatim, and nil when
 // there are none. It covers script mode (with and without a leading flag) and
 // a bundled binary, which exercise lg's two set-points. os/args is left as the
-// full process argv. (buildLG is defined in scope_e2e_test.go, same package.)
+// full process argv. (buildLG is defined in helpers_test.go, same package.)
 func TestCommandLineArgs(t *testing.T) {
 	bin := buildLG(t)
 

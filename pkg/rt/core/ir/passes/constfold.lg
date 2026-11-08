@@ -2,7 +2,7 @@
 ;;
 ;; Three strategies (matching OLD pkg/ir/passes/constfold.go @ lrttrmzx):
 ;;   1. Primitive fold:        (op Const Const) → Const
-;;   2. Algebraic identity:    (+ x 0) → x, (* x 1) → x, (* x 0) → 0
+;;   2. Algebraic identity:    (+ x 0) → x, (* x 1) → x
 ;;   3. Commutative canon:     (+ 5 x) → (+ x 5)  (Const goes right)
 ;;
 ;; Each strategy is a PURE FUNCTION (try-primitive / try-identity /
@@ -115,7 +115,7 @@
         (catch _ nil)))))
 
 (defn- try-identity [nid f]
-  "Strategy 2: algebraic identities — (+ x 0), (* x 1), (* x 0), (- x 0)."
+  "Strategy 2: algebraic identities — (+ x 0), (* x 1), (- x 0)."
   (let [op (ir/op nid f) refs (ir/refs nid f)]
     (when (= 2 (count refs))
       (let [r0 (nth refs 0) r1 (nth refs 1)
@@ -128,10 +128,12 @@
                  (zero? v0) {:replace-uses r1}
                  :else nil)
           :sub (when (zero? v1) {:replace-uses r0})
+          ;; No (* x 0) → 0 rule: a double x gives 0.0, NaN or -0.0 (#1071), and
+          ;; no type fact here proves x is an Int, since infer-arg-types types
+          ;; a param :int from its use in :mul alone.
           :mul (cond
-                 (one? v1)                  {:replace-uses r0}
-                 (one? v0)                  {:replace-uses r1}
-                 (or (zero? v0) (zero? v1)) {:replace-with {:op :const :refs [] :aux 0}}
+                 (one? v1) {:replace-uses r0}
+                 (one? v0) {:replace-uses r1}
                  :else nil)
           :bit-or (cond
                     (zero? v1) {:replace-uses r0}

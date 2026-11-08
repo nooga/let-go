@@ -154,31 +154,59 @@ func installJVMStatics(ns *vm.Namespace) {
 	}
 
 	// --- number/uuid string parses (Long/parseLong, Float/parseFloat, ...). ---
-	parseLong := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+	// The parses throw java.lang.NumberFormatException, as the JVM's do, so
+	// (catch NumberFormatException _ ...) guards them. The optional radix
+	// follows java.lang.Long/parseLong(s, radix).
+	numberFormat := func(s vm.String, radix int) error {
+		msg := fmt.Sprintf("For input string: %q", string(s))
+		if radix != 10 {
+			msg += fmt.Sprintf(" under radix %d", radix)
+		}
+		return vm.NewThrownError(vm.NewExInfoWithClass(vm.ClassNumberFormat, msg, nil))
+	}
+	parseIntArgs := func(name string, vs []vm.Value) (vm.String, int, error) {
+		if len(vs) != 1 && len(vs) != 2 {
+			return "", 0, fmt.Errorf("%s expects 1 or 2 args", name)
+		}
 		s, ok := vs[0].(vm.String)
 		if !ok {
-			return vm.NIL, fmt.Errorf("parseLong expects a string")
+			return "", 0, fmt.Errorf("%s expects a string", name)
+		}
+		radix := 10
+		if len(vs) == 2 {
+			r, ok := vm.ToInt64(vs[1])
+			if !ok || r < 2 || r > 36 {
+				return "", 0, vm.NewThrownError(vm.NewExInfoWithClass(vm.ClassNumberFormat, fmt.Sprintf("%s: radix %s out of range [2, 36]", name, vs[1]), nil))
+			}
+			radix = int(r)
+		}
+		return s, radix, nil
+	}
+	parseLong := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		s, radix, err := parseIntArgs("parseLong", vs)
+		if err != nil {
+			return vm.NIL, err
 		}
 		// ParseInt(..., 64) + MakeInt64 keeps the full 64-bit range on hosts
 		// where Go's int is 32 bits (TinyGo's wasm target). Atoi returns int
 		// and silently lost that range there. There is no narrowing conversion
 		// here, so CodeQL's "incorrect conversion" check stays satisfied.
-		n, err := strconv.ParseInt(string(s), 10, 64)
+		n, err := strconv.ParseInt(string(s), radix, 64)
 		if err != nil {
-			return vm.NIL, err
+			return vm.NIL, numberFormat(s, radix)
 		}
 		return vm.MakeInt64(n), nil
 	})
 	parseInteger := mustWrap(func(vs []vm.Value) (vm.Value, error) {
-		s, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("parseInt expects a string")
+		s, radix, err := parseIntArgs("parseInt", vs)
+		if err != nil {
+			return vm.NIL, err
 		}
 		// java.lang.Integer/parseInt always enforces a signed 32-bit range,
 		// even when the host's int can hold a larger value.
-		n, err := strconv.ParseInt(string(s), 10, 32)
+		n, err := strconv.ParseInt(string(s), radix, 32)
 		if err != nil {
-			return vm.NIL, err
+			return vm.NIL, numberFormat(s, radix)
 		}
 		return vm.MakeInt64(n), nil
 	})
@@ -189,7 +217,7 @@ func installJVMStatics(ns *vm.Namespace) {
 		}
 		f, err := strconv.ParseFloat(string(s), 64)
 		if err != nil {
-			return vm.NIL, err
+			return vm.NIL, numberFormat(s, 10)
 		}
 		return vm.Float(f), nil
 	})
@@ -197,6 +225,33 @@ func installJVMStatics(ns *vm.Namespace) {
 	defStaticNS("Integer").Def("parseInt", parseInteger)
 	defStaticNS("Float").Def("parseFloat", parseFloat)
 	defStaticNS("Double").Def("parseDouble", parseFloat)
+	defStaticNS("Boolean").Def("toString", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("Boolean/toString expects 1 arg")
+		}
+		b, ok := vs[0].(vm.Boolean)
+		if !ok {
+			return vm.NIL, fmt.Errorf("Boolean/toString expects a boolean, got %s", vs[0].Type().Name())
+		}
+		return vm.String(b.String()), nil
+	}))
+
+	// --- java.util.regex.Pattern/quote. RE2 supports \Q...\E literal
+	// spans, so the JVM's quoting carries over unchanged, including its
+	// splice for a \E inside the quoted text.
+	patternQuote := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("expected 1 arg for Pattern/quote")
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("expected a string for Pattern/quote, got %s", vs[0].Type().Name())
+		}
+		return vm.String(`\Q` + strings.ReplaceAll(string(s), `\E`, `\E\\E\Q`) + `\E`), nil
+	})
+	for _, nm := range []string{"Pattern", "java.util.regex.Pattern"} {
+		defStaticNS(nm).Def("quote", patternQuote)
+	}
 
 	// --- java.util.Locale constants. Code reaches for these to force
 	// locale-independent casing (honeysql upper-cases SQL keywords with

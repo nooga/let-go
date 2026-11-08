@@ -25,9 +25,7 @@ import (
 // storage disabled, quota exceeded) into a returned error rather than a nil,
 // honoring the Storage contract: a genuinely absent key reads back as nil,
 // but an unavailable or failing backend surfaces as a guest exception
-// instead of a silent miss or dropped write. A future refinement could probe
-// availability once at construction so private mode fails once, clearly,
-// rather than on every call.
+// instead of a silent miss or dropped write.
 type HostStorage struct {
 	prefix string
 }
@@ -43,13 +41,31 @@ func (s *HostStorage) physicalKey(key string) string {
 	return s.prefix + key
 }
 
+// localStorage returns the page's localStorage or, in the Web Worker where
+// lg -w runs the program, the host's _lgStorage bridge to it (#1078). Either
+// has the getItem/setItem/removeItem/key/length subset used here. With
+// neither, it returns an error rather than letting the call panic, because
+// TinyGo cannot recover a syscall/js panic on wasm and would trap the page.
+func localStorage(op string) (js.Value, error) {
+	for _, name := range []string{"localStorage", "_lgStorage"} {
+		if ls := js.Global().Get(name); !ls.IsUndefined() && !ls.IsNull() {
+			return ls, nil
+		}
+	}
+	return js.Value{}, fmt.Errorf("%s: no localStorage here", op)
+}
+
 func (s *HostStorage) Get(key string) (value string, ok bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			value, ok, err = "", false, fmt.Errorf("storage/get: %v", r)
 		}
 	}()
-	v := js.Global().Get("localStorage").Call("getItem", s.physicalKey(key))
+	ls, err := localStorage("storage/get")
+	if err != nil {
+		return "", false, err
+	}
+	v := ls.Call("getItem", s.physicalKey(key))
 	if v.IsNull() || v.IsUndefined() {
 		return "", false, nil
 	}
@@ -62,7 +78,11 @@ func (s *HostStorage) Set(key, value string) (err error) {
 			err = fmt.Errorf("storage/set: %v", r)
 		}
 	}()
-	js.Global().Get("localStorage").Call("setItem", s.physicalKey(key), value)
+	ls, err := localStorage("storage/set")
+	if err != nil {
+		return err
+	}
+	ls.Call("setItem", s.physicalKey(key), value)
 	return nil
 }
 
@@ -72,7 +92,11 @@ func (s *HostStorage) Remove(key string) (err error) {
 			err = fmt.Errorf("storage/remove: %v", r)
 		}
 	}()
-	js.Global().Get("localStorage").Call("removeItem", s.physicalKey(key))
+	ls, err := localStorage("storage/remove")
+	if err != nil {
+		return err
+	}
+	ls.Call("removeItem", s.physicalKey(key))
 	return nil
 }
 
@@ -82,7 +106,10 @@ func (s *HostStorage) Keys(prefix string) (keys []string, err error) {
 			keys, err = nil, fmt.Errorf("storage/keys: %v", r)
 		}
 	}()
-	ls := js.Global().Get("localStorage")
+	ls, err := localStorage("storage/keys")
+	if err != nil {
+		return nil, err
+	}
 	n := ls.Get("length").Int()
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {

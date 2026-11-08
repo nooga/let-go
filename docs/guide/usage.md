@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-06
+last-verified: 2026-10-24
 human-verified:
 ---
 
@@ -13,11 +13,22 @@ lg                                # REPL
 lg -e '(+ 1 1)'                   # eval expression
 lg myfile.lg                      # run file
 lg myfile.lg a b                  # run file with arguments
+lg -source-paths src -m app a b   # require app, then call (app/-main "a" "b")
 lg -r myfile.lg                   # run file, then REPL
 ```
 
 `*command-line-args*` holds the positionals after the script as a seq of strings
 (or `nil`), the same whether you run a script or a bundled binary.
+
+`-m ns` (also `--main ns`) requires the namespace from the source paths and
+calls its `-main` with the remaining arguments. `-m ns/fn` selects another
+function. Every argument after the target is passed verbatim, including flags
+and `--`; place lg options before `-m`. In this mode `*command-line-args*`
+contains all of those arguments, including while loading the namespace. The
+return value is discarded, and loading or invocation errors exit nonzero.
+An `-e` expression runs first, with the same arguments bound, and prints its
+result as usual; if it fails, the entry point is not called. `-r` attaches the
+REPL afterward. `-m` cannot be combined with `-c`, `-b`, or `-w`.
 
 ## Bytecode and standalone binaries
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -45,8 +46,21 @@ func systemProperties() *vm.PersistentMap {
 		vm.String("let-go.version"), vm.String(Version),
 		vm.String("let-go.commit"), vm.String(Commit),
 	}
-	return vm.NewPersistentMap(pairs)
+	m := vm.NewPersistentMap(pairs)
+	setPropsMu.Lock()
+	defer setPropsMu.Unlock()
+	for k, v := range setProps {
+		m = m.Assoc(vm.String(k), vm.String(v)).(*vm.PersistentMap)
+	}
+	return m
 }
+
+// setProps holds what System/setProperty set. They are process-wide, as on
+// the JVM, and overlay the computed properties above.
+var (
+	setPropsMu sync.Mutex
+	setProps   = map[string]string{}
+)
 
 func init() { RegisterInstaller(installSystemNS) }
 
@@ -70,6 +84,23 @@ func installSystemNS() {
 		}
 		_ = key
 		return v, nil
+	}))
+
+	// System/setProperty — (System/setProperty key value) → previous value or nil
+	ns.Def("setProperty", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("System/setProperty expects 2 args")
+		}
+		key, ok1 := vs[0].(vm.String)
+		val, ok2 := vs[1].(vm.String)
+		if !ok1 || !ok2 {
+			return vm.NIL, fmt.Errorf("System/setProperty expects String key and value")
+		}
+		prev := systemProperties().ValueAt(key)
+		setPropsMu.Lock()
+		setProps[string(key)] = string(val)
+		setPropsMu.Unlock()
+		return prev, nil
 	}))
 
 	// System/getProperties — (System/getProperties) → map

@@ -1,3 +1,5 @@
+//go:build !js
+
 /*
  * Copyright (c) 2026 let-go contributors
  * SPDX-License-Identifier: MIT

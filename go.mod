@@ -6,6 +6,7 @@ toolchain go1.27.1
 
 require (
 	github.com/chzyer/readline v1.5.1
+	github.com/ebitengine/oto/v3 v3.5.0
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260823155953-d41da22a9587
 	github.com/hajimehoshi/ebiten/v2 v2.10.2
@@ -127,6 +128,7 @@ require (
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/hexops/gotextdiff v1.0.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/jfreymuth/pulse v0.1.3 // indirect
 	github.com/jgautheron/goconst v1.11.0 // indirect
 	github.com/jjti/go-spancheck v0.6.5 // indirect
 	github.com/julz/importas v0.2.0 // indirect

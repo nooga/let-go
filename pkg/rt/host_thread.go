@@ -36,6 +36,7 @@ type hostThread struct{ scope *vm.Scope }
 
 func (h *hostThread) Type() vm.ValueType { return hostThreadType }
 func (h *hostThread) Unbox() any         { return h }
+func (h *hostThread) HostShim()          {}
 func (h *hostThread) String() string {
 	return fmt.Sprintf("#<java.lang.Thread scope=%d>", h.scope.Live())
 }
@@ -56,13 +57,13 @@ func (h *hostThread) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, er
 			// goroutine, so cancelling it would poison all current and future
 			// work for the rest of the process; refuse instead of doing that.
 			if h.scope == vm.Goroutines {
-				return vm.NIL, fmt.Errorf("java.lang.Thread .interrupt is not supported on the root scope under let-go; call it inside with-scope")
+				return vm.NIL, throwHost(vm.ClassUnsupportedOperation, "java.lang.Thread .interrupt is not supported on the root scope under let-go; call it inside with-scope")
 			}
 			h.scope.Cancel()
 			return vm.NIL, nil
 		}
 	}
-	return vm.NIL, fmt.Errorf("java.lang.Thread .%s is not supported under let-go", name)
+	return vm.NIL, throwHost(vm.ClassUnsupportedOperation, "java.lang.Thread .%s is not supported under let-go", name)
 }
 
 // installHostThread registers Thread/currentThread. Thread. itself stays a

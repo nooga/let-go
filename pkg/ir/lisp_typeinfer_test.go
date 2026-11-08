@@ -320,6 +320,31 @@ func TestTypeInferUnresolvedCallPreservesUnknownOnFlush(t *testing.T) {
 	}
 }
 
+// A constant branch test, like the (if :else x nil) a macro can leave, folds in
+// branchfold-0, before the first typeinfra epoch. Left to branchfold-1, the same fold costs a second epoch
+// from scratch, which made lowering core about 15% slower. The test counts
+// what the later :branchfold entries still find to fold; like the epoch test
+// below, it swaps wrappers into the list so it holds under -tags gogen_ir.
+func TestOptimizeFnFoldsConstantBranchesBeforeTypes(t *testing.T) {
+	ensureLoader()
+	got := runLispExpr(t, `
+		(let [late (atom 0)
+		      f    (ir.build/build-fn '(fn pick [x] (if :else x nil)))
+		      wrap (fn [entry]
+		             (if (= :branchfold (nth entry 2 nil))
+		               (assoc entry 0 (fn [g]
+		                                (when (ir.passes.branchfold/branchfold g)
+		                                  (swap! late inc))
+		                                g))
+		               entry))]
+		  (#'ir.passes.pipeline/run-pass-list
+		   f (mapv wrap ir.passes.pipeline/default-pass-list))
+		  @late)`)
+	if got != vm.Int(0) {
+		t.Fatalf("folds left for branchfold-1/-2: got %v, want 0 (branchfold-0 should take a constant test)", got)
+	}
+}
+
 // The default pass list skips its trailing typeinfra epoch when no middle pass
 // edited the function, and runs it when one did. The test swaps a counting
 // wrapper into the :epoch entries instead of redefining typeinfer: under -tags
@@ -328,7 +353,7 @@ func TestTypeInferUnresolvedCallPreservesUnknownOnFlush(t *testing.T) {
 // overrides are installed.
 func TestOptimizeFnSkipsTrailingEpochOnlyWhenUnedited(t *testing.T) {
 	ensureLoader()
-	got := runLispString(t, `(pr-str
+	got := runLispExpr(t, `
 		(let [epochs (fn [form]
 		               (let [n     (atom 0)
 		                     f     (ir.build/build-fn form)
@@ -343,8 +368,8 @@ func TestOptimizeFnSkipsTrailingEpochOnlyWhenUnedited(t *testing.T) {
 		  [;; no middle pass changes this one
 		   (epochs '(defn unedited [x y] (+ x y)))
 		   ;; constfold rewrites (+ 1 2)
-		   (epochs '(defn folded [x] (+ x (+ 1 2))))]))`)
-	if got != "[1 2]" {
-		t.Fatalf("typeinfer epochs per optimize-fn: got %s, want [1 2] (unedited, folded)", got)
+		   (epochs '(defn folded [x] (+ x (+ 1 2))))])`)
+	if want := (vm.ArrayVector{vm.Int(1), vm.Int(2)}); !want.Equals(got) {
+		t.Fatalf("typeinfer epochs per optimize-fn: got %v, want [1 2] (unedited, folded)", got)
 	}
 }

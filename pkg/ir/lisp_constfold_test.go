@@ -496,11 +496,10 @@ func TestLispConstFold(t *testing.T) {
 			mustContain: []string{"v0 = LoadArg ; 0", "Return v0"}},
 		{name: "mul-one", src: `(defn mul-one [x] (* x 1))`,
 			mustContain: []string{"v0 = LoadArg ; 0", "Return v0"}},
-		// mul-zero IS rewritten in place (fold-this! writes Const ; 0
-		// over the Mul), so the Mul opcode itself disappears.
+		// mul-zero stays a Mul: a double x gives 0.0, NaN or -0.0, not
+		// Int 0 (#1071), and nothing proves x is an Int.
 		{name: "mul-zero", src: `(defn mul-zero [x] (* x 0))`,
-			mustContain:    []string{"Const ; 0"},
-			mustNotContain: []string{"Mul"}},
+			mustContain: []string{"Mul v0 v1", "v1 = Const ; 0"}},
 		// Strategy 3 — commutative canonicalization (Const goes right).
 		// Const operand should be the SECOND ref of the Add/Mul.
 		{name: "canon-add", src: `(defn canon-add [x] (+ 5 x))`,

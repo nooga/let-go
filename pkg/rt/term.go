@@ -276,30 +276,6 @@ func (nativeKeySource) rawPending() bool {
 	return false
 }
 
-// mouseEventMap renders a decoded SGR mouse report as the tagged map read-key
-// hands to Clojure: {:type :mouse :action :press :button :left :x 10 :y 5
-// :mods #{:shift}}. :mods is an empty set when no modifier is held.
-func mouseEventMap(ev MouseEvent) vm.Value {
-	var mods []vm.Value
-	if ev.Shift {
-		mods = append(mods, vm.Keyword("shift"))
-	}
-	if ev.Ctrl {
-		mods = append(mods, vm.Keyword("ctrl"))
-	}
-	if ev.Meta {
-		mods = append(mods, vm.Keyword("meta"))
-	}
-	m := vm.EmptyPersistentMap
-	m = m.Assoc(vm.Keyword("type"), vm.Keyword("mouse")).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("action"), vm.Keyword(ev.Action)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("button"), vm.Keyword(ev.Button)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("x"), vm.MakeInt(ev.X)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("y"), vm.MakeInt(ev.Y)).(*vm.PersistentMap)
-	m = m.Assoc(vm.Keyword("mods"), vm.NewPersistentSet(mods)).(*vm.PersistentMap)
-	return m
-}
-
 func init() { RegisterInstaller(installTermNS) }
 
 // nolint
@@ -310,6 +286,8 @@ func installTermNS() {
 
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
+	// term/flush is the same flush as clojure.core/flush.
+	ns.Exclude("flush")
 
 	// raw-mode! — enter raw terminal mode
 	//   (term/raw-mode!)         → TRUE, stores global state (stdin)
@@ -383,16 +361,7 @@ func installTermNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		if s == "" {
-			return vm.NIL, nil
-		}
-		// Hybrid return: plain keys stay strings (no caller churn), an SGR
-		// mouse report becomes a tagged map. Mouse reports only arrive once
-		// enable-mouse has been called, so string-only callers are unaffected.
-		if ev, ok := decodeSGRMouse(s); ok {
-			return mouseEventMap(ev), nil
-		}
-		return vm.String(s), nil
+		return keyValue(s), nil
 	})
 	ns.Def("read-key", readKey)
 
@@ -691,31 +660,37 @@ func installTermNS() {
 	// (before *out* is installed). Pre-#223 this synced os.Stdout directly,
 	// which diverged once the term/* ops started honoring *out*.
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-		var (
-			err        error
-			fileBacked bool
-		)
-		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
-			err = h.Sync()
-			fileBacked = h.File() != nil
-		} else {
-			err = os.Stdout.Sync()
-			fileBacked = true
-		}
-		// fsync on terminals and pipes returns ENOTTY, EBADF, or EINVAL
-		// depending on the platform; flushing those fds is a no-op, so swallow
-		// them. Only for a file-backed *out* -- an embedder writer's Sync goes
-		// through Flush() and must surface its own errors. A regular file's
-		// fsync never returns these, so real I/O errors (EIO, ENOSPC, etc.)
-		// still propagate.
-		if fileBacked && (errors.Is(err, syscall.ENOTTY) ||
-			errors.Is(err, syscall.EBADF) ||
-			errors.Is(err, syscall.EINVAL)) {
-			err = nil
-		}
-		return vm.NIL, err
+		return vm.NIL, flushOut(ec)
 	})
 	ns.Def("flush", flushFn)
 
 	RegisterNS(ns)
+}
+
+// flushOut syncs the active *out* binding; term/flush and clojure.core/flush
+// share it.
+func flushOut(ec *vm.ExecContext) error {
+	var (
+		err        error
+		fileBacked bool
+	)
+	if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+		err = h.Sync()
+		fileBacked = h.File() != nil
+	} else {
+		err = os.Stdout.Sync()
+		fileBacked = true
+	}
+	// fsync on terminals and pipes returns ENOTTY, EBADF, or EINVAL
+	// depending on the platform; flushing those fds is a no-op, so swallow
+	// them. Only for a file-backed *out* -- an embedder writer's Sync goes
+	// through Flush() and must surface its own errors. A regular file's
+	// fsync never returns these, so real I/O errors (EIO, ENOSPC, etc.)
+	// still propagate.
+	if fileBacked && (errors.Is(err, syscall.ENOTTY) ||
+		errors.Is(err, syscall.EBADF) ||
+		errors.Is(err, syscall.EINVAL)) {
+		err = nil
+	}
+	return err
 }

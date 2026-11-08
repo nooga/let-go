@@ -413,6 +413,11 @@ func installIOBuiltins(ns *vm.Namespace) {
 	// no-op so (surface/present ...) is harmless and (surface/available?) is
 	// false when nothing is wired, the same way *emit* does. See surface.go.
 	ns.Def("*surface*", vm.NewBoxed(nopSurface{}))
+
+	// *audio* — host sound for the audio namespace. Defaults to a no-op so
+	// audio/ calls are harmless and (audio/enabled?) is false until a backend
+	// binds the root (SetAudioRoot) or a Run binds one (api.WithAudio).
+	ns.Def("*audio*", vm.NewBoxed(nopAudio{}))
 }
 
 // registeredHostStdout is the host's stdout handle after

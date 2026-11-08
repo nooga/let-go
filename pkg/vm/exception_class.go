@@ -45,6 +45,7 @@ var (
 	ClassIllegalState         = newExceptionClass("java.lang.IllegalStateException", ClassRuntimeException)
 	ClassIndexOutOfBounds     = newExceptionClass("java.lang.IndexOutOfBoundsException", ClassRuntimeException)
 	ClassNullPointer          = newExceptionClass("java.lang.NullPointerException", ClassRuntimeException)
+	ClassNoSuchElement        = newExceptionClass("java.util.NoSuchElementException", ClassRuntimeException)
 	ClassUnsupportedOperation = newExceptionClass("java.lang.UnsupportedOperationException", ClassRuntimeException)
 )
 

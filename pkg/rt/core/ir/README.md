@@ -38,6 +38,7 @@ Each layer is one file (or one directory) in this tree:
 | `lower.lg`                                    | IR → bytecode via chunk-emission bridge primitives.   |
 | `passes/dce.lg`                               | Dead-code elimination.                                |
 | `passes/constfold.lg`                         | Constant folding + algebraic identities + commutative canonicalization. |
+| `passes/branchfold.lg`                        | Branch-ifs with a known test become branches; drops the dead arm, splices straight-line chains. |
 | `passes/cse.lg`                               | Per-block common-subexpression elimination.           |
 | `passes/licm.lg`                              | Loop-invariant code motion.                           |
 | `passes/thread-block-args.lg`                 | Pre-lower fixup for cross-block direct refs.          |

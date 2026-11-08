@@ -195,11 +195,28 @@ func (r *NSResolver) LoadWithError(name string) (*vm.Namespace, error) {
 	if r.cloading[name] {
 		return nil, nil
 	}
-	blocks := stdstrings.Split(name, ".")
 	// Try embedded namespaces first
 	if embedded, err := r.loadEmbedded(name); err != nil || embedded != nil {
 		return embedded, err
 	}
+	if source := r.SourcePath(name); source != "" {
+		r.cloading[name] = true
+		lns, err := r.loadFile(source)
+		delete(r.cloading, name)
+		if err != nil {
+			return nil, err
+		}
+		// gogen_ir: drain Go-native overrides (no-op untagged).
+		rt.ApplyGoOverrides(lns)
+		return lns, nil
+	}
+	return nil, nil
+}
+
+// SourcePath finds a namespace's filesystem source without loading or executing
+// it. Embedded namespaces are handled separately by LoadWithError.
+func (r *NSResolver) SourcePath(name string) string {
+	blocks := stdstrings.Split(name, ".")
 	// Build candidate paths: try .lg, .cljc, then .clj extensions,
 	// and hyphen vs underscore variants for each path segment.
 	hyphenPath := path.Join(blocks...)
@@ -221,19 +238,11 @@ func (r *NSResolver) LoadWithError(name string) (*vm.Namespace, error) {
 		for _, candidate := range candidates {
 			cp := path.Join(dir, candidate)
 			if _, err := os.Stat(cp); err == nil {
-				r.cloading[name] = true
-				lns, err := r.loadFile(cp)
-				delete(r.cloading, name)
-				if err != nil {
-					return nil, err
-				}
-				// gogen_ir: drain Go-native overrides (no-op untagged).
-				rt.ApplyGoOverrides(lns)
-				return lns, nil
+				return cp
 			}
 		}
 	}
-	return nil, nil
+	return ""
 }
 
 // forceSourceNS reports whether namespace `name` is listed in the

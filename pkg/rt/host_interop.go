@@ -73,6 +73,7 @@ type seqIterator struct{ cur vm.Value }
 func (it *seqIterator) Type() vm.ValueType { return hostIteratorType }
 func (it *seqIterator) Unbox() any         { return it }
 func (it *seqIterator) String() string     { return "#<java.util.Iterator>" }
+func (it *seqIterator) HostShim()          {}
 
 func (it *seqIterator) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, error) {
 	switch string(name) {
@@ -83,7 +84,7 @@ func (it *seqIterator) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, 
 	case "next":
 		if len(args) == 0 {
 			if it.cur == vm.NIL {
-				return vm.NIL, fmt.Errorf("java.util.Iterator: next past end")
+				return vm.NIL, throwHost(vm.ClassNoSuchElement, "java.util.Iterator: next past the end")
 			}
 			s, ok := it.cur.(vm.Seq)
 			if !ok {
@@ -92,6 +93,11 @@ func (it *seqIterator) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, 
 			v := s.First()
 			it.cur = hostNormSeq(s.Next())
 			return v, nil
+		}
+	case "remove":
+		if len(args) == 0 {
+			// It walks an immutable seq, as Clojure's SeqIterator does.
+			return vm.NIL, throwHost(vm.ClassUnsupportedOperation, "java.util.Iterator: remove on an immutable seq")
 		}
 	}
 	return vm.NIL, fmt.Errorf("java.util.Iterator has no method .%s/%d", name, len(args))

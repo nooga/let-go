@@ -2243,17 +2243,29 @@ func ifCompiler(c *Context, form vm.Value) error {
 		return NewCompileError(fmt.Sprintf("if: wrong number of forms (%d), need 2 or 3", l))
 	}
 	c.tailPosition = false
-	// compile condition
-	err := c.compileForm(args[0])
-	if err != nil {
-		return NewCompileError("compiling if condition").Wrap(err)
+	// elseJumpStart is the jump into the else arm, or -1 when the then arm is
+	// known to run and nothing jumps there.
+	elseJumpStart := -1
+	if truthy, ok := literalTruth(args[0]); ok {
+		// A scalar literal test, like cond's :else: which arm runs is known
+		// now, so skip the test and its branch. The arm that never runs is
+		// still compiled, so its compile errors surface as they would anyway.
+		if !truthy {
+			elseJumpStart = c.emitWithArgPlaceholder(vm.OP_JUMP)
+		}
+	} else {
+		// compile condition
+		err := c.compileForm(args[0])
+		if err != nil {
+			return NewCompileError("compiling if condition").Wrap(err)
+		}
+		elseJumpStart = c.emitWithArgPlaceholder(vm.OP_BRANCH_FALSE)
+		c.decSP(1)
 	}
-	elseJumpStart := c.emitWithArgPlaceholder(vm.OP_BRANCH_FALSE)
-	c.decSP(1)
 	c.tailPosition = tc
 
 	// compile then branch
-	err = c.compileForm(args[1])
+	err := c.compileForm(args[1])
 	c.decSP(1)
 
 	if err != nil {
@@ -2261,7 +2273,9 @@ func ifCompiler(c *Context, form vm.Value) error {
 	}
 	finJumpStart := c.emitWithArgPlaceholder(vm.OP_JUMP)
 	elseJumpEnd := c.currentAddress()
-	c.updatePlaceholderArg(elseJumpStart, elseJumpEnd-elseJumpStart)
+	if elseJumpStart >= 0 {
+		c.updatePlaceholderArg(elseJumpStart, elseJumpEnd-elseJumpStart)
+	}
 	if l == 3 {
 		err = c.compileForm(args[2])
 
@@ -2275,6 +2289,17 @@ func ifCompiler(c *Context, form vm.Value) error {
 	finJumpEnd := c.currentAddress()
 	c.updatePlaceholderArg(finJumpStart, finJumpEnd-finJumpStart)
 	return nil
+}
+
+// literalTruth reports whether an if test is a scalar literal and, when it is,
+// whether it is truthy. Collection literals are left out: their elements may
+// have effects.
+func literalTruth(form vm.Value) (truthy bool, ok bool) {
+	switch form.(type) {
+	case vm.Keyword, vm.Int, vm.Float, vm.String, vm.Char, vm.Boolean, *vm.Nil:
+		return vm.IsTruthy(form), true
+	}
+	return false, false
 }
 
 // tryDetectInNS detects top-level (in-ns 'foo) and updates the compiler namespace early.

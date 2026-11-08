@@ -168,6 +168,8 @@ func installTermNS() {
 
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
+	// term/flush is the same flush as clojure.core/flush.
+	ns.Exclude("flush")
 
 	stubNil, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NIL, nil
@@ -431,28 +433,38 @@ func installTermNS() {
 	// buffered-writer *out* still gets a real Sync with its errors surfaced; the
 	// EINVAL/EPERM a console-backed *out* raises (e.g. a rebound handle that slips
 	// past the fast path) is swallowed below.
-	stdoutSyncable := false
+	stdoutSyncable = false
 	if p, e := syscall.Fd2path(int(os.Stdout.Fd())); e == nil {
 		stdoutSyncable = !strings.HasPrefix(p, "#") &&
 			p != "/dev/cons" && p != "/dev/stdout"
 	}
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-		h := resolveIOHandleVar(ec, "*out*")
-		if (h == nil || h.File() == os.Stdout) && !stdoutSyncable {
-			return vm.NIL, nil // console/pipe stdout: no fsync, no syscall
-		}
-		var err error
-		if h != nil {
-			err = h.Sync()
-		} else {
-			err = os.Stdout.Sync()
-		}
-		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EPERM) {
-			err = nil // console/device-backed *out* — fsync is a meaningless no-op
-		}
-		return vm.NIL, err
+		return vm.NIL, flushOut(ec)
 	})
 	ns.Def("flush", flushFn)
 
 	RegisterNS(ns)
+}
+
+// stdoutSyncable is whether stdout is a real file worth fsyncing, set once by
+// installTermNS.
+var stdoutSyncable bool
+
+// flushOut syncs the active *out* binding; term/flush and clojure.core/flush
+// share it.
+func flushOut(ec *vm.ExecContext) error {
+	h := resolveIOHandleVar(ec, "*out*")
+	if (h == nil || h.File() == os.Stdout) && !stdoutSyncable {
+		return nil // console/pipe stdout: no fsync, no syscall
+	}
+	var err error
+	if h != nil {
+		err = h.Sync()
+	} else {
+		err = os.Stdout.Sync()
+	}
+	if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EPERM) {
+		err = nil // console/device-backed *out* — fsync is a meaningless no-op
+	}
+	return err
 }

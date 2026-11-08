@@ -47,27 +47,6 @@ import (
 // directory as CWD, not the repo root.
 const aotRedriveEnv = "LETGO_AOT_REDERIVE"
 
-// buildLGTags builds lg with the given build tags ("" = default bytecode;
-// "gogen_ir" = generated-core engine variant). It does not AOT-compile fixtures.
-func buildLGTags(t *testing.T, tags string) string {
-	t.Helper()
-	name := "lg-bc"
-	args := []string{"build", "-o", ""}
-	if tags != "" {
-		name = "lg-" + tags
-		args = []string{"build", "-tags", tags, "-o", ""}
-	}
-	bin := filepath.Join(t.TempDir(), name)
-	args[len(args)-1] = bin
-	args = append(args, ".")
-	cmd := exec.Command("go", args...)
-	cmd.Dir = repoRoot(t) // build the root main package, not this test dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build lg (tags=%q): %v\n%s", tags, err, out)
-	}
-	return bin
-}
-
 // runFixture runs script under bin and returns (normalized full stdout, ok). ok
 // is false when the process exits non-zero, in which case the token is a sentinel
 // so an erroring engine always differs from a succeeding one. Comparing full

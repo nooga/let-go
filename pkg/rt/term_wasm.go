@@ -46,6 +46,8 @@ func installTermNS() {
 
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
+	// term/flush is the same flush as clojure.core/flush.
+	ns.Exclude("flush")
 
 	// raw-mode! — no-op in WASM (xterm.js is always raw)
 	rawMode, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -67,10 +69,7 @@ func installTermNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		if s == "" {
-			return vm.NIL, nil
-		}
-		return vm.String(s), nil
+		return keyValue(s), nil
 	})
 	ns.Def("read-key", readKey)
 
@@ -270,10 +269,8 @@ func installTermNS() {
 
 	// enable-mouse / disable-mouse — same SGR mouse-reporting escapes as the
 	// native term ns (term.go). xterm.js honors \e[?1000;1006h and forwards
-	// clicks back through onData → the SAB → read-key. The WASM read-key does
-	// not yet decode the report into a tagged map (Phase 3), so a click surfaces
-	// as the raw escape string — enough for "any key/click" prompts like the
-	// title screen; in-game click-to-move needs the decode. Defined here so the
+	// clicks back through onData → the SAB → read-key, which decodes each
+	// report into the same tagged map as native (keyValue). Defined here so the
 	// shared xsofy lifecycle (init/shutdown-terminal) resolves them in WASM too.
 	enableMouse := vm.NewCtxNativeFn("enable-mouse", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		return vm.NIL, WriteToOut(ec, "\033[?1000;1006h")
@@ -291,18 +288,24 @@ func installTermNS() {
 	// the empty screen buffer. The default-root *out* wraps os.Stdout, whose
 	// Sync() is a no-op in wasm, so _lgFlush stays the real screen flush.
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
-			if err := h.Sync(); err != nil {
-				return vm.NIL, err
-			}
-		}
-		flush := js.Global().Get("_lgFlush")
-		if !flush.IsUndefined() {
-			flush.Invoke()
-		}
-		return vm.NIL, nil
+		return vm.NIL, flushOut(ec)
 	})
 	ns.Def("flush", flushFn)
 
 	RegisterNS(ns)
+}
+
+// flushOut syncs the active *out* binding; term/flush and clojure.core/flush
+// share it.
+func flushOut(ec *vm.ExecContext) error {
+	if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+		if err := h.Sync(); err != nil {
+			return err
+		}
+	}
+	flush := js.Global().Get("_lgFlush")
+	if !flush.IsUndefined() {
+		flush.Invoke()
+	}
+	return nil
 }

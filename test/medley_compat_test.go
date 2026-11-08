@@ -63,10 +63,9 @@ func TestMedleyCompat(t *testing.T) {
 	})
 
 	// (java.util.ArrayList.) / (java.util.ArrayList. n). medley's
-	// partition-between / sliding construct one on their :clj branch. let-go
-	// has no mutable ArrayList, so this is a load-only ctor stub: the defn must
-	// COMPILE (the constructor symbol must resolve); .add/.toArray throw at
-	// runtime if ever called (out of scope).
+	// partition-between / sliding construct one on their :clj branch; the
+	// constructor must resolve for those defns to compile. The list itself is
+	// covered by test/jvm_interop_shims_test.lg.
 	t.Run("ArrayList zero-arg ctor compiles", func(t *testing.T) {
 		_, err := evalMedley(`(defn f [] (java.util.ArrayList.))`)
 		assert.NoError(t, err)

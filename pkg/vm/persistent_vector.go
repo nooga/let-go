@@ -175,7 +175,7 @@ func (v PersistentVector) Equals(other Value) bool {
 		}
 		return true
 	default:
-		return false
+		return vectorEqualsSequential(v.count, func(i int) Value { return v.ValueAt(Int(i)) }, other)
 	}
 }
 
