@@ -202,11 +202,16 @@ func (o *webOut) pump() {
 	}
 }
 
-// discard renders frames of the mix and drops them.
+// discard renders frames of the mix and drops them, at most one ring's worth
+// (about a second) per call. A background tab can run the pump once a minute,
+// and rendering all of that in one go stalls the VM's thread; past the cap the
+// time is dropped instead, so a sound still playing resumes where the mixer
+// is rather than where the wall clock is.
 func (o *webOut) discard(frames int) {
 	if o.raw == nil {
-		o.raw, o.f32 = make([]byte, webSlice*4), make([]byte, webSlice*8)
+		o.raw = make([]byte, webSlice*4)
 	}
+	frames = min(frames, o.cap)
 	for ; frames > 0; frames -= webSlice {
 		n := min(frames, webSlice)
 		io.ReadFull(o.src, o.raw[:n*4])
@@ -217,7 +222,10 @@ func (o *webOut) discard(frames int) {
 // so neither does this.
 func (o *webOut) push() {
 	if o.raw == nil {
-		o.raw, o.f32 = make([]byte, webSlice*4), make([]byte, webSlice*8)
+		o.raw = make([]byte, webSlice*4)
+	}
+	if o.f32 == nil {
+		o.f32 = make([]byte, webSlice*8)
 	}
 	io.ReadFull(o.src, o.raw)
 	for i := 0; i < webSlice*2; i++ {
