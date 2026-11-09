@@ -99,9 +99,23 @@ func TestBadValuesAreErrorsNotDefaults(t *testing.T) {
 }
 
 func TestPlayerBytesAlignToAFrame(t *testing.T) {
-	for _, q := range []time.Duration{24 * time.Millisecond, 40 * time.Millisecond, 23219955, maxQueue} {
+	for _, q := range []time.Duration{24 * time.Millisecond, 40 * time.Millisecond, deviceBuffer(1024), maxQueue} {
 		if n := playerBytes(q); n%4 != 0 || n <= 0 {
 			t.Errorf("%v gave %d bytes", q, n)
 		}
+	}
+}
+
+func TestAQueueOfExactlyOneBufferIsAccepted(t *testing.T) {
+	buf := deviceBuffer(1024)
+	l, err := resolve(Options{Queue: buf}, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.queue != buf {
+		t.Fatalf("queue %v, want %v", l.queue, buf)
+	}
+	if _, err := resolve(Options{Queue: buf - 1}, env(nil)); err == nil {
+		t.Fatal("a queue 1 ns under one buffer was accepted")
 	}
 }

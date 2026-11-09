@@ -100,8 +100,8 @@ func resolve(opt Options, getenv func(string) string) (latency, error) {
 		return latency{}, fmt.Errorf("audio: a queue of %v is shorter than the %d-frame device buffer (%v)", l.queue, l.frames, buf)
 	}
 	// playerBytes multiplies nanoseconds by the byte rate, which overflows
-	// int64 past about 52 s and hands oto a negative size: silence while
-	// audio/enabled? says true.
+	// int64 past about 14.5 hours and hands oto a negative size: silence
+	// while audio/enabled? says true. The cap sits far below that.
 	if l.queue > maxQueue {
 		return latency{}, fmt.Errorf("audio: a queue of %v is longer than the %v maximum", l.queue, maxQueue)
 	}

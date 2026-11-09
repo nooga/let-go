@@ -23,7 +23,7 @@ import (
 // touches the audio system.
 type Device struct {
 	*Mixer
-	mu      sync.Mutex // guards opt and opened, which Configure reads
+	mu      sync.Mutex // guards opt and opened, shared by Configure and open; once guards the rest
 	opt     Options
 	opened  bool
 	once    sync.Once
@@ -44,6 +44,10 @@ func init() { rt.SetAudioRoot(device) }
 // returns an error and changes nothing. LETGO_AUDIO_QUEUE and
 // LETGO_AUDIO_DEVICE_FRAMES still win over opt (see Options); they are
 // checked when the device opens, so an error here is always about opt.
+//
+// A failed open is final for the process: the first sound or audio/enabled?
+// call uses up the open, so fixing the environment or calling Configure
+// afterwards does not bring sound back. Restart the program to retune.
 func (d *Device) Configure(opt Options) error {
 	if _, err := resolve(opt, noEnv); err != nil {
 		return err
