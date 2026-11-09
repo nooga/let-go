@@ -537,7 +537,13 @@ async function startWorkerMode() {
     if (e.data.t === 'exit') window.LetGoHost._output('\r\n\x1b[90m[program exited]\x1b[0m\r\n');
     if (e.data.t === 'audio-open') {
       try { lgAudio.open(e.data.spec); }
-      catch (err) { console.error('lg audio relay:', err); }
+      catch (err) {
+        // open threw before reporting a state (an AudioContext refusing the
+        // rate, say): mark the page failed, or the worker's pump discards
+        // forever and audio/enabled? stays true. Relayed opens are shared.
+        console.error('lg audio relay:', err);
+        Atomics.store(new Int32Array(e.data.spec.ctrl), 3, 3);
+      }
     }
     if (e.data.t === 'emit') {
       try { window.LetGoHost._emit(e.data.name, JSON.parse(e.data.data)); }
