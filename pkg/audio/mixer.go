@@ -54,10 +54,14 @@ type voice struct {
 	gain, target, step float64
 	stopping, done     bool
 
-	// paused holds the voice once its gain reaches 0; resume is the level
-	// Resume fades back to.
-	paused bool
-	resume float64
+	// held is set by Pause and cleared by Resume. env is the pause envelope
+	// in frames, edgeFrames when fully audible: it counts down while held
+	// and up after, and the voice stands still once it reaches 0. It is
+	// separate from gain so a pause leaves a Gain fade, or a sound's own
+	// end fade, to carry on after it resumes. stopped marks a Stop, which
+	// ends a held voice instead of leaving it held forever.
+	held, stopped bool
+	env           int
 
 	// edge is a tone's attack and release length: edgeFrames, or half the
 	// tone when it is shorter, so a short tone still rises and falls.
@@ -71,6 +75,7 @@ func (m *Mixer) add(v *voice, gain float64, edge int) rt.AudioHandle {
 	v.h = m.last
 	v.target = gain
 	v.step = math.Abs(gain) / float64(edge)
+	v.env = edgeFrames
 	m.voices = append(m.voices, v)
 	return v.h
 }
@@ -125,30 +130,29 @@ func (m *Mixer) Stop(h rt.AudioHandle) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if v := m.find(h); v != nil {
+		v.stopped = true
 		v.release(edgeFrames)
 	}
 }
 
 // Pause fades the sound out over edgeFrames, then holds it where it is: a
-// sample keeps its frame, a tone its remaining length, and a stream is not
-// read until it resumes.
+// sample keeps its frame, a tone its remaining length, a stream is not read,
+// and a Gain fade waits. Pausing a paused sound does nothing.
 func (m *Mixer) Pause(h rt.AudioHandle) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if v := m.find(h); v != nil && !v.stopping && !v.paused {
-		v.paused, v.resume = true, v.target
-		v.target, v.step = 0, max(math.Abs(v.gain), math.Abs(v.resume))/edgeFrames
+	if v := m.find(h); v != nil && !v.stopped {
+		v.held = true
 	}
 }
 
-// Resume fades a paused sound back in over edgeFrames, to its level before
-// the pause or to the last Gain set while paused.
+// Resume fades a paused sound back in over edgeFrames and carries on from
+// where it was held. Resuming a sound that isn't paused does nothing.
 func (m *Mixer) Resume(h rt.AudioHandle) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if v := m.find(h); v != nil && !v.stopping && v.paused {
-		v.paused = false
-		v.target, v.step = v.resume, math.Abs(v.resume-v.gain)/edgeFrames
+	if v := m.find(h); v != nil && !v.stopped {
+		v.held = false
 	}
 }
 
@@ -157,21 +161,17 @@ func (m *Mixer) Resume(h rt.AudioHandle) {
 // moves gain toward target by it; a negative gain's signed step would move
 // away from silence and the voice would never end.
 func (v *voice) release(frames int) {
-	v.stopping, v.paused = true, false
+	v.stopping = true
 	v.target, v.step = 0, max(math.Abs(v.gain), math.Abs(v.target))/float64(frames)
 }
 
 // Gain moves the sound's level to g over fade, or over edgeFrames when fade
 // is shorter, so a level change never clicks. A g that is not finite is
-// ignored. On a paused sound it sets the level Resume returns to.
+// ignored. A fade on a paused sound waits for it to resume.
 func (m *Mixer) Gain(h rt.AudioHandle, g float64, fade time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if v := m.find(h); v != nil && !v.stopping && finite(g) {
-		if v.paused {
-			v.resume = g
-			return
-		}
 		frames := max(edgeFrames, fade.Seconds()*rt.AudioRate)
 		v.target, v.step = g, math.Abs(g-v.gain)/frames
 	}
@@ -220,13 +220,15 @@ func (m *Mixer) Read(p []byte) (int, error) {
 // render adds the voice's next frames into mix, interleaved stereo.
 func (v *voice) render(mix []float64) {
 	frames := len(mix) / 2
-	if v.paused {
-		if v.gain == 0 {
+	if v.held {
+		if v.env == 0 {
+			// Held silent: a Stop has nothing left to fade.
+			v.done = v.stopped
 			return
 		}
-		// Render only to the end of the pause's fade, so a stream is not read
+		// Render only to the end of the pause fade, so a stream is not read
 		// past the frame it resumes from.
-		frames = min(frames, int(math.Ceil(math.Abs(v.gain)/v.step)))
+		frames = min(frames, v.env)
 	}
 	if v.src != nil && cap(v.sbuf) < 4*frames {
 		v.sbuf = make([]byte, 4*frames)
@@ -280,8 +282,17 @@ func (v *voice) render(mix []float64) {
 				v.gain = max(v.target, v.gain-v.step)
 			}
 		}
-		mix[2*i] += l * v.gain
-		mix[2*i+1] += r * v.gain
+		g := v.gain
+		if v.held {
+			v.env--
+		} else if v.env < edgeFrames {
+			v.env++
+		}
+		if v.env < edgeFrames {
+			g *= float64(v.env) / edgeFrames
+		}
+		mix[2*i] += l * g
+		mix[2*i+1] += r * g
 		if v.stopping && v.gain == 0 {
 			v.done = true
 		}
@@ -291,11 +302,6 @@ func (v *voice) render(mix []float64) {
 	}
 	if ended {
 		v.done = true
-	}
-	// The pause fade's last step can leave float residue, about 1e-16, instead
-	// of 0; frames was capped to where the fade ends, so snap it to silence.
-	if v.paused && math.Abs(v.gain) < v.step*1e-6 {
-		v.gain = 0
 	}
 }
 

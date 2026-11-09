@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -15,10 +16,6 @@ func ramp(frames int) []int16 {
 	}
 	return pcm
 }
-
-// near reports whether a and b differ by at most one: where a fade lands to
-// the frame can depend on float rounding.
-func near(a, b int) bool { return abs(a-b) <= 1 }
 
 // A paused sample fades out, stays silent however long it is held, and
 // resumes from the frame it stopped on.
@@ -41,7 +38,7 @@ func TestPauseHoldsASampleAndResumesFromItsFrame(t *testing.T) {
 	// The sample advanced through the fade in, the 30 frames and the pause
 	// fade, then held; the resume fade moved it on by edgeFrames.
 	want := edgeFrames + 30 + edgeFrames + edgeFrames
-	if got := int(read(m, 1)[0]); !near(got, want) {
+	if got := int(read(m, 1)[0]); got != want {
 		t.Errorf("after resuming the sample is at frame %d, want %d", got, want)
 	}
 }
@@ -66,7 +63,7 @@ func TestPausedStreamIsNotRead(t *testing.T) {
 	read(m, edgeFrames+100)
 	m.Pause(h)
 	read(m, 1000)
-	if want := 2*edgeFrames + 100; !near(src.frames, want) {
+	if want := 2*edgeFrames + 100; src.frames != want {
 		t.Fatalf("read %d frames by the end of the pause fade, want %d", src.frames, want)
 	}
 	held := src.frames
@@ -103,9 +100,9 @@ func TestPauseAndResumeDoNotClick(t *testing.T) {
 	}
 }
 
-// A gain set while paused is the level the sound resumes to, and does not
-// make the paused sound audible.
-func TestGainWhilePausedSetsTheResumeLevel(t *testing.T) {
+// A gain set while paused stays silent until the sound resumes, then
+// applies.
+func TestGainWhilePausedAppliesOnResume(t *testing.T) {
 	m := NewMixer()
 	h, _ := m.Stream(constant(10000))
 	read(m, edgeFrames+1)
@@ -119,6 +116,49 @@ func TestGainWhilePausedSetsTheResumeLevel(t *testing.T) {
 	read(m, edgeFrames)
 	if x := read(m, 1)[0]; x != 5000 {
 		t.Errorf("resumed at %d, want 5000 from the gain set while paused", x)
+	}
+}
+
+// A slow Gain fade that a pause interrupts carries on from where it was
+// after the sound resumes, rather than jumping to its target.
+func TestPauseKeepsAGainFadeGoing(t *testing.T) {
+	m := NewMixer()
+	h, _ := m.Stream(constant(10000))
+	read(m, edgeFrames+1)
+	m.Gain(h, 0, framesDur(10000))
+	read(m, 2000) // 1 to about 0.8
+	m.Pause(h)
+	read(m, edgeFrames+5000)
+	m.Resume(h)
+	read(m, edgeFrames)
+	// 2000 + 2*edgeFrames of the 10000-frame fade have run.
+	want := 10000 * (1 - float64(2000+2*edgeFrames)/10000)
+	if x := float64(read(m, 1)[0]); math.Abs(x-want) > 20 {
+		t.Errorf("after resuming the fade is at %v, want about %v", x, want)
+	}
+}
+
+// A tone paused so close to its end that the pause fade crosses its own end
+// fade is still held, and plays out after it resumes.
+func TestPauseAcrossAToneEndFade(t *testing.T) {
+	m := NewMixer()
+	h, _ := m.Play(rt.Sound{LoopFrom: -1, Gain: 1, Tone: rt.Tone{Freq: 441, Dur: 50 * time.Millisecond, Wave: "square"}})
+	read(m, 1800) // 405 frames left; the end fade starts at 220
+	m.Pause(h)
+	for range 3 {
+		read(m, 1000)
+	}
+	if len(m.voices) != 1 {
+		t.Fatal("the paused tone ended while held")
+	}
+	m.Resume(h)
+	read(m, 405-edgeFrames-10)
+	if len(m.voices) != 1 {
+		t.Fatal("the resumed tone ended early")
+	}
+	read(m, 20)
+	if len(m.voices) != 0 {
+		t.Error("the resumed tone outlasted its duration")
 	}
 }
 
@@ -174,7 +214,7 @@ func TestPauseAndResumeAreIdempotent(t *testing.T) {
 	}
 	m.Pause(h)
 	read(m, edgeFrames/2)
-	m.Pause(h) // must not restart the fade from the halfway level as "the" level
+	m.Pause(h)
 	read(m, edgeFrames)
 	m.Resume(h)
 	read(m, edgeFrames)
