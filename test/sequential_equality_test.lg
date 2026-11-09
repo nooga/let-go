@@ -72,3 +72,9 @@
         same (not differ)]
     (and (= same (= a b))
          (= same (= b a)))))
+
+(deftest equality-stops-at-a-mismatched-head
+  (let [xs (cons 1 (lazy-seq (throw (ex-info "tail was forced" {}))))]
+    (is (not= {:a [0]} {:a xs}))
+    (is (not= [0] xs))
+    (is (not= xs [0]))))

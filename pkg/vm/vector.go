@@ -144,6 +144,9 @@ func sequentialSeq(v Value) (s Seq, ok bool) {
 		return nil, false
 	case *LazySeq:
 		return o.Resolve(), true
+	case *Cons:
+		// A cons is nonempty; counting it can realize an unbounded tail.
+		return o, true
 	case *PersistentQueue:
 		if o.RawCount() == 0 {
 			return nil, true

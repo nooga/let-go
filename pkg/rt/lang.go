@@ -1388,6 +1388,10 @@ func toSeq(v vm.Value) vm.Seq {
 		// Resolve() returns nil (never EmptyList) for an empty lazy seq.
 		return ls.Resolve()
 	}
+	if c, ok := v.(*vm.Cons); ok {
+		// Counting a cons would force its tail before comparing the head.
+		return c
+	}
 	if c, ok := v.(vm.Counted); ok && c.RawCount() == 0 {
 		return nil
 	}
