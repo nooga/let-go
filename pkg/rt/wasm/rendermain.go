@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 __LG_HOST_EVAL_IMPORTS__
+__LG_AUDIO_IMPORT__
 
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/resolver"
@@ -169,12 +170,21 @@ const wasmHostEvalSnippet = `	host := wasmhost.New(consts)
 	}
 	select {}`
 
-// RenderMain fills wasmMainTmpl's placeholders: the storage-id, and the
+// RenderMain fills wasmMainTmpl's placeholders: the storage-id, the
 // -w-host-eval splice (the window.Eval bridge + park, plus its syscall/js
-// import). With hostEval false the marker lines are removed whole, so the
-// default bundle's generated main is byte-identical to the pre-flag output.
-func RenderMain(storeID string, hostEval bool) string {
+// import), and the -w-audio import. With both flags false the marker lines
+// are removed whole, so the default bundle's generated main is byte-identical
+// to the pre-flag output.
+func RenderMain(storeID string, hostEval, audio bool) string {
 	s := strings.ReplaceAll(wasmMainTmpl, "__LG_STORAGE_ID__", strconv.Quote(storeID))
+	// pkg/audio's init binds its browser backend at the *audio* root, the way
+	// lg_boot_audio.go does for oto natively. Without it every audio/ call is
+	// a silent no-op, and the bundle links none of the mixer.
+	if audio {
+		s = strings.ReplaceAll(s, "__LG_AUDIO_IMPORT__", "\t_ \"github.com/nooga/let-go/pkg/audio\"")
+	} else {
+		s = strings.ReplaceAll(s, "__LG_AUDIO_IMPORT__\n", "")
+	}
 	if hostEval {
 		s = strings.ReplaceAll(s, "__LG_HOST_EVAL_IMPORTS__", "\t\"syscall/js\"\n\t\"github.com/nooga/let-go/pkg/wasmhost\"")
 		s = strings.ReplaceAll(s, "__LG_HOST_EVAL_BODY__", wasmHostEvalSnippet)

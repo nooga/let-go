@@ -10,12 +10,14 @@ import (
 // would be a syntax error in the generated main.go.
 func TestRenderMainSubstitutesAllMarkers(t *testing.T) {
 	for _, hostEval := range []bool{false, true} {
-		got := RenderMain("store-x", hostEval)
-		if strings.Contains(got, "__LG_") {
-			t.Fatalf("hostEval=%v: unsubstituted marker remains:\n%s", hostEval, got)
-		}
-		if !strings.Contains(got, `"store-x"`) {
-			t.Fatalf("hostEval=%v: storage id not substituted", hostEval)
+		for _, audio := range []bool{false, true} {
+			got := RenderMain("store-x", hostEval, audio)
+			if strings.Contains(got, "__LG_") {
+				t.Fatalf("hostEval=%v audio=%v: unsubstituted marker remains:\n%s", hostEval, audio, got)
+			}
+			if !strings.Contains(got, `"store-x"`) {
+				t.Fatalf("hostEval=%v audio=%v: storage id not substituted", hostEval, audio)
+			}
 		}
 	}
 }
@@ -23,7 +25,7 @@ func TestRenderMainSubstitutesAllMarkers(t *testing.T) {
 // Default (no -w-host-eval) must not pull in the eval bridge or its import —
 // syscall/js unused would fail to compile, and the bundle should stay as it was.
 func TestRenderMainHostEvalOff(t *testing.T) {
-	got := RenderMain("s", false)
+	got := RenderMain("s", false, false)
 	for _, leak := range []string{"syscall/js", "pkg/wasmhost", "_lgEval", "_lgRequest", "select {}"} {
 		if strings.Contains(got, leak) {
 			t.Fatalf("host-eval code leaked into default bundle: %q", leak)
@@ -34,7 +36,7 @@ func TestRenderMainHostEvalOff(t *testing.T) {
 // With -w-host-eval the generated main imports syscall/js, installs the _lgEval
 // and _lgRequest hooks, signals readiness, and parks so the runtime stays callable.
 func TestRenderMainHostEvalOn(t *testing.T) {
-	got := RenderMain("s", true)
+	got := RenderMain("s", true, false)
 	for _, want := range []string{`"syscall/js"`, `"github.com/nooga/let-go/pkg/wasmhost"`, `js.Global().Set("_lgEval", hostEval)`, `js.Global().Set("_lgRequest", hostRequestFn)`, "_lgRuntimeReady", "select {}"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("host-eval output missing %q", want)
@@ -52,8 +54,10 @@ func TestRenderMainHostEvalOn(t *testing.T) {
 // `_ "embed"` import; that's upstream's to normalize, not this flag's.)
 func TestRenderMainIsValidGo(t *testing.T) {
 	for _, hostEval := range []bool{false, true} {
-		if _, err := format.Source([]byte(RenderMain("store-x", hostEval))); err != nil {
-			t.Fatalf("hostEval=%v: generated main is not valid Go: %v", hostEval, err)
+		for _, audio := range []bool{false, true} {
+			if _, err := format.Source([]byte(RenderMain("store-x", hostEval, audio))); err != nil {
+				t.Fatalf("hostEval=%v audio=%v: generated main is not valid Go: %v", hostEval, audio, err)
+			}
 		}
 	}
 }
@@ -64,12 +68,28 @@ func TestRenderMainIsValidGo(t *testing.T) {
 // gets every zip var nil (#954).
 func TestRenderMainDecodesThroughRuntime(t *testing.T) {
 	for _, hostEval := range []bool{false, true} {
-		got := RenderMain("s", hostEval)
-		if !strings.Contains(got, "rt.DecodeExecUnit(lgbData)") {
-			t.Fatalf("hostEval=%v: generated main does not decode through rt.DecodeExecUnit", hostEval)
+		for _, audio := range []bool{false, true} {
+			got := RenderMain("s", hostEval, audio)
+			if !strings.Contains(got, "rt.DecodeExecUnit(lgbData)") {
+				t.Fatalf("hostEval=%v audio=%v: generated main does not decode through rt.DecodeExecUnit", hostEval, audio)
+			}
+			if strings.Contains(got, "bytecode.DecodeToExecUnit") {
+				t.Fatalf("hostEval=%v audio=%v: generated main decodes with its own resolver", hostEval, audio)
+			}
 		}
-		if strings.Contains(got, "bytecode.DecodeToExecUnit") {
-			t.Fatalf("hostEval=%v: generated main decodes with its own resolver", hostEval)
+	}
+}
+
+// -w-audio blank-imports pkg/audio, whose init binds the browser backend; the
+// default bundle must not, so it links none of the mixer.
+func TestRenderMainAudio(t *testing.T) {
+	const imp = `_ "github.com/nooga/let-go/pkg/audio"`
+	if got := RenderMain("s", false, false); strings.Contains(got, "pkg/audio") {
+		t.Fatalf("the default bundle imports pkg/audio")
+	}
+	for _, hostEval := range []bool{false, true} {
+		if got := RenderMain("s", hostEval, true); !strings.Contains(got, imp) {
+			t.Fatalf("hostEval=%v: -w-audio output missing %s", hostEval, imp)
 		}
 	}
 }
