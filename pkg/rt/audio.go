@@ -4,7 +4,7 @@
  *
  * The audio namespace — a handle-based host capability (let-go #255, Audio).
  * The guest names a sound; the host plays it and hands back a handle the guest
- * can stop or fade later. Fire-and-forget: no playback state (position,
+ * can stop, fade, pause or resume later. Fire-and-forget: no playback state (position,
  * level, whether a sound has ended) flows back into the guest. A guest can
  * still observe its handles, audio/enabled? and refused calls, so it replays
  * identically with or without sound only if it does not branch on those.
@@ -67,6 +67,12 @@ type Audio interface {
 	// block.
 	Stream(src io.Reader) (AudioHandle, error)
 	Stop(AudioHandle)
+	// Pause holds a sound where it is, with a short fade so it does not
+	// click; Resume fades it back in from the same place. A paused stream's
+	// src is not read, so a synth behind it keeps its place too. Pausing a
+	// paused sound, or resuming one that isn't paused, does nothing.
+	Pause(AudioHandle)
+	Resume(AudioHandle)
 	// Gain moves a sound's level to g over fade. A backend may smooth a zero
 	// or very short fade over a few milliseconds so the change does not
 	// click; pkg/audio's mixer does.
@@ -81,6 +87,8 @@ type nopAudio struct{}
 func (nopAudio) Play(Sound) (AudioHandle, error)          { return 0, nil }
 func (nopAudio) Stream(io.Reader) (AudioHandle, error)    { return 0, nil }
 func (nopAudio) Stop(AudioHandle)                         {}
+func (nopAudio) Pause(AudioHandle)                        {}
+func (nopAudio) Resume(AudioHandle)                       {}
 func (nopAudio) Gain(AudioHandle, float64, time.Duration) {}
 func (nopAudio) Enabled() bool                            { return false }
 
@@ -176,22 +184,29 @@ func installAudioNS() {
 		return audioHandle(a.Play(s))
 	})
 
-	// (audio/stop h) -> nil. A nil h, the handle a host with no sound
-	// returns, is a no-op, so a game needs no guard to run silent.
-	def("stop", func(a Audio, vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("audio/stop expects 1 arg (handle), got %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
+	// (audio/stop h), (audio/pause h) and (audio/resume h) -> nil. A nil h,
+	// the handle a host with no sound returns, is a no-op, so a game needs no
+	// guard to run silent.
+	for name, op := range map[string]func(Audio, AudioHandle){
+		"stop":   Audio.Stop,
+		"pause":  Audio.Pause,
+		"resume": Audio.Resume,
+	} {
+		def(name, func(a Audio, vs []vm.Value) (vm.Value, error) {
+			if len(vs) != 1 {
+				return vm.NIL, fmt.Errorf("audio/%s expects 1 arg (handle), got %d", name, len(vs))
+			}
+			if vs[0] == vm.NIL {
+				return vm.NIL, nil
+			}
+			h, ok := vs[0].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("audio/%s expects a handle", name)
+			}
+			op(a, AudioHandle(h))
 			return vm.NIL, nil
-		}
-		h, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("audio/stop expects a handle")
-		}
-		a.Stop(AudioHandle(h))
-		return vm.NIL, nil
-	})
+		})
+	}
 
 	// (audio/gain h g) or (audio/gain h g fade-ms) -> nil
 	def("gain", func(a Audio, vs []vm.Value) (vm.Value, error) {
