@@ -126,7 +126,7 @@ func (d *Device) start(l latency, asked bool) (any, error) {
 	// through the state cell; on the page it fails here.
 	h := open.Invoke(spec)
 	if !worker && (h.IsNull() || h.IsUndefined()) {
-		return nil, errors.New("audio: the page could not open an AudioWorklet (it needs HTTPS or localhost)")
+		return nil, errors.New("audio: the page could not open audio (no AudioContext for this rate, or no AudioWorklet: it needs HTTPS or localhost)")
 	}
 	if !shared {
 		o.handle = h
@@ -203,16 +203,18 @@ func (o *webOut) pump() {
 }
 
 // discard renders frames of the mix and drops them, at most one ring's worth
-// (about a second) per call. A background tab can run the pump once a minute,
-// and rendering all of that in one go stalls the VM's thread; past the cap the
-// time is dropped instead, so a sound still playing resumes where the mixer
-// is rather than where the wall clock is.
+// (about a second) and no longer than webBudget per call, as fill renders. A
+// background tab can run the pump once a minute, and rendering all of that in
+// one go stalls the VM's thread; the time past either bound is dropped, so a
+// sound still playing resumes where the mixer is rather than where the wall
+// clock is.
 func (o *webOut) discard(frames int) {
 	if o.raw == nil {
 		o.raw = make([]byte, webSlice*4)
 	}
 	frames = min(frames, o.cap)
-	for ; frames > 0; frames -= webSlice {
+	t0 := time.Now()
+	for ; frames > 0 && time.Since(t0) < webBudget; frames -= webSlice {
 		n := min(frames, webSlice)
 		io.ReadFull(o.src, o.raw[:n*4])
 	}
