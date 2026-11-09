@@ -191,7 +191,7 @@ func (o *webOut) pump() {
 			o.lost.Store(true)
 			return
 		default:
-			o.discard(int(int64(now.Sub(last)) * rt.AudioRate / int64(time.Second)))
+			o.discard(int(int64(now.Sub(last))*rt.AudioRate/int64(time.Second)), time.Now)
 		}
 		last = now
 		if o.state() == pageRunning && o.queued() < o.queue {
@@ -208,13 +208,13 @@ func (o *webOut) pump() {
 // one go stalls the VM's thread; the time past either bound is dropped, so a
 // sound still playing resumes where the mixer is rather than where the wall
 // clock is.
-func (o *webOut) discard(frames int) {
+func (o *webOut) discard(frames int, now func() time.Time) {
 	if o.raw == nil {
 		o.raw = make([]byte, webSlice*4)
 	}
 	frames = min(frames, o.cap)
-	t0 := time.Now()
-	for ; frames > 0 && time.Since(t0) < webBudget; frames -= webSlice {
+	deadline := now().Add(webBudget)
+	for ; frames > 0 && now().Before(deadline); frames -= webSlice {
 		n := min(frames, webSlice)
 		io.ReadFull(o.src, o.raw[:n*4])
 	}

@@ -221,8 +221,10 @@ const lgAudio = (() => {
         // audio/enabled? stops claiming sound.
         console.error('lg audio:', err);
         all.delete(ctx);
-        ctx.close();
+        // Closing fires statechange. Keep that event from replacing failure.
+        ctx.onstatechange = null;
         setState(3);
+        ctx.close();
       });
       return handle;
     },
