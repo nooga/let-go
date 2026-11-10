@@ -24,7 +24,11 @@ permissions:
 
 concurrency:
   group: "pages"
-  cancel-in-progress: true
+  # Queue rather than cancel. Cancelling a run doesn't cancel the Pages
+  # deployment it already started, so the next deploy is refused with "in
+  # progress deployment" and the site stays a commit behind (2026-11-10,
+  # c6665893 behind 93e4ecf8). GitHub's Pages starter workflow queues too.
+  cancel-in-progress: false
 
 jobs:
   build:
