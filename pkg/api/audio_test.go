@@ -15,6 +15,8 @@ import (
 type recordAudio struct {
 	played  []rt.Sound
 	stopped []rt.AudioHandle
+	paused  []rt.AudioHandle
+	resumed []rt.AudioHandle
 	gains   []float64
 	fades   []time.Duration
 }
@@ -25,6 +27,8 @@ func (r *recordAudio) Play(s rt.Sound) (rt.AudioHandle, error) {
 }
 func (r *recordAudio) Stream(io.Reader) (rt.AudioHandle, error) { return 0, nil }
 func (r *recordAudio) Stop(h rt.AudioHandle)                    { r.stopped = append(r.stopped, h) }
+func (r *recordAudio) Pause(h rt.AudioHandle)                   { r.paused = append(r.paused, h) }
+func (r *recordAudio) Resume(h rt.AudioHandle)                  { r.resumed = append(r.resumed, h) }
 func (r *recordAudio) Gain(h rt.AudioHandle, g float64, fade time.Duration) {
 	r.gains, r.fades = append(r.gains, g), append(r.fades, fade)
 }
@@ -40,6 +44,8 @@ func TestWithAudio(t *testing.T) {
 	}
 	v, err := lg.Run(`(let [h (audio/tone {:freq 440 :ms 120 :wave :square :gain 0.3})]
 	                     (audio/gain h 0.5 200)
+	                     (audio/pause h)
+	                     (audio/resume h)
 	                     (audio/stop h)
 	                     (audio/sample (byte-array [1 0 2 0 3 0 4 0]) {:loop-from 1})
 	                     (audio/enabled?))`)
@@ -59,6 +65,9 @@ func TestWithAudio(t *testing.T) {
 	if len(rec.stopped) != 1 || rec.stopped[0] != 1 {
 		t.Errorf("stopped %v, want the tone's handle 1", rec.stopped)
 	}
+	if len(rec.paused) != 1 || rec.paused[0] != 1 || len(rec.resumed) != 1 || rec.resumed[0] != 1 {
+		t.Errorf("paused %v and resumed %v, want the tone's handle 1 in each", rec.paused, rec.resumed)
+	}
 	if len(rec.gains) != 1 || rec.gains[0] != 0.5 || rec.fades[0] != 200*time.Millisecond {
 		t.Errorf("gain %v over %v, want 0.5 over 200ms", rec.gains, rec.fades)
 	}
@@ -69,7 +78,7 @@ func TestWithAudio(t *testing.T) {
 }
 
 // With no backend bound, audio/ calls are silent no-ops that return nil
-// handles, which stop and gain take as no-ops too, and bad arguments still
+// handles, which stop, pause, resume and gain take as no-ops too, and bad arguments still
 // fail, so native dev catches them.
 func TestAudioNoopWithoutBackend(t *testing.T) {
 	lg, err := api.NewLetGo("audio-noop-test")
@@ -77,12 +86,12 @@ func TestAudioNoopWithoutBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err := lg.Run(`(let [h (audio/tone {:freq 440 :ms 50})]
-	                    [h (audio/gain h 0.5 100) (audio/stop h) (audio/stop 3) (audio/enabled?)])`)
+	                    [h (audio/gain h 0.5 100) (audio/pause h) (audio/resume h) (audio/stop h) (audio/stop 3) (audio/enabled?)])`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := v.String(); got != "[nil nil nil nil false]" {
-		t.Errorf("got %s, want [nil nil nil nil false]", got)
+	if got := v.String(); got != "[nil nil nil nil nil nil false]" {
+		t.Errorf("got %s, want [nil nil nil nil nil nil false]", got)
 	}
 	for _, bad := range []string{
 		`(audio/tone {:freq 0 :ms 50})`,
@@ -94,6 +103,8 @@ func TestAudioNoopWithoutBackend(t *testing.T) {
 		`(audio/tone {:freq 440 :ms 50 :gain -1})`,
 		`(audio/sample (byte-array [-24 3 -24 3]) {:loop-from 0 :gain -1})`,
 		`(audio/stop :h)`,
+		`(audio/pause :h)`,
+		`(audio/resume 1 2)`,
 		`(audio/tone {:freq ##Inf :ms 50})`,
 		`(audio/tone {:freq 440 :ms ##Inf})`,
 		`(audio/tone {:freq 440 :ms 1e300})`,
