@@ -70,7 +70,8 @@ type Audio interface {
 	// Pause holds a sound where it is, with a short fade so it does not
 	// click; Resume fades it back in from the same place. A paused stream's
 	// src is not read, so a synth behind it keeps its place too. Pausing a
-	// paused sound, or resuming one that isn't paused, does nothing.
+	// paused sound, or resuming one that isn't paused, does nothing. A paused
+	// sound is held until it is resumed or stopped.
 	Pause(AudioHandle)
 	Resume(AudioHandle)
 	// Gain moves a sound's level to g over fade. A backend may smooth a zero
@@ -186,7 +187,8 @@ func installAudioNS() {
 
 	// (audio/stop h), (audio/pause h) and (audio/resume h) -> nil. A nil h,
 	// the handle a host with no sound returns, is a no-op, so a game needs no
-	// guard to run silent.
+	// guard to run silent. A paused sound stays in the mix, silent, until it
+	// is resumed or stopped, so stop one that won't be resumed.
 	for name, op := range map[string]func(Audio, AudioHandle){
 		"stop":   Audio.Stop,
 		"pause":  Audio.Pause,
