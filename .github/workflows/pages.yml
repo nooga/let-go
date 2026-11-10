@@ -32,6 +32,12 @@ concurrency:
 
 jobs:
   build:
+    # A Perf Timeline run that didn't succeed wrote no new snapshot to deploy
+    # (#752). push and workflow_dispatch have no workflow_run, so they pass.
+    # deploy needs build, so it is skipped along with it.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
