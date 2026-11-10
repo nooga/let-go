@@ -126,7 +126,7 @@ func (d *Device) start(l latency, asked bool) (any, error) {
 	// through the state cell; on the page it fails here.
 	h := open.Invoke(spec)
 	if !worker && (h.IsNull() || h.IsUndefined()) {
-		return nil, errors.New("audio: the page could not open an AudioWorklet (it needs HTTPS or localhost)")
+		return nil, errors.New("audio: the page could not open audio (no AudioContext for this rate, or no AudioWorklet: it needs HTTPS or localhost)")
 	}
 	if !shared {
 		o.handle = h
@@ -191,7 +191,7 @@ func (o *webOut) pump() {
 			o.lost.Store(true)
 			return
 		default:
-			o.discard(int(int64(now.Sub(last)) * rt.AudioRate / int64(time.Second)))
+			o.discard(int(int64(now.Sub(last))*rt.AudioRate/int64(time.Second)), time.Now)
 		}
 		last = now
 		if o.state() == pageRunning && o.queued() < o.queue {
@@ -202,12 +202,19 @@ func (o *webOut) pump() {
 	}
 }
 
-// discard renders frames of the mix and drops them.
-func (o *webOut) discard(frames int) {
+// discard renders frames of the mix and drops them, at most one ring's worth
+// (about a second) and no longer than webBudget per call, as fill renders. A
+// background tab can run the pump once a minute, and rendering all of that in
+// one go stalls the VM's thread; the time past either bound is dropped, so a
+// sound still playing resumes where the mixer is rather than where the wall
+// clock is.
+func (o *webOut) discard(frames int, now func() time.Time) {
 	if o.raw == nil {
-		o.raw, o.f32 = make([]byte, webSlice*4), make([]byte, webSlice*8)
+		o.raw = make([]byte, webSlice*4)
 	}
-	for ; frames > 0; frames -= webSlice {
+	frames = min(frames, o.cap)
+	deadline := now().Add(webBudget)
+	for ; frames > 0 && now().Before(deadline); frames -= webSlice {
 		n := min(frames, webSlice)
 		io.ReadFull(o.src, o.raw[:n*4])
 	}
@@ -217,7 +224,10 @@ func (o *webOut) discard(frames int) {
 // so neither does this.
 func (o *webOut) push() {
 	if o.raw == nil {
-		o.raw, o.f32 = make([]byte, webSlice*4), make([]byte, webSlice*8)
+		o.raw = make([]byte, webSlice*4)
+	}
+	if o.f32 == nil {
+		o.f32 = make([]byte, webSlice*8)
 	}
 	io.ReadFull(o.src, o.raw)
 	for i := 0; i < webSlice*2; i++ {

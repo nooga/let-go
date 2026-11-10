@@ -184,7 +184,12 @@ const lgAudio = (() => {
       const setState = (v) => { handle.state = v; if (c32) Atomics.store(c32, 3, v); };
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) { setState(3); return null; }
-      const ctx = new AC({ sampleRate: spec.sampleRate });
+      // A browser may refuse the rate. Failing here, rather than throwing, is
+      // what both callers handle: the page path returns null to Go, and a
+      // worker's pump reads the state.
+      let ctx;
+      try { ctx = new AC({ sampleRate: spec.sampleRate }); }
+      catch (err) { console.error('lg audio:', err); setState(3); return null; }
       if (!ctx.audioWorklet) { ctx.close(); setState(3); return null; } // Safari: secure contexts only
       all.add(ctx);
       if (!listening) {
@@ -216,8 +221,10 @@ const lgAudio = (() => {
         // audio/enabled? stops claiming sound.
         console.error('lg audio:', err);
         all.delete(ctx);
-        ctx.close();
+        // Closing fires statechange. Keep that event from replacing failure.
+        ctx.onstatechange = null;
         setState(3);
+        ctx.close();
       });
       return handle;
     },
@@ -514,7 +521,13 @@ async function startWorkerMode() {
     if (e.data.t === 'exit') window.LetGoHost._output('\r\n\x1b[90m[program exited]\x1b[0m\r\n');
     if (e.data.t === 'audio-open') {
       try { lgAudio.open(e.data.spec); }
-      catch (err) { console.error('lg audio relay:', err); }
+      catch (err) {
+        // open threw before reporting a state: mark the page failed, or the
+        // worker's pump discards forever and audio/enabled? stays true.
+        // Relayed opens are shared.
+        console.error('lg audio relay:', err);
+        Atomics.store(new Int32Array(e.data.spec.ctrl), 3, 3);
+      }
     }
     if (e.data.t === 'emit') {
       try { window.LetGoHost._emit(e.data.name, JSON.parse(e.data.data)); }

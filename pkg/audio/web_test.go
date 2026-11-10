@@ -235,3 +235,42 @@ func TestWebAskedQueueWins(t *testing.T) {
 		t.Fatalf("queue %d frames, want the asked 200 ms (%d)", o.queue, frames(200*time.Millisecond))
 	}
 }
+
+// countReader counts the bytes read from it and returns silence.
+type countReader struct{ n int }
+
+func (c *countReader) Read(p []byte) (int, error) {
+	clear(p)
+	c.n += len(p)
+	return len(p), nil
+}
+
+// A long suspension (a background tab whose pump ran once a minute) renders at
+// most one ring of discarded audio in one call, not the whole gap, and the
+// discard path never needs push's float32 buffer.
+func TestWebDiscardIsBounded(t *testing.T) {
+	src := &countReader{}
+	o := &webOut{src: src, cap: 4 * webSlice}
+	o.discard(10*o.cap, func() time.Time { return time.Time{} })
+	if got, want := src.n, o.cap*4; got != want {
+		t.Fatalf("discard rendered %d bytes, want one ring (%d)", got, want)
+	}
+	if o.f32 != nil {
+		t.Fatal("discard allocated the float32 buffer")
+	}
+}
+
+func TestWebDiscardStopsAtRenderBudget(t *testing.T) {
+	src := &countReader{}
+	o := &webOut{src: src, cap: 4 * webSlice}
+	o.discard(o.cap, func() time.Time {
+		// Advance the clock to the deadline after the first slice.
+		if src.n == 0 {
+			return time.Time{}
+		}
+		return time.Time{}.Add(webBudget)
+	})
+	if got, want := src.n, webSlice*4; got != want {
+		t.Fatalf("discard rendered %d bytes, want one slice (%d)", got, want)
+	}
+}

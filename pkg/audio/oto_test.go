@@ -11,7 +11,8 @@ import (
 
 // os.Pipe is not implemented on js/wasm, so this stays on the oto build.
 // The bad override fails in resolve, before oto is touched, so Enabled here
-// opens no sound device either.
+// opens no sound device either. It swaps the process-wide os.Stderr, so it
+// must never call t.Parallel.
 func TestABadOverrideFailsTheOpenAndSaysWhy(t *testing.T) {
 	clearEnv(t)
 	t.Setenv(envQueue, "10ms")
