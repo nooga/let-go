@@ -52,7 +52,7 @@ jobs:
     # macOS needs 150 minutes for count-3 full captures (#583).
     # Ubuntu needs 120 after repeated timeouts at the former 90-minute cap (#878).
     # Keep the Ubuntu value aligned with perf-release-baseline.yml.
-    timeout-minutes: ${{ matrix.os == 'macos-15' && 150 || 120 }}
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 150 || 120 }}
     concurrency:
       # Per-OS FIFO queue: legs of the same OS stay serialized (snapshot
       # commits land in commit order), but the two OSes never wait on each
