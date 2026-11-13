@@ -23,11 +23,28 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: true
+  # A trigger that build's guard will skip gets a group of its own, so it
+  # can't take the pending slot and displace a real deploy waiting there.
+  group: >-
+    ${{ github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'skipped' &&
+        format('pages-skip-{0}', github.run_id) || 'pages' }}
+  # Queue rather than cancel. Cancelling a run doesn't cancel the Pages
+  # deployment it already started, so the next deploy is refused with "in
+  # progress deployment" and the site stays a commit behind (2026-11-10,
+  # c6665893 behind 93e4ecf8). GitHub's Pages starter workflow queues too.
+  cancel-in-progress: false
 
 jobs:
   build:
+    # A skipped Perf Timeline run (a bot push) ran no leg, so it wrote no
+    # snapshot to deploy (#752). Its legs publish separately, so a failed or
+    # cancelled run may still carry one leg's snapshot and does deploy.
+    # push and workflow_dispatch have no workflow_run, so they pass; deploy
+    # needs build, so it is skipped along with it.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion != 'skipped'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
