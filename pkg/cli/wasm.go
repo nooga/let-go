@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	runtimeDebug "runtime/debug"
-	"strconv"
+	"slices"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/buildmeta"
@@ -168,21 +168,24 @@ const wasmModuleName = "lg-wasm-app"
 // LETGO_TINYGO_STACK so it's attributed to the env var, not an opaque tinygo error.
 var tinyGoStackSizeRe = regexp.MustCompile(`(?i)^\d+(\.\d+)?[kmg]?b?$`)
 
-// tinyGoVersionRe reads major and minor from `tinygo version`, e.g.
-// "tinygo version 0.44.0 darwin/arm64 (using go version go1.27.3 ...)".
-var tinyGoVersionRe = regexp.MustCompile(`^tinygo version (\d+)\.(\d+)`)
+// tinyGoPanicUnwindHelpRe captures the value list `tinygo build -h` prints for
+// -panic-unwind: "(auto, explicit)" in 0.43, "(auto, explicit, none)" from 0.44.
+var tinyGoPanicUnwindHelpRe = regexp.MustCompile(`-panic-unwind string\s+[^\n(]*\(([^)]*)\)`)
 
-// tinyGoHasPanicUnwind reports whether the tinygo that printed version accepts
-// -panic-unwind, which arrived in 0.44; earlier releases reject the unknown
-// flag. A line that doesn't parse keeps the old argv rather than risk that.
-func tinyGoHasPanicUnwind(version string) bool {
-	m := tinyGoVersionRe.FindStringSubmatch(strings.TrimSpace(version))
+// tinyGoPanicUnwindValues returns the -panic-unwind values listed in tinygo's
+// build help, or nil when the flag is absent (0.42 and earlier). Reading the
+// help instead of the version keeps a dev build from before "none" landed off
+// a flag value it would reject.
+func tinyGoPanicUnwindValues(help string) []string {
+	m := tinyGoPanicUnwindHelpRe.FindStringSubmatch(help)
 	if m == nil {
-		return false
+		return nil
 	}
-	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2])
-	return major > 0 || minor >= 44
+	var values []string
+	for _, v := range strings.Split(m[1], ",") {
+		values = append(values, strings.TrimSpace(v))
+	}
+	return values
 }
 
 // The generated main.go template and its -w-host-eval splice live in
@@ -366,11 +369,16 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		// TinyGo 0.43+ wraps calls in panic-unwind catchers so recover() works;
 		// their frames overflow the browser's native wasm stack on deep
 		// interpreter recursion. Under -panic=trap nothing recovers, so drop
-		// them where tinygo allows it (0.44+). -panic=print keeps them.
+		// them where tinygo offers "none" (0.44+). -panic=print keeps them.
 		unwindNone := false
 		if panicMode == "trap" {
-			version, _ := exec.Command("tinygo", "version").Output()
-			unwindNone = tinyGoHasPanicUnwind(string(version))
+			help, _ := exec.Command("tinygo", "build", "-h").CombinedOutput()
+			switch values := tinyGoPanicUnwindValues(string(help)); {
+			case slices.Contains(values, "none"):
+				unwindNone = true
+			case values != nil:
+				fmt.Fprintln(os.Stderr, "warning: this tinygo adds panic-unwind frames it cannot turn off, which can overflow the browser's wasm stack on deep recursion; tinygo 0.42 or 0.44+ avoids them")
+			}
 		}
 		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags, unwindNone)...)
 		build.Dir = srcDir
@@ -493,7 +501,7 @@ func wasmBuildEnv(tmpDir string) []string {
 // successful AOT one. optLevel, panicMode, stack and gc arrive already
 // defaulted and warned about by the caller; gc empty means "leave tinygo's".
 // unwindNone adds -panic-unwind=none; the caller decides it from the panic
-// mode and the tinygo version, since older tinygo rejects the flag.
+// mode and tinygo's build help, since tinygo before 0.44 rejects that value.
 func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string, unwindNone bool) []string {
 	args := []string{"build",
 		"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode}

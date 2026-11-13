@@ -410,25 +410,30 @@ func TestTinyGoBuildArgs(t *testing.T) {
 	}
 }
 
-// TestTinyGoHasPanicUnwind pins the version gate for -panic-unwind: tinygo
-// 0.42 and 0.43 exit on the unknown flag, so only 0.44 and later get it.
-func TestTinyGoHasPanicUnwind(t *testing.T) {
+// TestTinyGoPanicUnwindValues pins how the -panic-unwind values are read from
+// tinygo's build help. The fixtures are the lines each release prints: 0.42
+// has no flag, 0.43 offers no "none", 0.44 does. -panic's own value list sits
+// nearby and must not be mistaken for it.
+func TestTinyGoPanicUnwindValues(t *testing.T) {
+	const panicLine = "  -panic string\n    \tpanic strategy (print, trap) (default \"print\")\n"
 	tests := []struct {
-		version string
-		want    bool
+		name string
+		help string
+		want []string
 	}{
-		{"tinygo version 0.42.0 linux/amd64 (using go version go1.27.3 and LLVM version 22.1.4)", false},
-		{"tinygo version 0.43.0 darwin/arm64 (using go version go1.27.3 and LLVM version 22.1.4)\n", false},
-		{"tinygo version 0.44.0 darwin/arm64 (using go version go1.27.3 and LLVM version 22.1.4)\n", true},
-		{"tinygo version 0.45.0-dev-1a2b3c4 linux/amd64", true},
-		{"tinygo version 1.0.0 linux/amd64", true},
-		{"", false},
-		{"tinygo: command not found", false},
+		{"0.42 has no flag", panicLine + "  -port string\n", nil},
+		{"0.43 lists no none", panicLine +
+			"  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit)\n", []string{"auto", "explicit"}},
+		{"0.44 lists none", panicLine +
+			"  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit, none)\n", []string{"auto", "explicit", "none"}},
+		{"no tinygo on PATH", "", nil},
 	}
 	for _, tt := range tests {
-		if got := tinyGoHasPanicUnwind(tt.version); got != tt.want {
-			t.Errorf("tinyGoHasPanicUnwind(%q) = %v, want %v", tt.version, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tinyGoPanicUnwindValues(tt.help); !slices.Equal(got, tt.want) {
+				t.Errorf("tinyGoPanicUnwindValues() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
