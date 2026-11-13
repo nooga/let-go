@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	runtimeDebug "runtime/debug"
+	"strconv"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/buildmeta"
@@ -166,6 +167,23 @@ const wasmModuleName = "lg-wasm-app"
 // K/M/G-suffixed size, e.g. 1MB, 64KB, 16384). Used only to warn on a typo in
 // LETGO_TINYGO_STACK so it's attributed to the env var, not an opaque tinygo error.
 var tinyGoStackSizeRe = regexp.MustCompile(`(?i)^\d+(\.\d+)?[kmg]?b?$`)
+
+// tinyGoVersionRe reads major and minor from `tinygo version`, e.g.
+// "tinygo version 0.44.0 darwin/arm64 (using go version go1.27.3 ...)".
+var tinyGoVersionRe = regexp.MustCompile(`^tinygo version (\d+)\.(\d+)`)
+
+// tinyGoHasPanicUnwind reports whether the tinygo that printed version accepts
+// -panic-unwind, which arrived in 0.44; earlier releases reject the unknown
+// flag. A line that doesn't parse keeps the old argv rather than risk that.
+func tinyGoHasPanicUnwind(version string) bool {
+	m := tinyGoVersionRe.FindStringSubmatch(strings.TrimSpace(version))
+	if m == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return major > 0 || minor >= 44
+}
 
 // The generated main.go template and its -w-host-eval splice live in
 // pkg/rt/wasm (RenderMain), alongside the HTML/JS build assets.
@@ -345,7 +363,16 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 				fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_GC=%q is not a known tinygo gc (none|leaking|conservative|precise); passing as-is\n", gc)
 			}
 		}
-		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags)...)
+		// TinyGo 0.43+ wraps calls in panic-unwind catchers so recover() works;
+		// their frames overflow the browser's native wasm stack on deep
+		// interpreter recursion. Under -panic=trap nothing recovers, so drop
+		// them where tinygo allows it (0.44+). -panic=print keeps them.
+		unwindNone := false
+		if panicMode == "trap" {
+			version, _ := exec.Command("tinygo", "version").Output()
+			unwindNone = tinyGoHasPanicUnwind(string(version))
+		}
+		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags, unwindNone)...)
 		build.Dir = srcDir
 		build.Env = tinyGoBuildEnv(os.Environ(), moduleDir != "")
 	} else {
@@ -465,10 +492,15 @@ func wasmBuildEnv(tmpDir string) []string {
 // tag yields an ordinary bytecode build that is indistinguishable from a
 // successful AOT one. optLevel, panicMode, stack and gc arrive already
 // defaulted and warned about by the caller; gc empty means "leave tinygo's".
-func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string) []string {
+// unwindNone adds -panic-unwind=none; the caller decides it from the panic
+// mode and the tinygo version, since older tinygo rejects the flag.
+func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string, unwindNone bool) []string {
 	args := []string{"build",
-		"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode,
-		"-stack-size=" + stack}
+		"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode}
+	if unwindNone {
+		args = append(args, "-panic-unwind=none")
+	}
+	args = append(args, "-stack-size="+stack)
 	if gc != "" {
 		args = append(args, "-gc="+gc)
 	}

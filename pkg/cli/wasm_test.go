@@ -363,10 +363,11 @@ func TestWasmLetgoSource(t *testing.T) {
 func TestTinyGoBuildArgs(t *testing.T) {
 	const wasmPath = "/tmp/out/app.wasm"
 	tests := []struct {
-		name      string
-		gc        string
-		buildTags string
-		want      []string
+		name       string
+		gc         string
+		buildTags  string
+		unwindNone bool
+		want       []string
 	}{
 		{
 			name: "defaults carry no -gc and no -tags",
@@ -392,14 +393,42 @@ func TestTinyGoBuildArgs(t *testing.T) {
 			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
 				"-stack-size=1MB", "-gc=precise", "-tags", "gogen_ir", "-o", wasmPath, "."},
 		},
+		{
+			name:       "-panic-unwind=none follows -panic",
+			unwindNone: true,
+			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
+				"-panic-unwind=none", "-stack-size=1MB", "-o", wasmPath, "."},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tinyGoBuildArgs(wasmPath, "z", "trap", "1MB", tt.gc, tt.buildTags)
+			got := tinyGoBuildArgs(wasmPath, "z", "trap", "1MB", tt.gc, tt.buildTags, tt.unwindNone)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("tinyGoBuildArgs() =\n  %q\nwant\n  %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestTinyGoHasPanicUnwind pins the version gate for -panic-unwind: tinygo
+// 0.42 and 0.43 exit on the unknown flag, so only 0.44 and later get it.
+func TestTinyGoHasPanicUnwind(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{"tinygo version 0.42.0 linux/amd64 (using go version go1.27.3 and LLVM version 22.1.4)", false},
+		{"tinygo version 0.43.0 darwin/arm64 (using go version go1.27.3 and LLVM version 22.1.4)\n", false},
+		{"tinygo version 0.44.0 darwin/arm64 (using go version go1.27.3 and LLVM version 22.1.4)\n", true},
+		{"tinygo version 0.45.0-dev-1a2b3c4 linux/amd64", true},
+		{"tinygo version 1.0.0 linux/amd64", true},
+		{"", false},
+		{"tinygo: command not found", false},
+	}
+	for _, tt := range tests {
+		if got := tinyGoHasPanicUnwind(tt.version); got != tt.want {
+			t.Errorf("tinyGoHasPanicUnwind(%q) = %v, want %v", tt.version, got, tt.want)
+		}
 	}
 }
 
