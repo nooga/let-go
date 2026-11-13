@@ -2868,7 +2868,11 @@ func setBangCompiler(c *Context, form vm.Value) error {
 }
 
 func varCompiler(c *Context, form vm.Value) error {
-	sym := form.(*vm.List).Next().First().(vm.Symbol)
+	arg, _ := stripBindingMeta(form.(*vm.List).Next().First())
+	sym, ok := arg.(vm.Symbol)
+	if !ok {
+		return c.compileError(fmt.Sprintf("var: argument must be a symbol, got %v", arg))
+	}
 	// Try compile-time resolution only. The var form ignores privacy —
 	// #'other-ns/private resolves; only bare symbol references enforce it.
 	v := c.CurrentNS().LookupIncludingPrivate(sym)
