@@ -31,7 +31,7 @@ permissions:
 
 # Concurrency lives at the JOB level, one group per runner OS — see below.
 # A single workflow-level group serialized the two legs behind each other,
-# and macos-14 runner starvation then dammed the whole queue: one run's
+# and starvation of the macOS runner pool then dammed the whole queue: one run's
 # macos leg sat queued for >24h (GitHub cancels it there), while every
 # newer run — including cheap, instantly-runnable ubuntu legs — waited
 # FIFO behind it. Per-OS groups let the amd64 timeline advance at ubuntu
