@@ -152,8 +152,9 @@ func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
 // another goroutine's context, as inside a future — selects the callee.
 // Resolution is lazy (first call), not at package init(): blank-imported
 // lowered packages run init() before the bundle replay loads namespaces, where
-// LookupVar would return nil. The .(vm.Fn) assertion matches the trampoline's
-// contract — every callable vm value implements vm.Fn.
+// LookupVar would return nil. vm.AsFn, not a vm.Fn assertion, decides what is
+// callable: a value whose type implements the IFn protocol is, and is not a
+// vm.Fn.
 func CachedVarFnEC(ec *vm.ExecContext, ptr **vm.Var, nsName, symName string) vm.Fn {
 	if *ptr == nil {
 		*ptr = LookupVar(nsName, symName)
@@ -162,7 +163,7 @@ func CachedVarFnEC(ec *vm.ExecContext, ptr **vm.Var, nsName, symName string) vm.
 		}
 	}
 	val := ec.Deref(*ptr)
-	if f, ok := val.(vm.Fn); ok {
+	if f, ok := vm.AsFn(val); ok {
 		return f
 	}
 	if !(*ptr).IsBound() {
@@ -208,18 +209,19 @@ func InvokeValue(target vm.Value, args []vm.Value) (vm.Value, error) {
 // scope to spawned goroutines) against the running context rather than the
 // process root. A nil ec resolves to the root context. Values that are not
 // vm.Fn (only the bare invoker interface) take the context-free path.
+//
+// vm.AsFn, not a vm.Fn assertion: a value whose type implements the IFn
+// protocol (a reify or deftype with -invoke) is callable on the VM, and a
+// lowered core fn handed one as a predicate has to call it the same way.
 func InvokeValueEC(ec *vm.ExecContext, target vm.Value, args []vm.Value) (vm.Value, error) {
-	if target == vm.NIL {
-		return vm.NIL, fmt.Errorf("invoke of nil")
-	}
-	if fn, ok := target.(vm.Fn); ok {
+	if fn, ok := vm.AsFn(target); ok {
 		return ec.Invoke(fn, args)
 	}
-	inv, ok := target.(invoker)
-	if !ok {
-		return vm.NIL, fmt.Errorf("%T does not implement Invoke", target)
+	if inv, ok := target.(invoker); ok {
+		return inv.Invoke(args)
 	}
-	return inv.Invoke(args)
+	// nil included: the VM reports calling nil the same way.
+	return vm.NIL, vm.NewTypeError(target, "is not a function", nil)
 }
 
 // InvokeValueEC1 through InvokeValueEC4 are InvokeValueEC with the arguments
