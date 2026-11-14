@@ -185,6 +185,20 @@ Prebuilt binaries for Linux, macOS, and Plan 9 in
 go install github.com/nooga/let-go@latest
 ```
 
+### With sound
+
+The Homebrew and release binaries are built without a sound backend: in them
+every `audio/` call is a silent no-op and `(audio/enabled?)` is false. To play
+sound from a native `lg`, build it with the `audio_oto` tag:
+
+```bash
+go install -tags audio_oto github.com/nooga/let-go@latest
+```
+
+The backend needs no cgo. On Linux it plays through PulseAudio and falls back
+to ALSA. A WASM build gets sound from `lg -w -w-audio` instead; see the
+[usage guide](docs/guide/usage.md).
+
 ### Usage
 
 ```bash
