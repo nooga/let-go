@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-10-24
+last-verified: 2026-11-14
 human-verified:
 ---
 
@@ -125,6 +125,44 @@ still succeeds. The generated module requires the let-go this `lg` came from: a
 release pins its own version, and a dev build uses `LETGO_SRC` or the checkout
 it finds, as `-w` does. Pass several files when the program's own namespaces
 should lower too; namespaces you don't pass run from bytecode.
+
+### Lowering the core too
+
+By default only your program is lowered: its calls into `clojure.core` and the
+other built-in namespaces still run bytecode. `-lowered-core` also lowers
+`clojure.core` and `clojure.walk` to Go and links them:
+
+```bash
+lg compile -lowered-core app.lg
+```
+
+What to expect, by the shape of the program. The figures are from ten small
+probes on one machine (macOS arm64, main at `c0a93f0d`, 2026-11-13; see
+#1067), so read them as a guide and not a benchmark:
+
+- Code that spends its time in core's data functions (`into` with a
+  transducer, `filter`, `group-by`, `assoc-in`, `select-keys`, `walk`) ran 1.0
+  to 3.0 times as fast as with plain `lg compile`, 1.8 times at the median.
+- Code that builds strings with `str` and lazy `map` gains little. Those are
+  native already.
+- Numeric code in your own functions does not change. `lg compile` alone is
+  what speeds that up.
+
+Costs and differences from the VM:
+
+- The first build lowers the core, which takes several seconds. A released
+  `lg` caches the result per version; a development build lowers on every
+  compile.
+- The binary grows by about 2 MB.
+- The core is written to `lgcore/` in the generated module, so a program
+  cannot also have a namespace whose first segment is `lgcore`.
+- Lowered core functions call each other directly, as Clojure's own core does.
+  `with-redefs` or `alter-var-root` on a core var changes what your code sees
+  when it calls that var, and does not change what another core function
+  calls: under `(with-redefs [every? f] ...)`, `not-every?` still calls the
+  original `every?`.
+- The build fails if the core cannot be lowered. It never falls back to
+  bytecode without saying so.
 
 ## Compile-time vars
 

@@ -17,6 +17,9 @@
   (testing "-import repeats, in order"
     (is (= {:files ["a.lg"] :module-dir "m" :imports ["x/a" "x/b"]}
            (cmd/parse-args ["-import" "x/a" "-module" "m" "-import" "x/b" "a.lg"]))))
+  (testing "-lowered-core takes no value"
+    (is (= {:files ["a.lg" "b.lg"] :lowered-core true}
+           (cmd/parse-args ["a.lg" "-lowered-core" "b.lg"]))))
   (testing "-- ends flag parsing"
     (is (= {:files ["-odd.lg"]} (cmd/parse-args ["--" "-odd.lg"]))))
   (testing "help"
@@ -45,6 +48,9 @@
    :scaffold-module (fn [dir module] (swap! calls conj [:scaffold-module module]))
    :go-build        (fn [dir out] (swap! calls conj [:go-build out]))
    :go-build-readonly (fn [dir out] (swap! calls conj [:go-build-readonly out]))
+   :clear-lowered-core (fn [dir] (swap! calls conj [:clear-lowered-core]))
+   :lower-core      (fn [dir import-path] (swap! calls conj [:lower-core import-path]))
+   :lower-core-readonly (fn [dir import-path] (swap! calls conj [:lower-core-readonly import-path]))
    :open-module     (fn [module-dir imports]
                       (swap! calls conj [:open-module module-dir imports])
                       {:dir (scratch-dir "gen") :import-path "example.com/host/lgprogram"})
@@ -66,6 +72,7 @@
     (testing "runs the host steps in order and removes its temp dir"
       (is (nil? (:error res)))
       (is (= [[:make-temp-dir]
+              [:clear-lowered-core]
               [:compile-lgb "lgc.prog/-main"]
               [:scaffold-module lg.compiler/program-module]
               [:go-build "prog"]
@@ -81,7 +88,7 @@
         res   (lg.compiler/build-program [path] nil nil (recording-host calls))]
     (testing "is an error, and the temp dir is still removed"
       (is (re-find #"no program entry" (:error res)))
-      (is (= [[:make-temp-dir] [:remove-dir]] @calls)))
+      (is (= [[:make-temp-dir] [:clear-lowered-core] [:remove-dir]] @calls)))
     (remove-fixture path)))
 
 (deftest build-program-keeps-work-dir
@@ -101,6 +108,7 @@
     (testing "builds read-only in the opened module, with no scaffold or temp dir"
       (is (nil? (:error res)))
       (is (= [[:open-module "host-mod" []]
+              [:clear-lowered-core]
               [:compile-lgb "lgc.mod/-main"]
               [:go-build-readonly "out"]]
              @calls)))
@@ -117,4 +125,47 @@
       (is (re-find #"caller-supplied module"
                    (:error (lg.compiler/build-program [path] "out" nil nil ["x/a"] (recording-host calls)))))
       (is (empty? @calls)))
+    (remove-fixture path)))
+
+(deftest build-program-with-lowered-core
+  (let [path (write-fixture "(ns lgc.core)\n(defn -main [] (println 1))\n")]
+    (testing "lowers after the scaffold, which writes the go.mod lowering runs under"
+      (let [calls (atom [])]
+        (lg.compiler/build-program [path] nil nil nil nil true (recording-host calls))
+        (is (= [[:make-temp-dir]
+                [:clear-lowered-core]
+                [:compile-lgb "lgc.core/-main"]
+                [:scaffold-module lg.compiler/program-module]
+                [:lower-core lg.compiler/program-module]
+                [:go-build "prog"]
+                [:remove-dir]]
+               @calls))))
+    (testing "in a caller's module it lowers read-only, under the module's import path"
+      (let [calls (atom [])]
+        (lg.compiler/build-program [path] "out" nil "host-mod" nil true (recording-host calls))
+        (is (= [[:open-module "host-mod" []]
+                [:clear-lowered-core]
+                [:compile-lgb "lgc.core/-main"]
+                [:lower-core-readonly "example.com/host/lgprogram"]
+                [:go-build-readonly "out"]]
+               @calls))))
+    (testing "a core that cannot be lowered stops the build before go build"
+      (let [calls (atom [])
+            host  (assoc (recording-host calls)
+                         :lower-core (fn [dir import-path] (throw (ex-info "lowering failed" {}))))]
+        (is (thrown? Exception (lg.compiler/build-program [path] "out" nil nil nil true host)))
+        (is (not-any? (fn [c] (= :go-build (first c))) @calls))
+        (is (some (fn [c] (= :remove-dir (first c))) @calls))))
+    (testing "a host map from before the flag, with no clear step, still builds"
+      (let [calls (atom [])
+            host  (dissoc (recording-host calls) :clear-lowered-core :lower-core :lower-core-readonly)
+            res   (lg.compiler/build-program [path] "out" nil host)]
+        (is (nil? (:error res)))
+        (is (some (fn [c] (= :go-build (first c))) @calls))))
+    (testing "without the flag nothing is lowered"
+      (let [calls (atom [])]
+        (lg.compiler/build-program [path] "out" nil nil nil false (recording-host calls))
+        (is (not-any? (fn [c] (= :lower-core (first c))) @calls))
+        (is (= [:clear-lowered-core] (second @calls))
+            "and an earlier build's core is cleared before the program is written")))
     (remove-fixture path)))
