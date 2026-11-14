@@ -188,6 +188,21 @@ func tinyGoPanicUnwindValues(help string) []string {
 	return values
 }
 
+// tinyGoUnwindDecision decides from the panic mode and tinygo's build help
+// whether to pass -panic-unwind=none, and whether to warn that this tinygo
+// keeps unwind frames it cannot drop (0.43). Only -panic=trap qualifies: under
+// print, recover works and needs the unwinding.
+func tinyGoUnwindDecision(panicMode, help string) (unwindNone, warn bool) {
+	if panicMode != "trap" {
+		return false, false
+	}
+	values := tinyGoPanicUnwindValues(help)
+	if slices.Contains(values, "none") {
+		return true, false
+	}
+	return false, values != nil
+}
+
 // The generated main.go template and its -w-host-eval splice live in
 // pkg/rt/wasm (RenderMain), alongside the HTML/JS build assets.
 //
@@ -370,13 +385,12 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		// their frames overflow the browser's native wasm stack on deep
 		// interpreter recursion. Under -panic=trap nothing recovers, so drop
 		// them where tinygo offers "none" (0.44+). -panic=print keeps them.
-		unwindNone := false
+		var unwindNone bool
 		if panicMode == "trap" {
 			help, _ := exec.Command("tinygo", "build", "-h").CombinedOutput()
-			switch values := tinyGoPanicUnwindValues(string(help)); {
-			case slices.Contains(values, "none"):
-				unwindNone = true
-			case values != nil:
+			var warn bool
+			unwindNone, warn = tinyGoUnwindDecision(panicMode, string(help))
+			if warn {
 				fmt.Fprintln(os.Stderr, "warning: this tinygo adds panic-unwind frames it cannot turn off, which can overflow the browser's wasm stack on deep recursion; tinygo 0.42 or 0.44+ avoids them")
 			}
 		}

@@ -437,6 +437,37 @@ func TestTinyGoPanicUnwindValues(t *testing.T) {
 	}
 }
 
+// TestTinyGoUnwindDecision pins which builds get -panic-unwind=none and which
+// get the 0.43 warning: only trap mode qualifies, and only a tinygo whose help
+// lists "none" gets the flag.
+func TestTinyGoUnwindDecision(t *testing.T) {
+	const (
+		help042 = "  -panic string\n    \tpanic strategy (print, trap) (default \"print\")\n"
+		help043 = help042 + "  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit)\n"
+		help044 = help042 + "  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit, none)\n"
+	)
+	tests := []struct {
+		name, panicMode, help string
+		unwindNone, warn      bool
+	}{
+		{"0.42 trap", "trap", help042, false, false},
+		{"0.43 trap warns", "trap", help043, false, true},
+		{"0.44 trap gets none", "trap", help044, true, false},
+		{"0.44 print keeps unwinding", "print", help044, false, false},
+		{"0.43 print keeps unwinding", "print", help043, false, false},
+		{"no tinygo help", "trap", "", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unwindNone, warn := tinyGoUnwindDecision(tt.panicMode, tt.help)
+			if unwindNone != tt.unwindNone || warn != tt.warn {
+				t.Errorf("tinyGoUnwindDecision(%q, help) = (%v, %v), want (%v, %v)",
+					tt.panicMode, unwindNone, warn, tt.unwindNone, tt.warn)
+			}
+		})
+	}
+}
+
 // TestTinyGoBuildEnv pins how a caller-module build holds tinygo to the
 // caller's go.mod: tinygo has no -mod flag, so -mod=readonly goes last in
 // GOFLAGS, where it overrides a user's -mod=mod without dropping their other
