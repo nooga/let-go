@@ -157,6 +157,42 @@ func TestLgCompileCommand(t *testing.T) {
 		}
 	})
 
+	// A def is an expression whose value is its var. A lowered function that
+	// uses that value (here by returning it) has to build and give the VM's
+	// answer; with-out-str is the same case, the def being the last form of
+	// the closure the macro builds. The def whose value is dropped and the def
+	// with no value pin the two neighbouring paths through the same code.
+	t.Run("a def whose var is used as a value", func(t *testing.T) {
+		prog := filepath.Join(fix, "defvalue.lg")
+		if err := os.WriteFile(prog, []byte(`(ns defvalue)
+(defn make [] (def answer 42))
+(defn tagged [] (def ^:private hidden 7))
+(defn unused [] (def ^:private side 8) nil)
+(defn bare [] (def unbound))
+(defn -main []
+  (println (make) answer)
+  (println (tagged) hidden)
+  (println (unused) side)
+  (println (bare))
+  (println (count (with-out-str (def quiet 1))) quiet))
+(when-not *compiling-aot* (-main))
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		exe := filepath.Join(t.TempDir(), "defvalue.native")
+		if out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-o", exe, prog}, env...); err != nil {
+			t.Fatalf("lg compile: %v\n%s", err, out)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 {
+			t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
+		}
+		want := "#'defvalue/answer 42\n#'defvalue/hidden 7\nnil 8\n#'defvalue/unbound\n0 1\n"
+		if string(stdout) != want {
+			t.Fatalf("stdout %q, want %q; stderr=%q", stdout, want, stderr)
+		}
+	})
+
 	t.Run("a program without an entry fails", func(t *testing.T) {
 		out, err := runCmd(ctx, t, bin, fix, []string{"compile", lib}, env...)
 		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
