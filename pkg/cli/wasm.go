@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	runtimeDebug "runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/buildmeta"
@@ -166,6 +167,41 @@ const wasmModuleName = "lg-wasm-app"
 // K/M/G-suffixed size, e.g. 1MB, 64KB, 16384). Used only to warn on a typo in
 // LETGO_TINYGO_STACK so it's attributed to the env var, not an opaque tinygo error.
 var tinyGoStackSizeRe = regexp.MustCompile(`(?i)^\d+(\.\d+)?[kmg]?b?$`)
+
+// tinyGoPanicUnwindHelpRe captures the value list `tinygo build -h` prints for
+// -panic-unwind: "(auto, explicit)" in 0.43, "(auto, explicit, none)" from 0.44.
+var tinyGoPanicUnwindHelpRe = regexp.MustCompile(`-panic-unwind string\s+[^\n(]*\(([^)]*)\)`)
+
+// tinyGoPanicUnwindValues returns the -panic-unwind values listed in tinygo's
+// build help, or nil when the flag is absent (0.42 and earlier). Reading the
+// help instead of the version keeps a dev build from before "none" landed off
+// a flag value it would reject.
+func tinyGoPanicUnwindValues(help string) []string {
+	m := tinyGoPanicUnwindHelpRe.FindStringSubmatch(help)
+	if m == nil {
+		return nil
+	}
+	var values []string
+	for _, v := range strings.Split(m[1], ",") {
+		values = append(values, strings.TrimSpace(v))
+	}
+	return values
+}
+
+// tinyGoUnwindDecision decides from the panic mode and tinygo's build help
+// whether to pass -panic-unwind=none, and whether to warn that this tinygo
+// keeps unwind frames it cannot drop (0.43). Only -panic=trap qualifies: under
+// print, recover works and needs the unwinding.
+func tinyGoUnwindDecision(panicMode, help string) (unwindNone, warn bool) {
+	if panicMode != "trap" {
+		return false, false
+	}
+	values := tinyGoPanicUnwindValues(help)
+	if slices.Contains(values, "none") {
+		return true, false
+	}
+	return false, values != nil
+}
 
 // The generated main.go template and its -w-host-eval splice live in
 // pkg/rt/wasm (RenderMain), alongside the HTML/JS build assets.
@@ -345,7 +381,20 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 				fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_GC=%q is not a known tinygo gc (none|leaking|conservative|precise); passing as-is\n", gc)
 			}
 		}
-		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags)...)
+		// TinyGo 0.43+ wraps calls in panic-unwind catchers so recover() works;
+		// their frames overflow the browser's native wasm stack on deep
+		// interpreter recursion. Under -panic=trap nothing recovers, so drop
+		// them where tinygo offers "none" (0.44+). -panic=print keeps them.
+		var unwindNone bool
+		if panicMode == "trap" {
+			help, _ := exec.Command("tinygo", "build", "-h").CombinedOutput()
+			var warn bool
+			unwindNone, warn = tinyGoUnwindDecision(panicMode, string(help))
+			if warn {
+				fmt.Fprintln(os.Stderr, "warning: this tinygo adds panic-unwind frames it cannot turn off, which can overflow the browser's wasm stack on deep recursion; tinygo 0.42 or 0.44+ avoids them")
+			}
+		}
+		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags, unwindNone)...)
 		build.Dir = srcDir
 		build.Env = tinyGoBuildEnv(os.Environ(), moduleDir != "")
 	} else {
@@ -465,10 +514,15 @@ func wasmBuildEnv(tmpDir string) []string {
 // tag yields an ordinary bytecode build that is indistinguishable from a
 // successful AOT one. optLevel, panicMode, stack and gc arrive already
 // defaulted and warned about by the caller; gc empty means "leave tinygo's".
-func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string) []string {
+// unwindNone adds -panic-unwind=none; the caller decides it from the panic
+// mode and tinygo's build help, since tinygo before 0.44 rejects that value.
+func tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags string, unwindNone bool) []string {
 	args := []string{"build",
-		"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode,
-		"-stack-size=" + stack}
+		"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode}
+	if unwindNone {
+		args = append(args, "-panic-unwind=none")
+	}
+	args = append(args, "-stack-size="+stack)
 	if gc != "" {
 		args = append(args, "-gc="+gc)
 	}
