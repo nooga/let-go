@@ -363,10 +363,11 @@ func TestWasmLetgoSource(t *testing.T) {
 func TestTinyGoBuildArgs(t *testing.T) {
 	const wasmPath = "/tmp/out/app.wasm"
 	tests := []struct {
-		name      string
-		gc        string
-		buildTags string
-		want      []string
+		name       string
+		gc         string
+		buildTags  string
+		unwindNone bool
+		want       []string
 	}{
 		{
 			name: "defaults carry no -gc and no -tags",
@@ -392,12 +393,76 @@ func TestTinyGoBuildArgs(t *testing.T) {
 			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
 				"-stack-size=1MB", "-gc=precise", "-tags", "gogen_ir", "-o", wasmPath, "."},
 		},
+		{
+			name:       "-panic-unwind=none follows -panic",
+			unwindNone: true,
+			want: []string{"build", "-target=wasm", "-no-debug", "-opt=z", "-panic=trap",
+				"-panic-unwind=none", "-stack-size=1MB", "-o", wasmPath, "."},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tinyGoBuildArgs(wasmPath, "z", "trap", "1MB", tt.gc, tt.buildTags)
+			got := tinyGoBuildArgs(wasmPath, "z", "trap", "1MB", tt.gc, tt.buildTags, tt.unwindNone)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("tinyGoBuildArgs() =\n  %q\nwant\n  %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTinyGoPanicUnwindValues pins how the -panic-unwind values are read from
+// tinygo's build help. The fixtures are the lines each release prints: 0.42
+// has no flag, 0.43 offers no "none", 0.44 does. -panic's own value list sits
+// nearby and must not be mistaken for it.
+func TestTinyGoPanicUnwindValues(t *testing.T) {
+	const panicLine = "  -panic string\n    \tpanic strategy (print, trap) (default \"print\")\n"
+	tests := []struct {
+		name string
+		help string
+		want []string
+	}{
+		{"0.42 has no flag", panicLine + "  -port string\n", nil},
+		{"0.43 lists no none", panicLine +
+			"  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit)\n", []string{"auto", "explicit"}},
+		{"0.44 lists none", panicLine +
+			"  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit, none)\n", []string{"auto", "explicit", "none"}},
+		{"no tinygo on PATH", "", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tinyGoPanicUnwindValues(tt.help); !slices.Equal(got, tt.want) {
+				t.Errorf("tinyGoPanicUnwindValues() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTinyGoUnwindDecision pins which builds get -panic-unwind=none and which
+// get the 0.43 warning: only trap mode qualifies, and only a tinygo whose help
+// lists "none" gets the flag.
+func TestTinyGoUnwindDecision(t *testing.T) {
+	const (
+		help042 = "  -panic string\n    \tpanic strategy (print, trap) (default \"print\")\n"
+		help043 = help042 + "  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit)\n"
+		help044 = help042 + "  -panic-unwind string\n    \tpanic unwind strategy (auto, explicit, none)\n"
+	)
+	tests := []struct {
+		name, panicMode, help string
+		unwindNone, warn      bool
+	}{
+		{"0.42 trap", "trap", help042, false, false},
+		{"0.43 trap warns", "trap", help043, false, true},
+		{"0.44 trap gets none", "trap", help044, true, false},
+		{"0.44 print keeps unwinding", "print", help044, false, false},
+		{"0.43 print keeps unwinding", "print", help043, false, false},
+		{"no tinygo help", "trap", "", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unwindNone, warn := tinyGoUnwindDecision(tt.panicMode, tt.help)
+			if unwindNone != tt.unwindNone || warn != tt.warn {
+				t.Errorf("tinyGoUnwindDecision(%q, help) = (%v, %v), want (%v, %v)",
+					tt.panicMode, unwindNone, warn, tt.unwindNone, tt.warn)
 			}
 		})
 	}
