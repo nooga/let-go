@@ -127,10 +127,11 @@ it finds, as `-w` does.
 
 The program's own namespaces lower with it. Starting from the files you pass,
 `lg compile` follows each `require` and lowers every namespace whose source
-file is under the same source root as a file you passed: the search-path entry
-it was found under, or its own directory if it is under none. Built-in
-namespaces never count, and neither does a file on another search-path entry,
-such as `vendor/` or an lgx dependency: those run from bytecode. The entry is
+file is under the same source root as a file you passed: the most specific
+search-path entry that contains it, or its own directory if it is under none.
+Built-in namespaces never count, and neither does a file on another
+search-path entry, such as `vendor/` or an lgx dependency, even when a broader
+entry such as `.` also contains it: those run from bytecode. The entry is
 always taken from the files you passed. When the build adds a namespace or
 leaves one on the VM, it says which:
 

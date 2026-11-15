@@ -196,6 +196,8 @@
 (deftest program-roots-are-the-inputs-search-roots
   (testing "a dependency on another search-path entry (vendor/) is outside the roots"
     (is (= ["/p/src"] (lg.compiler/program-roots ["/p/src/app/main.lg"] ["/p/src" "/p/vendor"]))))
+  (testing "a broad entry such as . does not claim a sibling entry's files"
+    (is (= ["/p/src"] (lg.compiler/program-roots ["/p/src/app/main.lg"] ["/p" "/p/src" "/p/vendor"]))))
   (testing "an input under no search-path entry roots its own directory"
     (is (= ["/q/app"] (lg.compiler/program-roots ["/q/app/main.lg"] ["/p/src"]))))
   (testing "a root of / contains every absolute path"

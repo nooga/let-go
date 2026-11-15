@@ -116,13 +116,18 @@
 
 (defn program-roots
   "The roots program-files takes, for absolute input paths and the absolute
-   search-path entries."
+   search-path entries: for each input, the most specific entry that contains
+   it, or its own directory when none does. Only the most specific one, so a
+   broad entry such as . does not pull a sibling entry like vendor/ into the
+   program."
   [inputs search-roots]
   (vec (distinct
-        (mapcat (fn [f]
-                  (let [found (filter (fn [r] (under-root? [r] f)) search-roots)]
-                    (if (seq found) found [(clojure.string/replace f #"/[^/]*$" "")])))
-                inputs))))
+        (map (fn [f]
+               (let [found (filter (fn [r] (under-root? [r] f)) search-roots)]
+                 (if (seq found)
+                   (apply max-key count found)
+                   (clojure.string/replace f #"/[^/]*$" ""))))
+             inputs))))
 
 (defn- program-summary
   "The line a whole-program build prints, or nil when it neither added a
