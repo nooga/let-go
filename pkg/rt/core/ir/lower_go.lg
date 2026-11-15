@@ -614,7 +614,7 @@
 
 (def ^:dynamic *private-name-overrides*
   "Per-namespace renames for the private top-level fns that cannot keep their
-   plain go-name: {:names {source-name-string -> Go name} :bare #{Go name}}
+   plain go-name: {:names {source-name-string -> Go name} :declared #{Go identifier}}
    (see build-private-name-map). Bound
    around a namespace's collect and lower passes, like
    *export-name-overrides*; nil means every private fn keeps go-name."
@@ -3667,11 +3667,10 @@
   ;; A name is coalescable only when it is (1) interference-safe and (2) every
   ;; version shares ONE Go type — versions of differing type (e.g. the and/or
   ;; macro temps, bool vs vm.Value) cannot share a single mutable local.
-  (let [;; A renamed single-arity private fn is reserved as well: live renamed
+  (let [;; What a renamed private fn declares is reserved as well: live renamed
         ;; to live_ must not be shadowed by a local live-, which munges to the
-        ;; same name. A multi-arity one declares only live__<arity> members, so
-        ;; the bare name stays free for the local.
-        reserved (into (imported-pkg-aliases) (:bare *private-name-overrides*))
+        ;; same name, nor a renamed clause-list fn's step__1 by a local step--1.
+        reserved (into (imported-pkg-aliases) (:declared *private-name-overrides*))
         unsafe (into (oos-unsafe-names f) (oos-captured-names f))
         nids   (oos-all-nids f)
         name-types (reduce (fn [m nid]
@@ -4627,16 +4626,6 @@
                         (val entry)))
                 (rt/native-modules))))
 
-(defn- names-a-package?
-  "True when a private fn with Go name cand would declare an identifier in
-   reserved: as cand itself, or as a multi-arity member cand_<arity>[v]."
-  [reserved cand]
-  (or (contains? reserved cand)
-      (let [prefix (str cand "_")]
-        (boolean (some (fn [r] (and (clojure.string/starts-with? r prefix)
-                                    (re-matches #"[0-9]+v?" (subs r (count prefix)))))
-                       reserved)))))
-
 (defn- form-private-name
   "Source-name string of a top-level form that becomes an UNEXPORTED Go func
    (defn-, or defn with ^:private), else nil."
@@ -4650,52 +4639,75 @@
         (= head 'defn)  (when (:private (nth parts 1)) (str nm))
         :else nil))))
 
-(defn- form-declares-bare-name?
-  "True when a private fn form has one params vector, so its Go func is
-   declared under the fn's name itself and not as <name>_<arity> members."
+(defn- strip-form-meta
+  "x without the (with-meta x {…}) wrappers a raw form carries reader metadata
+   in, as on a return-hinted params vector."
+  [x]
+  (if (and (seq? x) (= 'with-meta (first x)))
+    (recur (second x))
+    x))
+
+(defn- form-declared-suffixes
+  "What a private fn form's Go funcs add to the fn's Go name: [\"\"] for one
+   params vector, which declares the name itself, and _<arity>[v] per clause
+   for the clause-list spelling, which declares only those members."
   [form]
-  (vector? (first (drop-while (fn [x] (or (string? x) (map? x)))
-                              (nnext form)))))
+  (let [body  (drop-while (fn [x] (or (string? x) (map? x))) (nnext form))
+        head  (strip-form-meta (first body))]
+    (if (vector? head)
+      [""]
+      (keep (fn [clause]
+              (let [params (when (seq? clause) (strip-form-meta (first clause)))]
+                (when (vector? params)
+                  (str "_" (count (remove (fn [p] (= '& p)) params))
+                       (if (some (fn [p] (= '& p)) params) "v" "")))))
+            body))))
 
 (defn build-private-name-map
-  "Deterministic {:names {source-name -> Go name} :bare #{Go name}} for the
-   private fns of a namespace
-   that would otherwise share an identifier with a package the file can import.
-   A file-level func may not do that: (defn- live …) beside [app.live] lowered
-   to `func live` and `import \".../live\"`, which go build rejects. Each such
-   fn takes trailing underscores until its name is neither a package's nor
-   another private fn's. A namespace with no such fn gets an empty map, so its
-   output is unchanged. :bare holds the new names that are declared as written
-   (single-arity fns), which coalesce-map keeps locals off.
+  "Deterministic {:names {source-name -> Go name} :declared #{Go identifier}}
+   for the private fns of a namespace that would otherwise declare an
+   identifier a package the file can import already has. A file-level func may
+   not do that: (defn- live …) beside [app.live] lowered to `func live` and
+   `import \".../live\"`, which go build rejects. Each such fn takes trailing
+   underscores until no identifier it declares is a package's or another
+   private fn's. A fn is judged by what it declares: a clause-list fn named
+   like a package declares only <name>_<arity> members, so it keeps its name.
+   A namespace with no such fn gets an empty map, so its output is unchanged.
+   :declared holds every identifier the renamed fns declare, which
+   coalesce-map keeps locals off.
 
    The reserved set is every package of the program, not only this file's
    imports: a namespace does not record what it requires without an alias, and
    the imports are known only after the bodies are lowered."
   [forms]
   (let [reserved (reserved-pkg-names)
+        suffixes (reduce (fn [m form]
+                           (if-let [nm (form-private-name form)]
+                             (update m nm (fnil into #{}) (form-declared-suffixes form))
+                             m))
+                         {} forms)
         names    (distinct (keep form-private-name forms))
-        bare?    (set (keep (fn [form]
-                              (when (form-declares-bare-name? form)
-                                (form-private-name form)))
-                            forms))]
+        idents   (fn [nm base] (map (fn [sfx] (str base sfx)) (get suffixes nm)))
+        clashes? (fn [taken nm base] (some (fn [id] (contains? taken id)) (idents nm base)))]
     (select-keys
       (reduce
         (fn [acc nm]
-          (let [base (go-name nm)]
-            (if (names-a-package? reserved base)
-              ;; Against the siblings too, members included: live_ would emit
-              ;; live__1 for its arity-1 member, the name of a sibling live--1.
-              (let [cand (loop [c (str base "_")]
-                           (if (names-a-package? (into reserved (:taken acc)) c)
-                             (recur (str c "_"))
-                             c))]
-                {:names (assoc (:names acc) nm cand)
-                 :bare  (if (bare? nm) (conj (:bare acc) cand) (:bare acc))
-                 :taken (conj (:taken acc) cand)})
-              acc)))
-        {:names {} :bare #{} :taken (set (map go-name names))}
+          (if (clashes? reserved nm (go-name nm))
+            ;; Against the siblings too: live_ must not be a sibling spelled
+            ;; live-, nor declare live__1 beside a sibling's own live__1.
+            (let [cand (loop [c (str (go-name nm) "_")]
+                         (if (clashes? (into reserved (:taken acc)) nm c)
+                           (recur (str c "_"))
+                           c))
+                  mine (idents nm cand)]
+              {:names    (assoc (:names acc) nm cand)
+               :declared (into (:declared acc) mine)
+               :taken    (into (:taken acc) mine)})
+            acc))
+        {:names {} :declared #{}
+         :taken (set (mapcat (fn [nm] (idents nm (go-name nm))) names))}
         names)
-      [:names :bare])))
+      [:names :declared])))
 
 (defn lower-method [f recv-type method-name]
   "Lower an already-built+optimized IR fn as a Go receiver method using the

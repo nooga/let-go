@@ -298,16 +298,23 @@ func TestLgCompileCommand(t *testing.T) {
 	// by ^:private, which a raw form carries as a with-meta list. The fixture
 	// also has the ways a rename can land on another name: a sibling already
 	// spelled live-, a local spelled live-, and a multi-arity step whose
-	// arity-1 member would be step_1, the package of clash.step-1.
+	// arity-1 member would be step_1, the package of clash.step-1. clash.arity
+	// has the opposite case: a clause-list rt declares only rt_1 and rt_2, so
+	// it keeps its name, and a local rt--1 beside it still builds.
 	t.Run("a private fn named like a package the file imports", func(t *testing.T) {
 		src := map[string]string{
 			"clash/live.lg":     "(ns clash.live)\n(defn start [] :started)\n",
 			"clash/director.lg": "(ns clash.director)\n(defn make [x] [:made x])\n",
 			"clash/step_1.lg":   "(ns clash.step-1)\n(defn advance [x] [:step x])\n",
+			"clash/arity.lg": `(ns clash.arity)
+(defn- rt ([x] (inc x)) ([x y] (+ x y)))
+(defn probe [x] (let [rt--1 (inc x)] [rt--1 (rt x) (rt x 1)]))
+`,
 			"clash/app.lg": `(ns clash.app
   (:require [clash.live :as live]
             [clash.director]
-            [clash.step-1 :as s1]))
+            [clash.step-1 :as s1]
+            [clash.arity :as arity]))
 (defn- live [] (live/start))
 (defn- live- [] :dash)
 (defn- director
@@ -323,6 +330,7 @@ func TestLgCompileCommand(t *testing.T) {
 (defn ^:private builtins [x] (count x))
 (defn- shadow [live-] [live- (live)])
 (defn- shadow-multi [x] (let [director- (inc x)] [director- (director) (director 2)]))
+(defn- shadow-member [x] (let [step--1 (inc x)] [step--1 (step 1)]))
 (defn- init [x] (count x))
 (defn- len [x] (count x))
 (defn- error [x] (str "e" x))
@@ -332,12 +340,13 @@ func TestLgCompileCommand(t *testing.T) {
 (defn -main []
   (println (live) (live-) (director) (director 2) (step 1) (step 1 2) (rt 1) (vm 2) (math 1))
   (println (corefns [7 8]) (builtins [1 2 3]) (shadow :local))
-  (println (shadow-multi 1) (init [1]) (len [1 2]) (error 1) (string 2) (foo?) (foo-qmark)))
+  (println (shadow-multi 1) (init [1]) (len [1 2]) (error 1) (string 2) (foo?) (foo-qmark))
+  (println (shadow-member 1) (arity/probe 10)))
 (when-not *compiling-aot* (-main))
 `,
 		}
 		var files []string
-		for _, name := range []string{"clash/live.lg", "clash/director.lg", "clash/step_1.lg", "clash/app.lg"} {
+		for _, name := range []string{"clash/live.lg", "clash/director.lg", "clash/step_1.lg", "clash/arity.lg", "clash/app.lg"} {
 			p := filepath.Join(fix, name)
 			if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 				t.Fatal(err)
@@ -355,7 +364,7 @@ func TestLgCompileCommand(t *testing.T) {
 		if err != nil || exit != 0 {
 			t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
 		}
-		if want := ":started :dash [:made 1] [:made 2] [:step 1] [1 2] 2 vm2 +Inf\n7 3 [:local :started]\n[2 [:made 1] [:made 2]] 1 2 e1 s2 1 2\n"; string(stdout) != want {
+		if want := ":started :dash [:made 1] [:made 2] [:step 1] [1 2] 2 vm2 +Inf\n7 3 [:local :started]\n[2 [:made 1] [:made 2]] 1 2 e1 s2 1 2\n[2 [:step 1]] [11 11 11]\n"; string(stdout) != want {
 			t.Fatalf("stdout %q, want %q; stderr=%q", stdout, want, stderr)
 		}
 	})
