@@ -1,0 +1,30 @@
+;; Core calling core over nested maps: assoc-in, get-in, select-keys, zipmap.
+;; No user function is called from inside a core function.
+(ns perfc.maps)
+
+(defn build [n]
+  (loop [i 0 m {}]
+    (if (< i n)
+      (recur (inc i) (assoc-in m [(mod i 50) (mod i 7) :v] i))
+      m)))
+
+(defn read-back [m n]
+  (loop [i 0 acc 0]
+    (if (< i n)
+      (recur (inc i) (+ acc (or (get-in m [(mod i 50) (mod i 7) :v]) 0)))
+      acc)))
+
+(defn run []
+  (let [m (build 20000)]
+    (+ (read-back m 20000)
+       (count (select-keys m (range 25)))
+       (count (zipmap (range 200) (reverse (range 200)))))))
+
+(defn -main [& _]
+  (loop [i 0 best nil out nil]
+    (if (< i 7)
+      (let [t0 (System/nanoTime) r (run) dt (- (System/nanoTime) t0)]
+        (recur (inc i) (if (or (nil? best) (< dt best)) dt best) r))
+      (println "PERF" "maps" (quot best 1000) out))))
+
+(when-not *compiling-aot* (-main))
