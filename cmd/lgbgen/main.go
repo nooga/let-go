@@ -13,6 +13,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -388,7 +389,7 @@ func main() {
 	targetGo := false
 	targetBoth := false
 	outPath := "pkg/rt/core_compiled.lgb"
-	goOutDir := "pkg/rt/core_go_lowered"
+	goOutDir := coreLoweredDir
 	var target string
 	var cpuProfilePath string
 	var memProfilePath string
@@ -405,6 +406,10 @@ func main() {
 	fs.StringVar(&cpuProfilePath, "cpuprofile", "", "write Go CPU profile for the lgbgen process")
 	fs.StringVar(&memProfilePath, "memprofile", "", "write Go allocation profile (allocs) for the lgbgen process")
 	fs.StringVar(&codeDir, "code-dir", "", "base dir for generated gogen_ir wireup files (default: repo root)")
+	var goOpts goTargetOpts
+	var nsList string
+	fs.StringVar(&goOpts.importPrefix, "import-prefix", "", "with --target=go <out-dir>: Go import path of <out-dir>, for a tree lowered into another module (default: let-go's own core_go_lowered)")
+	fs.StringVar(&nsList, "ns", "", "with --target=go <out-dir>: comma-separated namespaces to lower (default: every lowerable namespace)")
 	// --compress DEFLATE-compresses the bundle body. Default OFF for the
 	// committed core: it trims the binary but adds work and allocations to every
 	// process start (the core is decoded on every boot), and that tradeoff is a
@@ -426,6 +431,14 @@ func main() {
 	}
 
 	args := fs.Args()
+	outDirArg := ""
+	if len(args) > 0 {
+		outDirArg = args[0]
+	}
+	if err := goOpts.setNamespaces(nsList, targetGo, outDirArg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	for i := 0; i < len(args); i++ {
 		if targetGo && i == 0 {
 			goOutDir = args[i]
@@ -593,10 +606,10 @@ func main() {
 	// ir and lowers the whole program to Go.
 	if targetGo {
 		compileToolsForLowering()
-		runGoTarget(goOutDir, codeDir)
+		runGoTarget(goOutDir, codeDir, goOpts)
 		// Skip the manifest refresh when lowering into a throwaway codeDir —
 		// the canonical generated.sums must only move under a real regen.
-		if codeDir == "" {
+		if codeDir == "" && !goOpts.foreign() {
 			refreshManifest()
 		}
 		return
@@ -604,7 +617,7 @@ func main() {
 	if targetBoth {
 		writeBundle(outPath, consts, nsChunks, bundleOrder, nsConstRanges, compress)
 		compileToolsForLowering()
-		runGoTarget(goOutDir, codeDir)
+		runGoTarget(goOutDir, codeDir, goTargetOpts{})
 		return
 	}
 
@@ -879,7 +892,147 @@ func writeGeneratedFile(path string, data []byte) error {
 // runGoTarget re-pipelines each namespace's defn forms through the Go
 // lowering pipeline and writes .go source files to outDir. The gogen_ir
 // wireup files go under codeDir ("" = repo root, the canonical target).
-func runGoTarget(outDir, codeDir string) {
+// coreLoweredDir is let-go's own lowered tree, relative to the repo root, and
+// coreLoweredImportPrefix is where it is imported from.
+const (
+	coreLoweredDir          = "pkg/rt/core_go_lowered"
+	coreLoweredImportPrefix = "github.com/nooga/let-go/" + coreLoweredDir + "/"
+)
+
+// goTargetOpts shapes a --target=go run that lowers into another module: the
+// tree's import prefix and the namespaces to lower. The zero value is let-go's
+// own core_go_lowered, every lowerable namespace.
+type goTargetOpts struct {
+	importPrefix string
+	onlyNS       []string
+}
+
+// foreign reports whether the tree is for a module other than let-go. Such a
+// tree gets no gogen_ir wireup files and no manifest refresh: both describe
+// let-go's own build.
+func (o goTargetOpts) foreign() bool {
+	return o.importPrefix != "" || len(o.onlyNS) > 0
+}
+
+// setNamespaces records the --ns list and rejects a foreign tree that has
+// nowhere of its own to go: one with another import prefix, or with
+// namespaces left out, is not let-go's core_go_lowered and must never be
+// installed over it. outDir is the <out-dir> argument, "" when there is none.
+func (o *goTargetOpts) setNamespaces(nsList string, targetGo bool, outDir string) error {
+	for _, name := range strings.Split(nsList, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			o.onlyNS = append(o.onlyNS, name)
+		}
+	}
+	if nsList != "" && len(o.onlyNS) == 0 {
+		return errors.New("--ns names no namespace")
+	}
+	if !o.foreign() {
+		return nil
+	}
+	if !targetGo || outDir == "" {
+		return errors.New("--import-prefix and --ns need --target=go and an explicit <out-dir>")
+	}
+	// Naming the canonical directory explicitly is the same mistake: the
+	// install would replace let-go's tree and leave its wireup and manifest
+	// describing the old one. A directory above or below it is no better,
+	// since the install first removes every generated file under <out-dir>.
+	if dirsOverlap(outDir, coreLoweredDir) {
+		return fmt.Errorf("--import-prefix and --ns cannot write to %s: it is, holds, or is inside %s, let-go's own lowered tree; give another <out-dir>", outDir, coreLoweredDir)
+	}
+	return nil
+}
+
+// dirsOverlap reports whether one of two directories is the other or lies
+// inside it.
+func dirsOverlap(a, b string) bool {
+	return dirWithin(a, b) || dirWithin(b, a)
+}
+
+// dirWithin reports whether path is dir or lies inside it. Where the paths
+// exist they are compared as files, so a symlink or a differently cased
+// spelling of the same directory still matches; a path that does not exist
+// yet is compared by its nearest existing ancestor and then by name.
+func dirWithin(path, dir string) bool {
+	absPath, err1 := filepath.Abs(path)
+	absDir, err2 := filepath.Abs(dir)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	dirInfo, dirErr := os.Stat(absDir)
+	for p := absPath; ; p = filepath.Dir(p) {
+		if dirErr == nil {
+			if info, err := os.Stat(p); err == nil && os.SameFile(info, dirInfo) {
+				return true
+			}
+		} else if p == absDir {
+			return true
+		}
+		if p == filepath.Dir(p) {
+			return false
+		}
+	}
+}
+
+// nsSelection applies --ns while the embedded namespaces are walked. The
+// caller links exactly the packages it names, so a name that is unknown, or
+// that cannot lower, is an error and not a smaller tree.
+type nsSelection struct {
+	wanted map[string]bool
+	found  map[string]bool
+}
+
+func newNSSelection(names []string) *nsSelection {
+	s := &nsSelection{wanted: map[string]bool{}, found: map[string]bool{}}
+	for _, n := range names {
+		s.wanted[n] = true
+	}
+	return s
+}
+
+// admit reports whether namespace name is to be lowered. With no --ns list
+// every namespace is; src is the namespace's source, read for its directives.
+func (s *nsSelection) admit(name, src string) (bool, error) {
+	if len(s.wanted) == 0 {
+		return true, nil
+	}
+	if !s.wanted[name] {
+		return false, nil
+	}
+	s.found[name] = true
+	if hasLgbgenSkipGoDirective(src) {
+		return false, fmt.Errorf("--ns %s: namespace is marked lgbgen:skip-go and does not lower", name)
+	}
+	return true, nil
+}
+
+// named reports whether name was asked for with --ns.
+func (s *nsSelection) named(name string) bool { return s.wanted[name] }
+
+// missing names the requested namespaces that were never seen.
+func (s *nsSelection) missing() error {
+	var names []string
+	for n := range s.wanted {
+		if !s.found[n] {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return fmt.Errorf("--ns: no embedded namespace named %s", strings.Join(names, ", "))
+}
+
+// prefix is the import prefix with exactly one trailing slash.
+func (o goTargetOpts) prefix() string {
+	if o.importPrefix == "" {
+		return coreLoweredImportPrefix
+	}
+	return strings.TrimRight(o.importPrefix, "/") + "/"
+}
+
+func runGoTarget(outDir, codeDir string, opts goTargetOpts) {
 	var failed []string
 	var generated []string // Go package names successfully written, for the wireup files.
 	// EPIC-012/ITER-0025: lower the whole program in one call so cross-package
@@ -936,10 +1089,17 @@ func runGoTarget(outDir, codeDir string) {
 	}
 	var goSpecs []goNsSpec
 	var specVals []vm.Value // parallel Lisp specs: [pkg-name ns-sym forms import-path]
-	const loweredImportPrefix = "github.com/nooga/let-go/pkg/rt/core_go_lowered/"
+	loweredImportPrefix := opts.prefix()
+	selection := newNSSelection(opts.onlyNS)
 	for _, ns := range embeddedNS {
 		src := ns.src
 		if src == "" {
+			continue
+		}
+		if keep, err := selection.admit(ns.name, src); err != nil {
+			fmt.Fprintf(os.Stderr, "lgbgen: %v\n", err)
+			os.Exit(1)
+		} else if !keep {
 			continue
 		}
 		// Namespaces marked lgbgen:skip-go are bundled (bytecode) but not
@@ -982,6 +1142,12 @@ func runGoTarget(outDir, codeDir string) {
 		}
 
 		if len(defnForms) == 0 {
+			// Named in --ns, it would be a package the caller links and never
+			// gets.
+			if selection.named(ns.name) {
+				fmt.Fprintf(os.Stderr, "lgbgen: --ns %s: namespace has no functions to lower\n", ns.name)
+				os.Exit(1)
+			}
 			fmt.Printf("  skip %-20s (no defn forms)\n", ns.name)
 			continue
 		}
@@ -1013,6 +1179,11 @@ func runGoTarget(outDir, codeDir string) {
 			relDir:    relDir,
 			defnCount: len(defnForms),
 		})
+	}
+
+	if err := selection.missing(); err != nil {
+		fmt.Fprintf(os.Stderr, "lgbgen: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Whole-program lowering in one call (cross-package registry resolved inside).
@@ -1076,7 +1247,9 @@ func runGoTarget(outDir, codeDir string) {
 		fmt.Fprintf(os.Stderr, "lgbgen: install lowered tree into %s: %v\n", realOutDir, err)
 		os.Exit(1)
 	}
-	writeGogenWireup(generated, codeDir)
+	if !opts.foreign() {
+		writeGogenWireup(generated, codeDir)
+	}
 }
 
 // installGeneratedTree moves the staged generation into the real output dir:
@@ -1170,7 +1343,7 @@ func writeGogenWireup(pkgNames []string, codeDir string) {
 	sorted := append([]string(nil), pkgNames...)
 	sort.Strings(sorted)
 
-	const importPrefix = "github.com/nooga/let-go/pkg/rt/core_go_lowered/"
+	const importPrefix = coreLoweredImportPrefix
 	var importBlock strings.Builder
 	for _, p := range sorted {
 		fmt.Fprintf(&importBlock, "\t_ \"%s%s\"\n", importPrefix, p)

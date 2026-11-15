@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -80,6 +81,102 @@ func TestLgCompileCommand(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(work, f)); err != nil {
 				t.Errorf("-work dir is missing %s: %v", f, err)
 			}
+		}
+	})
+
+	// -lowered-core lowers let-go's own core into the generated module and
+	// links it. The program reports how a core function prints: a lowered one
+	// is a native fn, and it has to give the VM's answers.
+	t.Run("links the lowered core", func(t *testing.T) {
+		probe := filepath.Join(fix, "coreprobe.lg")
+		if err := os.WriteFile(probe, []byte(`(ns coreprobe (:require [clojure.walk :as walk]))
+(defn -main []
+  (println (boolean (re-find #"native" (str filterv))))
+  (println (filterv odd? [1 2 3]))
+  (println (filterv (reify IFn (-invoke [_ args] (pos? (first args)))) [1 -1 2]))
+  (println (walk/postwalk (fn [x] (if (number? x) (inc x) x)) {:a [1 2]})))
+(when-not *compiling-aot* (-main))
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		const want = "[1 3]\n[1 2]\n{:a [2 3]}\n"
+		for _, tc := range []struct {
+			name   string
+			flags  []string
+			native string
+		}{
+			{"without the flag", nil, "false\n"},
+			{"with the flag", []string{"-lowered-core"}, "true\n"},
+		} {
+			work := t.TempDir()
+			exe := filepath.Join(t.TempDir(), "coreprobe.native")
+			args := append([]string{"compile", "-o", exe, "-work", work}, tc.flags...)
+			if out, err := runCmd(ctx, t, bin, fix, append(args, probe), env...); err != nil {
+				t.Fatalf("%s: lg compile: %v\n%s", tc.name, err, out)
+			}
+			stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+			if err != nil || exit != 0 {
+				t.Fatalf("%s: run: err=%v exit=%d stdout=%q stderr=%q", tc.name, err, exit, stdout, stderr)
+			}
+			if got := string(stdout); got != tc.native+want {
+				t.Fatalf("%s: stdout %q, want %q", tc.name, got, tc.native+want)
+			}
+			_, statErr := os.Stat(filepath.Join(work, "lgcore", "core", "core.go"))
+			if lowered := tc.flags != nil; lowered != (statErr == nil) {
+				t.Fatalf("%s: lgcore/core/core.go present=%v", tc.name, statErr == nil)
+			}
+		}
+
+		// One kept work directory, named relative to the cwd, built with the
+		// flag and then without it: the second binary must be back on the
+		// bytecode core, not still linking the tree the first build left.
+		exe := filepath.Join(t.TempDir(), "coreprobe.native")
+		for _, tc := range []struct {
+			flags  []string
+			native string
+		}{{[]string{"-lowered-core"}, "true\n"}, {nil, "false\n"}} {
+			args := append([]string{"compile", "-o", exe, "-work", "kept-work"}, tc.flags...)
+			if out, err := runCmd(ctx, t, bin, fix, append(args, probe), env...); err != nil {
+				t.Fatalf("relative -work, flags %v: lg compile: %v\n%s", tc.flags, err, out)
+			}
+			stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+			if err != nil || exit != 0 {
+				t.Fatalf("relative -work, flags %v: run: err=%v exit=%d stderr=%q", tc.flags, err, exit, stderr)
+			}
+			if got := string(stdout); got != tc.native+want {
+				t.Fatalf("relative -work, flags %v: stdout %q, want %q", tc.flags, got, tc.native+want)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(fix, "kept-work", "kept-work")); err == nil {
+			t.Fatal("the core was lowered into kept-work/kept-work: the relative -work path was resolved twice")
+		}
+
+		// Cross-compiling: lgbgen still has to be built for, and run on, this
+		// machine. Only the build is checked; the binary is for another OS.
+		cross := filepath.Join(t.TempDir(), "coreprobe.cross")
+		target := "linux"
+		if runtime.GOOS == "linux" {
+			target = "darwin"
+		}
+		crossEnv := append(append([]string(nil), env...), "GOOS="+target, "GOARCH=arm64", "CGO_ENABLED=0")
+		if out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-lowered-core", "-o", cross, probe}, crossEnv...); err != nil {
+			t.Fatalf("cross-compiling to %s with -lowered-core: %v\n%s", target, err, out)
+		}
+
+		// A program namespace lgcore.* lowers to the directory the core needs.
+		clash := filepath.Join(fix, "lgcore", "core.lg")
+		if err := os.MkdirAll(filepath.Dir(clash), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(clash, []byte("(ns lgcore.core)\n(defn -main [] (println 42))\n(when-not *compiling-aot* (-main))\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-lowered-core", "-o", exe, clash}, env...)
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+			t.Fatalf("lgcore.* program with -lowered-core: err=%v, want exit 1\n%s", err, out)
+		}
+		if !bytes.Contains([]byte(out), []byte("a program package is already there")) {
+			t.Fatalf("missing the lgcore clash diagnostic:\n%s", out)
 		}
 	})
 

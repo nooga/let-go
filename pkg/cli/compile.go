@@ -112,6 +112,15 @@ func compileHost() vm.Value {
 		vm.Keyword("go-build-readonly"), hostFn("go-build-readonly", 2, func(s []string) error {
 			return goBuild(s[0], s[1], true)
 		}),
+		vm.Keyword("clear-lowered-core"), hostFn("clear-lowered-core", 1, func(s []string) error {
+			return clearLoweredCore(s[0])
+		}),
+		vm.Keyword("lower-core"), hostFn("lower-core", 2, func(s []string) error {
+			return lowerCoreInto(s[0], s[1], false)
+		}),
+		vm.Keyword("lower-core-readonly"), hostFn("lower-core-readonly", 2, func(s []string) error {
+			return lowerCoreInto(s[0], s[1], true)
+		}),
 		vm.Keyword("make-temp-dir"), vm.NewCtxNativeFn("make-temp-dir", func(_ *vm.ExecContext, _ []vm.Value) (vm.Value, error) {
 			dir, err := os.MkdirTemp("", "lg-compile-*")
 			if err != nil {
