@@ -185,6 +185,13 @@ from the bytecode because the native frame calls it. Other top-level forms,
 including guarded initialization in required namespaces, run with
 `*compiling-aot*` false at runtime. Ordinary `lg -c` keeps the entry call.
 
+`-entry-frame-entry` also works with `-w`. A web build normally replays its
+program, so the top-level `(-main)` starts before any Go overrides linked in
+with `-w-module` and `-import` are installed, and the program runs as
+bytecode. With `-entry-frame-entry app/-main`, the bundle loads the program,
+installs those overrides, and then calls the entry, so packages lowered by
+`lg compile` run as Go in the browser.
+
 `*in-wasm*` is `true` when running inside a WASM build.
 
 ## Project management with lgx

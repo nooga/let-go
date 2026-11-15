@@ -11,8 +11,9 @@ import (
 )
 
 // wasmMainTmpl is the generated main.go for a `lg -w` bundle: it decodes the
-// embedded program.lgb, runs each namespace chunk, then the main chunk. The
-// __LG_* markers are filled by RenderMain.
+// embedded program.lgb and runs the program, either by replaying its chunks
+// (wasmReplaySnippet) or through an entry frame (wasmEntryFrameSnippet). The
+// __LG_* markers are filled by RenderMain and RenderMainForEntryFrame.
 const wasmMainTmpl = `package main
 
 import (
@@ -81,7 +82,16 @@ func main() {
 		return
 	}
 
-	// The unit's TypeScope is active while its chunks run, so its defrecord
+__LG_RUN_PROGRAM__
+__LG_HOST_EVAL_BODY__
+}
+`
+
+// wasmReplaySnippet fills __LG_RUN_PROGRAM__ in the default bundle: it replays
+// each namespace chunk, then the main chunk, whose top-level forms start the
+// program. Nothing drains Go overrides here, so a bundle built this way runs
+// its program on the VM even when lowered packages are linked in.
+const wasmReplaySnippet = `	// The unit's TypeScope is active while its chunks run, so its defrecord
 	// and deftype forms adopt the types its constants decoded to.
 	run := func(chunk *vm.CodeChunk) error {
 		return vm.WithTypeScope(unit.Types, func() error {
@@ -104,10 +114,27 @@ func main() {
 
 	if err := run(unit.MainChunk); err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
+	}`
+
+// wasmEntryFrameSnippet fills __LG_RUN_PROGRAM__ when the bundle is built for
+// an entry frame (lg -w -entry-frame-entry): the program.lgb was compiled with
+// its top-level call to the entry omitted, so replaying it only installs
+// definitions. It follows the native entry frame lg compile generates:
+// LoadProgramNamespaces drains each namespace's Go overrides after replaying
+// it, so lowered functions linked in with -w-module/-import replace their
+// bytecode before anything runs, and only then is the entry invoked. The entry
+// is invoked through its Var, so a lowered entry runs as Go and an unlowered
+// one on the VM. A failing main chunk skips the entry but, as in the replay,
+// still reaches -w-host-eval's hooks.
+const wasmEntryFrameSnippet = `	if err := rt.LoadProgramNamespaces(unit); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return
 	}
-__LG_HOST_EVAL_BODY__
-}
-`
+	if err := rt.RunProgramMainChunk(unit); err != nil {
+		fmt.Fprint(os.Stderr, vm.FormatError(err))
+	} else if err := rt.InvokeProgramEntry(vm.NewExecContext(), __LG_ENTRY_NS__, __LG_ENTRY_NAME__, nil); err != nil {
+		fmt.Fprint(os.Stderr, vm.FormatError(err))
+	}`
 
 // wasmHostEvalSnippet is spliced into wasmMainTmpl at __LG_HOST_EVAL_BODY__ when
 // -w-host-eval is set. After the program's main chunk runs, it installs an
@@ -176,7 +203,23 @@ const wasmHostEvalSnippet = `	host := wasmhost.New(consts)
 // are removed whole, so the default bundle's generated main is byte-identical
 // to the pre-flag output.
 func RenderMain(storeID string, hostEval, audio bool) string {
+	return renderMain(storeID, hostEval, audio, wasmReplaySnippet)
+}
+
+// RenderMainForEntryFrame is RenderMain for a bundle whose program.lgb was
+// compiled with its top-level call to namespace/name omitted
+// (compiler.Context.CompileMultipleForEntryFrame). The generated main loads the
+// program, installing any Go overrides linked into the build, and then invokes
+// namespace/name itself.
+func RenderMainForEntryFrame(storeID string, hostEval, audio bool, namespace, name string) string {
+	run := strings.ReplaceAll(wasmEntryFrameSnippet, "__LG_ENTRY_NS__", strconv.Quote(namespace))
+	run = strings.ReplaceAll(run, "__LG_ENTRY_NAME__", strconv.Quote(name))
+	return renderMain(storeID, hostEval, audio, run)
+}
+
+func renderMain(storeID string, hostEval, audio bool, run string) string {
 	s := strings.ReplaceAll(wasmMainTmpl, "__LG_STORAGE_ID__", strconv.Quote(storeID))
+	s = strings.ReplaceAll(s, "__LG_RUN_PROGRAM__", run)
 	// pkg/audio's init binds its browser backend at the *audio* root, the way
 	// lg_boot_audio.go does for oto natively. Without it every audio/ call is
 	// a silent no-op, and the bundle links none of the mixer.

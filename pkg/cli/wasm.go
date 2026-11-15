@@ -234,7 +234,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, audio bool, storeID string, customShellTemplate string, moduleDir string, imports []string) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, audio bool, storeID string, customShellTemplate string, moduleDir string, imports []string, entryFrameEntry string) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	var chunk *vm.CodeChunk
@@ -244,7 +244,12 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 			return err
 		}
 		var cerr error
-		chunk, _, cerr = ctx.CompileMultiple(f)
+		if entryFrameEntry == "" {
+			chunk, _, cerr = ctx.CompileMultiple(f)
+		} else {
+			slash := strings.LastIndexByte(entryFrameEntry, '/')
+			chunk, _, cerr = ctx.CompileMultipleForEntryFrame(f, entryFrameEntry[:slash], entryFrameEntry[slash+1:])
+		}
 		f.Close()
 		return cerr
 	}); err != nil {
@@ -312,7 +317,12 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	if err := os.WriteFile(filepath.Join(srcDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval, audio)), 0644); err != nil {
+	mainSrc := wasmassets.RenderMain(storeID, hostEval, audio)
+	if entryFrameEntry != "" {
+		slash := strings.LastIndexByte(entryFrameEntry, '/')
+		mainSrc = wasmassets.RenderMainForEntryFrame(storeID, hostEval, audio, entryFrameEntry[:slash], entryFrameEntry[slash+1:])
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(mainSrc), 0644); err != nil {
 		return err
 	}
 	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
