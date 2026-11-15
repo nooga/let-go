@@ -221,8 +221,12 @@ func InvokeProgramEntryNoArgs(ec *vm.ExecContext, namespace, name string) error 
 	if err != nil {
 		return err
 	}
+	variadic := false
+	if vf, ok := fn.(interface{ IsVariadic() bool }); ok {
+		variadic = vf.IsVariadic()
+	}
 	var args []vm.Value
-	if vf, ok := fn.(interface{ IsVariadic() bool }); !(ok && vf.IsVariadic()) && fn.Arity() == 1 {
+	if !variadic && fn.Arity() == 1 {
 		args = []vm.Value{vm.EmptyVector}
 	}
 	_, err = ec.Invoke(fn, args)
