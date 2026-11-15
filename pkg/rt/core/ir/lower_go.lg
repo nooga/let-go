@@ -3229,7 +3229,11 @@
       (let [;; Need a local handle when the var is live OR we issue more than one
             ;; call against it (apply-meta and/or set-root).
             need-local (or live meta-x)
-            target     (if need-local (value-ident f nid) intern)
+            ;; The def's local is declared vm.Value, since the var is the
+            ;; expression's value; the calls below need the *vm.Var back.
+            target     (if need-local
+                         (gogen/type-assert (value-ident f nid) (gogen/type "*vm.Var"))
+                         intern)
             stmts      (cond-> []
                          need-local (conj (gogen/assign "=" (value-ident f nid) intern))
                          meta-x     (conj (gogen/expr-stmt
