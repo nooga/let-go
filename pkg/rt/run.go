@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync/atomic"
 
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/vm"
@@ -191,6 +192,53 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 		ApplyGoOverrides(ns)
 	}
 	return nil
+}
+
+// Set while an entry-frame binary loads: the entry var's current fn, the
+// wrapper stored in its place, and whether the wrapper was called.
+var (
+	programEntryFn      vm.Fn
+	programEntryWrapper vm.Value
+	programEntryRan     atomic.Bool
+)
+
+// WatchProgramEntry makes every fn bound to namespace/name record that it
+// was called, until ProgramEntryRan. The native frame calls it before
+// loading the program: a top-level call to the entry that the compiler
+// couldn't omit then runs during load, and the frame skips its own call
+// (#1072). Watching the var rather than the fn covers every way the entry
+// can be defined (defn, an alias, comp, *ir-compile*) and every call that
+// goes through the var.
+func WatchProgramEntry(namespace, name string) {
+	vm.SetRootHook(func(v *vm.Var, val vm.Value) vm.Value {
+		if v.VarName() != name || v.NS() != namespace {
+			return val
+		}
+		f, ok := val.(vm.Fn)
+		if !ok {
+			return val
+		}
+		w := vm.NewCtxNativeFn(name, func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+			programEntryRan.Store(true)
+			return ec.Invoke(f, args)
+		})
+		programEntryFn, programEntryWrapper = f, w
+		return w
+	})
+}
+
+// ProgramEntryRan ends the watch WatchProgramEntry started, puts the entry's
+// own fn back in its var, and reports whether the entry ran while the
+// program loaded.
+func ProgramEntryRan(namespace, name string) bool {
+	vm.SetRootHook(nil)
+	if ns := LookupNS(namespace); ns != nil {
+		if v := ns.LookupLocal(vm.Symbol(name)); v != nil && v.Root() == programEntryWrapper {
+			v.SetRoot(programEntryFn)
+		}
+	}
+	programEntryFn, programEntryWrapper = nil, nil
+	return programEntryRan.Load()
 }
 
 // InvokeProgramEntry looks up name ("-main" or "main") in the given

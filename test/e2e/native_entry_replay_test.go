@@ -22,16 +22,19 @@ func TestNativeEntryNamespaceReplay(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds lg and a native-entry Go binary")
 	}
-	for _, c := range []struct{ name, call, want string }{
-		{"guarded", "(when-not *compiling-aot*\n  (println \"app: runtime init ran\")\n  (-main))",
+	const run = "(defn -main [] (println (lib/helper 1)))\n"
+	for _, c := range []struct{ name, src, want string }{
+		{"guarded", run + "(when-not *compiling-aot*\n  (println \"app: runtime init ran\")\n  (-main))",
 			"libx: runtime init ran\napp: runtime init ran\n42\n"},
-		{"under when", "(when true (-main))",
+		{"under when", run + "(when true (-main))",
 			"libx: runtime init ran\n42\n"},
-		{"through an alias", "(let [f -main] (mapv (fn [_] (f)) [1]))",
+		{"through an alias", run + "(let [f -main] (mapv (fn [_] (f)) [1]))",
+			"libx: runtime init ran\n42\n"},
+		{"entry never called at the top level", run,
 			"libx: runtime init ran\n42\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			stdout, stderr := runNativeEntryApp(t, "(ns app (:require [libx.core :as lib]))\n(defn -main [] (println (lib/helper 1)))\n"+c.call+"\n")
+			stdout, stderr := runNativeEntryApp(t, "(ns app (:require [libx.core :as lib]))\n"+c.src+"\n")
 			if string(stdout) != c.want {
 				t.Fatalf("stdout %q, want %q; stderr=%q", stdout, c.want, stderr)
 			}

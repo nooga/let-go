@@ -87,7 +87,7 @@
         (is (< i-cl i-ns) "*command-line-args* must be published before replay")
         (is (< i-ns i-mc) "main-chunk replay must follow LoadProgramNamespaces")
         (is (< i-mc i-en) "main-chunk replay must precede the entry call")
-        (is (< i-mc (str/index-of src "if rt.ProgramEntryRan() {") i-en)
+        (is (< i-mc (str/index-of src "if rt.ProgramEntryRan(") i-en)
             "a run during load is checked after replay, before the entry call (#1072)")))
     (is (= 1 (count-lines-with src "rt.RunProgramMainChunk(unit)"))
         "emit the replay call exactly once")
@@ -102,8 +102,11 @@
     (is (< (str/index-of src "rt.LoadProgramNamespaces(unit)")
            (str/index-of src "rt.RunProgramMainChunk(unit)")))
     (is (< (str/index-of src "rt.RunProgramMainChunk(unit)")
-           (str/index-of src "rt.ProgramEntryRan()")
-           (str/index-of src "rt.InvokeProgramEntry(")))))
+           (str/index-of src "if rt.ProgramEntryRan(\"app\", \"-main\") {")
+           (str/index-of src "rt.InvokeProgramEntry(")))
+    (is (< (str/index-of src "rt.WatchProgramEntry(\"app\", \"-main\")")
+           (str/index-of src "rt.LoadProgramNamespaces(unit)"))
+        "the entry var is watched before the program loads (#1072)")))
 
 (deftest emit-private-bridge
   (let [raw (ef/find-program-entry '[(defn- main [] 1)])
