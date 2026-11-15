@@ -130,6 +130,28 @@ func TestCallerModule(t *testing.T) {
 		}
 	})
 
+	// Only app.lg is named. libx.core, which app requires, has its file under
+	// the program's directory, so it lowers too, and the build says so; before,
+	// it stayed bytecode without a word.
+	t.Run("lg compile lowers the namespaces the program requires", func(t *testing.T) {
+		mod := newModule(t, true)
+		exe := filepath.Join(t.TempDir(), "app.native")
+		out, err := runCmd(ctx, t, bin, fix, []string{"compile", "-o", exe, "-module", mod, app}, env...)
+		if err != nil {
+			t.Fatalf("lg compile: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "also lowering 1 required program namespace: libx.core") {
+			t.Errorf("build output does not name the required namespace it lowered:\n%s", out)
+		}
+		if _, err := os.Stat(filepath.Join(mod, "lgprogram", "libx", "core", "core.go")); err != nil {
+			t.Errorf("libx.core was not lowered: %v", err)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 || string(stdout) != "42\n" {
+			t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
+		}
+	})
+
 	t.Run("-w builds in the module", func(t *testing.T) {
 		mod := newModule(t, true)
 		before := readModFiles(t, mod)

@@ -123,8 +123,26 @@ One input must define `-main` or `main`, which the binary calls natively.
 Code that lowers runs as Go; what does not lower stays on the VM, and the build
 still succeeds. The generated module requires the let-go this `lg` came from: a
 release pins its own version, and a dev build uses `LETGO_SRC` or the checkout
-it finds, as `-w` does. Pass several files when the program's own namespaces
-should lower too; namespaces you don't pass run from bytecode.
+it finds, as `-w` does.
+
+The program's own namespaces lower with it. Starting from the files you pass,
+`lg compile` follows each `require` and lowers every namespace whose source
+file is under the same source root as a file you passed: the search-path entry
+it was found under, or its own directory if it is under none. Built-in
+namespaces never count, and neither does a file on another search-path entry,
+such as `vendor/` or an lgx dependency: those run from bytecode. The entry is
+always taken from the files you passed. When the build adds a namespace or
+leaves one on the VM, it says which:
+
+```
+lg compile: also lowering 1 required program namespace: app.util; left on the VM, outside the program's source roots: some.lib
+```
+
+Two things follow from lowering more of the program. A namespace whose
+lowered Go does not compile fails the build, where before it would have run
+from bytecode. And lowered functions call each other directly, so `with-redefs`
+on a function in a lowered namespace is not seen by its lowered callers. Pass
+`-named-only` to lower just the files you name.
 
 ### Lowering the core too
 

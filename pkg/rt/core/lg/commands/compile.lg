@@ -15,7 +15,7 @@
 
 (def usage
   (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir> [-import <pkg>]...]\n"
-       "                  [-lowered-core] <file.lg>...\n"
+       "                  [-named-only] [-lowered-core] <file.lg>...\n"
        "\n"
        "Compiles a let-go program to a standalone native binary through the Go\n"
        "backend. One input must define -main or main. Needs a Go toolchain.\n"
@@ -27,6 +27,9 @@
        "  -import <pkg> with -module: blank-import the Go package <pkg> into the\n"
        "                program, so its init() registers its namespaces; repeatable.\n"
        "                The module must already require it\n"
+       "  -named-only   lower only the files named; by default the program\n"
+       "                namespaces they require, found under the same source\n"
+       "                roots, are lowered too\n"
        "  -lowered-core also lower let-go's own core (clojure.core, clojure.walk)\n"
        "                to Go and link it, so calls into core run native code.\n"
        "                The first build lowers the core, which takes a few seconds\n"))
@@ -49,8 +52,8 @@
 
 (defn parse-args
   "argv → {:files [..] :out s :work-dir s :module-dir s :imports [..]
-   :lowered-core true}, {:help true}, or {:error msg}. :imports and
-   :lowered-core are present only when their flags are."
+   :lowered-core true :named-only true}, {:help true}, or {:error msg}. Each
+   key past :files is present only when its flag is."
   [argv]
   (loop [args (seq argv) opts {:files []}]
     (if-not args
@@ -60,6 +63,7 @@
           (contains? #{"-h" "-help" "--help"} a) {:help true}
           (= "--" a) (check-opts (update opts :files into (rest args)))
           (= "-lowered-core" a) (recur (next args) (assoc opts :lowered-core true))
+          (= "-named-only" a) (recur (next args) (assoc opts :named-only true))
           (contains? valued-flags a)
           (if-let [v (second args)]
             (recur (nnext args) ((get valued-flags a) opts v))
@@ -86,7 +90,8 @@
       (let [res (try
                   (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
                                              (:module-dir opts) (:imports opts)
-                                             (boolean (:lowered-core opts)) host)
+                                             (boolean (:lowered-core opts))
+                                             (boolean (:named-only opts)) host)
                   (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
         (if (:error res)
           (do (err-println (:error res)) 1)

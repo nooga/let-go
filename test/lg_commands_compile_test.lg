@@ -32,6 +32,8 @@
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"]))))
     (is (re-find #"needs a value" (:error (cmd/parse-args ["a.lg" "-import"]))))
     (is (re-find #"requires -module" (:error (cmd/parse-args ["-import" "x/a" "a.lg"])))))
+  (testing "-named-only takes no value"
+    (is (= {:files ["a.lg"] :named-only true} (cmd/parse-args ["-named-only" "a.lg"]))))
   (testing "-- does not skip the checks"
     (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
@@ -169,3 +171,59 @@
         (is (= [:clear-lowered-core] (second @calls))
             "and an earlier build's core is cleared before the program is written")))
     (remove-fixture path)))
+
+(deftest program-files-follows-requires-inside-the-roots
+  (let [root (scratch-dir "prog")
+        ext  (scratch-dir "ext")
+        app  (str root "/app.lg")
+        util (str root "/util.lg")
+        lib  (str ext "/lib.lg")
+        paths {"app" app "util" util "lib" lib}]
+    (spit app "(ns app (:require [util :as u] [lib] [clojure.string :as s]))\n(defn -main [] (u/f))\n")
+    (spit util "(ns util (:require [app]))\n(defn f [] 1)\n")
+    (spit lib "(ns lib)\n(defn g [] 2)\n")
+    (let [res (lg.compiler/program-files [app] [root] (fn [ns] (get paths ns)))]
+      (testing "adds a required file under a root, once, despite the require cycle"
+        (is (= [app util] (:files res)))
+        (is (= ["util"] (:added res))))
+      (testing "leaves a file outside the roots on the VM and names it"
+        (is (= [["lib" lib]] (:outside res))))
+      (testing "an embedded namespace (no source path) is neither added nor reported"
+        (is (not-any? (fn [[ns _]] (= "clojure.string" ns)) (:outside res)))))
+    (syscall/rm-rf root)
+    (syscall/rm-rf ext)))
+
+(deftest program-roots-are-the-inputs-search-roots
+  (testing "a dependency on another search-path entry (vendor/) is outside the roots"
+    (is (= ["/p/src"] (lg.compiler/program-roots ["/p/src/app/main.lg"] ["/p/src" "/p/vendor"]))))
+  (testing "an input under no search-path entry roots its own directory"
+    (is (= ["/q/app"] (lg.compiler/program-roots ["/q/app/main.lg"] ["/p/src"]))))
+  (testing "a root of / contains every absolute path"
+    (is (= ["/"] (lg.compiler/program-roots ["/x.lg"] ["/"])))))
+
+;; The entry comes from the files named. A namespace the program requires is
+;; lowered with it, but its -main never replaces the named file's main.
+(deftest whole-program-entry-comes-from-the-inputs
+  (let [root  (scratch-dir "entry")
+        tool  (str root "/tool.lg")
+        core2 (str root "/core2.lg")
+        calls (atom [])
+        host  (assoc (recording-host calls)
+                     :abs-path     (fn [p] p)
+                     :source-roots (fn [] [root])
+                     :source-path  (fn [ns] (get {"tool" tool} ns)))]
+    (spit tool "(ns tool)\n(defn helper [] :helped)\n(defn -main [] (println \"TOOL main\"))\n")
+    (spit core2 "(ns core2 (:require [tool :as t]))\n(defn main [] (println (t/helper)))\n(when-not *compiling-aot* (main))\n")
+    (let [res  (atom nil)
+          out  (with-out-str (reset! res (lg.compiler/build-program [core2] "out" nil host)))]
+      (testing "the required namespace is lowered, and the build says so"
+        (is (nil? (:error @res)))
+        (is (re-find #"also lowering 1 required program namespace: tool" out)))
+      (testing "and the entry is still the named file's main"
+        (is (some (fn [c] (= c [:compile-lgb "core2/main"])) @calls))))
+    (testing "-named-only lowers the named file alone"
+      (reset! calls [])
+      (let [res (lg.compiler/build-program [core2] "out" nil nil nil false true host)]
+        (is (nil? (:error res)))
+        (is (some (fn [c] (= c [:compile-lgb "core2/main"])) @calls))))
+    (syscall/rm-rf root)))
