@@ -108,6 +108,38 @@ or key; sounds triggered before that are dropped, not saved up. A native `lg`
 plays the same calls when built with `-tags audio_oto`; without either, every
 `audio/` call is a silent no-op.
 
+### Lowered programs in the browser
+
+`-w-aot` lowers the program to Go, as `lg compile` does, and links it into the
+web app, so the code that lowers runs as Go instead of on the VM inside wasm:
+
+```bash
+lg -w site -w-aot app.lg
+LETGO_USE_TINYGO=1 lg -w site -w-aot app.lg    # the same, built with TinyGo
+```
+
+It lowers the whole program, as `lg compile -whole-program` does, and needs
+the same Go toolchain `-w` already does. The program needs a `-main` or
+`main` in a file that starts with an `ns` form, and keeps
+`(when-not *compiling-aot* (-main))` at top level, as for `lg compile`: the
+page loads the program, installs the lowered functions, and then calls
+`-main` itself. A script made only of top-level forms has no entry to call,
+and `-w-aot` refuses it. `-w-named-only` lowers just the file you name, as
+`lg compile` does by default. It composes
+with `-w-module`, `-import`, `-w-shell`, `-w-host-eval` and `-w-audio`.
+
+Lowered functions call each other directly, so redefining one (with
+`with-redefs`, or through `-w-host-eval`) changes what VM code sees and not
+what other lowered code calls. That is why the flag is opt-in.
+
+`-w-lowered-core` also lowers `clojure.core` and `clojure.walk`, as
+`lg compile -lowered-core` does. With the standard Go toolchain it speeds up
+data-heavy code. With TinyGo, measure first: in probes on TinyGo 0.44 (main at
+`e37ed200`, 2026-11-14) it sped up core code over maps (`assoc-in`,
+`select-keys`) and slowed down per-element callbacks into your own function
+(`every?`, or a transducer such as `(filter f)`), which allocate on every
+element there.
+
 ## Native binaries
 
 `lg compile` builds a program into a standalone native executable through the

@@ -417,6 +417,118 @@ func init() {
 		}
 	})
 
+	// -w-aot lowers the program into the module's generated directory and
+	// links it through the entry frame. Only app.lg is named; libx.core is
+	// found through app's require because its file is under the program's
+	// directory, and the build says so.
+	t.Run("-w -w-aot lowers the whole program into the bundle", func(t *testing.T) {
+		mod := newModule(t, true)
+		outDir := filepath.Join(t.TempDir(), "web")
+		out, err := runCmd(ctx, t, bin, fix, []string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external",
+			"-w-module", mod, "-w-aot", app}, env...)
+		if err != nil {
+			t.Fatalf("lg -w -w-aot: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "also lowering 1 required program namespace: libx.core") {
+			t.Errorf("build output does not name the required namespace it lowered:\n%s", out)
+		}
+		gen := filepath.Join(mod, "lgprogram")
+		imports, err := os.ReadFile(filepath.Join(gen, "lowered_imports.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pkg := range []string{`"example.com/host/lgprogram/app"`, `"example.com/host/lgprogram/libx/core"`} {
+			if !bytes.Contains(imports, []byte(pkg)) {
+				t.Errorf("lowered_imports.go does not import %s:\n%s", pkg, imports)
+			}
+		}
+		mainGo, err := os.ReadFile(filepath.Join(gen, "main.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(mainGo, []byte(`rt.InvokeProgramEntry(vm.NewExecContext(), "app", "-main", `)) {
+			t.Errorf("main.go has no entry frame for app/-main:\n%s", mainGo)
+		}
+		if wout, werr, err := runWasm(t, outDir); err != nil || wout != "42\n" {
+			t.Fatalf("wasm: err=%v stdout=%q, want %q; stderr=%q", err, wout, "42\n", werr)
+		}
+	})
+
+	// -w-named-only lowers app.lg alone: libx.core stays on the VM, and the
+	// program still runs.
+	t.Run("-w -w-aot -w-named-only lowers only the named file", func(t *testing.T) {
+		mod := newModule(t, true)
+		outDir := filepath.Join(t.TempDir(), "web")
+		out, err := runCmd(ctx, t, bin, fix, []string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external",
+			"-w-module", mod, "-w-aot", "-w-named-only", app}, env...)
+		if err != nil {
+			t.Fatalf("lg -w -w-aot -w-named-only: %v\n%s", err, out)
+		}
+		if strings.Contains(out, "also lowering") {
+			t.Errorf("-w-named-only still lowered a required namespace:\n%s", out)
+		}
+		imports, err := os.ReadFile(filepath.Join(mod, "lgprogram", "lowered_imports.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(imports, []byte(`"example.com/host/lgprogram/app"`)) || bytes.Contains(imports, []byte("libx")) {
+			t.Errorf("lowered_imports.go should import app and not libx.core:\n%s", imports)
+		}
+		if wout, werr, err := runWasm(t, outDir); err != nil || wout != "42\n" {
+			t.Fatalf("wasm: err=%v stdout=%q, want %q; stderr=%q", err, wout, "42\n", werr)
+		}
+	})
+
+	// The 42 above prints whether the lowered code or the VM ran. Here they
+	// differ: lowered functions call each other directly, so a lowered ask
+	// does not see with-redefs on who and prints "go"; on the VM it prints
+	// "vm". Plain -w is the control.
+	t.Run("-w -w-aot runs the lowered code, not the VM", func(t *testing.T) {
+		mod := newModule(t, true)
+		src := filepath.Join(fix, "redef.lg")
+		writeFile(t, src, `(ns redef)
+(defn who [] "go")
+(defn ask [] (who))
+(defn -main [] (println (with-redefs [who (fn [] "vm")] (ask))))
+(when-not *compiling-aot* (-main))
+`)
+		for _, c := range []struct {
+			extra []string
+			want  string
+		}{{nil, "vm\n"}, {[]string{"-w-aot"}, "go\n"}} {
+			outDir := filepath.Join(t.TempDir(), "web")
+			args := append([]string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external", "-w-module", mod}, c.extra...)
+			if out, err := runCmd(ctx, t, bin, fix, append(args, src), env...); err != nil {
+				t.Fatalf("lg %v: %v\n%s", args, err, out)
+			}
+			if wout, werr, err := runWasm(t, outDir); err != nil || wout != c.want {
+				t.Errorf("lg %v: err=%v stdout=%q, want %q; stderr=%q", c.extra, err, wout, c.want, werr)
+			}
+		}
+	})
+
+	t.Run("-w-aot flag errors", func(t *testing.T) {
+		for _, c := range []struct {
+			args []string
+			want string
+		}{
+			{[]string{"-w-aot", app}, "-w-aot requires -w"},
+			{[]string{"-w", t.TempDir(), "-w-lowered-core", app}, "-w-lowered-core requires -w-aot"},
+			{[]string{"-w", t.TempDir(), "-w-named-only", app}, "-w-named-only requires -w-aot"},
+			{[]string{"-w", t.TempDir(), "-w-aot", "-entry-frame-entry", "app/-main", app}, "drop -entry-frame-entry"},
+			{[]string{"-w", t.TempDir(), "-w-aot", app}, "does not combine with LG_WASM_BUILD_TAGS=gogen_ir"},
+		} {
+			cmd := exec.CommandContext(ctx, bin, c.args...)
+			if strings.Contains(c.want, "gogen_ir") {
+				cmd.Env = append(os.Environ(), "LG_WASM_BUILD_TAGS=gogen_ir")
+			}
+			out, err := cmd.CombinedOutput()
+			if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 2 || !strings.Contains(string(out), c.want) {
+				t.Errorf("lg %v: err=%v out=%q, want exit 2 and %q", c.args, err, out, c.want)
+			}
+		}
+	})
+
 	// A package can ship an lg layer as well as natives: lglib embeds
 	// greet.lg and registers it from init() with rt.RegisterEmbeddedSource
 	// (#1063). Linked by -import, the namespace resolves in the built program
