@@ -264,6 +264,33 @@ func TestLgCompileCommand(t *testing.T) {
 		}
 	})
 
+	// named.main and named.main- would both be written to named/main_, the
+	// second over the first, and calls into one would reach the other.
+	t.Run("two namespaces that lower to one directory are refused", func(t *testing.T) {
+		var paths []string
+		for rel, src := range map[string]string{
+			"twin/main.lg":  "(ns twin.main)\n(defn v [] 11)\n",
+			"twin/main_.lg": "(ns twin.main-)\n(defn v [] 22)\n",
+		} {
+			path := filepath.Join(fix, rel)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, path)
+		}
+		out, err := runCmd(ctx, t, bin, fix,
+			append([]string{"compile", "-o", filepath.Join(t.TempDir(), "twin")}, paths...), env...)
+		if err == nil {
+			t.Fatalf("lg compile built two namespaces into one directory:\n%s", out)
+		}
+		if !bytes.Contains([]byte(out), []byte("twin.main and twin.main- both lower to the Go package directory twin/main_")) {
+			t.Fatalf("missing the diagnostic naming both namespaces:\n%s", out)
+		}
+	})
+
 	t.Run("usage errors exit 2", func(t *testing.T) {
 		for _, args := range [][]string{{"compile"}, {"compile", "-bogus", app}, {"compile", "-o"}} {
 			cmd := exec.CommandContext(ctx, bin, args...)
