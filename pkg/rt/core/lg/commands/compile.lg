@@ -15,7 +15,7 @@
 
 (def usage
   (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir> [-import <pkg>]...]\n"
-       "                  <file.lg>...\n"
+       "                  [-lowered-core] <file.lg>...\n"
        "\n"
        "Compiles a let-go program to a standalone native binary through the Go\n"
        "backend. One input must define -main or main. Needs a Go toolchain.\n"
@@ -26,10 +26,17 @@
        "                go.sum are used as they are; lg writes only <dir>/lgprogram\n"
        "  -import <pkg> with -module: blank-import the Go package <pkg> into the\n"
        "                program, so its init() registers its namespaces; repeatable.\n"
-       "                The module must already require it\n"))
+       "                The module must already require it\n"
+       "  -lowered-core also lower let-go's own core (clojure.core, clojure.walk)\n"
+       "                to Go and link it, so calls into core run native code.\n"
+       "                The first build lowers the core, which takes a few seconds\n"))
 
-(def ^:private flag-keys
-  {"-o" :out "-work" :work-dir "-module" :module-dir})
+(def ^:private valued-flags
+  "Flags that take a value, each with how that value joins the options."
+  {"-o"      (fn [opts v] (assoc opts :out v))
+   "-work"   (fn [opts v] (assoc opts :work-dir v))
+   "-module" (fn [opts v] (assoc opts :module-dir v))
+   "-import" (fn [opts v] (update opts :imports (fnil conj []) v))})
 
 (defn- check-opts [opts]
   (cond
@@ -41,8 +48,9 @@
     :else opts))
 
 (defn parse-args
-  "argv → {:files [..] :out s :work-dir s :module-dir s :imports [..]},
-   {:help true}, or {:error msg}. :imports is present only when -import is."
+  "argv → {:files [..] :out s :work-dir s :module-dir s :imports [..]
+   :lowered-core true}, {:help true}, or {:error msg}. :imports and
+   :lowered-core are present only when their flags are."
   [argv]
   (loop [args (seq argv) opts {:files []}]
     (if-not args
@@ -51,13 +59,10 @@
         (cond
           (contains? #{"-h" "-help" "--help"} a) {:help true}
           (= "--" a) (check-opts (update opts :files into (rest args)))
-          (= "-import" a)
+          (= "-lowered-core" a) (recur (next args) (assoc opts :lowered-core true))
+          (contains? valued-flags a)
           (if-let [v (second args)]
-            (recur (nnext args) (update opts :imports (fnil conj []) v))
-            {:error "lg compile: -import needs a value"})
-          (contains? flag-keys a)
-          (if-let [v (second args)]
-            (recur (nnext args) (assoc opts (get flag-keys a) v))
+            (recur (nnext args) ((get valued-flags a) opts v))
             {:error (str "lg compile: " a " needs a value")})
           (clojure.string/starts-with? a "-")
           {:error (str "lg compile: unknown flag " a)}
@@ -80,7 +85,8 @@
       :else
       (let [res (try
                   (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
-                                             (:module-dir opts) (:imports opts) host)
+                                             (:module-dir opts) (:imports opts)
+                                             (boolean (:lowered-core opts)) host)
                   (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
         (if (:error res)
           (do (err-println (:error res)) 1)

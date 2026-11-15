@@ -302,7 +302,14 @@
    holds main.go and program.lgb; lowered packages import each other under
    import-path. A caller-supplied module (module? true) keeps its own go.mod and
    go.sum and is built read-only; otherwise dir gets a scaffolded module."
-  [files out dir import-path module? host]
+  [files out dir import-path module? lowered-core? host]
+  ;; Before the program is written: a kept -work dir may hold an earlier
+  ;; build's lowered core, which must not be linked into a build without the
+  ;; flag, nor be mistaken for a package of this program. The step is looked
+  ;; up, not required, so a host map written before -lowered-core existed
+  ;; still builds; such a host never lowered a core into dir either.
+  (when-let [clear (:clear-lowered-core host)]
+    (clear dir))
   (let [res   (compile-program dir import-path files true)
         entry (:entry res)]
     (cond
@@ -315,8 +322,12 @@
         ((:compile-lgb host) (:entry-path res) (str dir "/program.lgb")
                              (str (:ns entry) "/" (:name entry)))
         (if module?
-          ((:go-build-readonly host) dir out)
+          (do (when lowered-core? ((:lower-core-readonly host) dir import-path))
+              ((:go-build-readonly host) dir out))
           (do ((:scaffold-module host) dir program-module)
+              ;; After the scaffold: lowering runs lgbgen from this module, so
+              ;; its go.mod has to exist first.
+              (when lowered-core? ((:lower-core host) dir import-path))
               ((:go-build host) dir out)))
         (assoc res :out out)))))
 
@@ -340,6 +351,13 @@
                                            imports; returns
                                            {:dir d :import-path p}
      :go-build-readonly (f dir out)        builds dir to out, -mod=readonly
+     :clear-lowered-core (f dir)           optional; removes an earlier
+                                           build's lowered core from dir
+     :lower-core        (f dir import-path)
+                                           lowers the embedded core into
+                                           dir/lgcore and links it; dir's
+                                           import path is import-path
+     :lower-core-readonly                  the same, without editing go.mod
    program.lgb comes from a separate process, not this one: lowering loads the
    compiler's own namespaces, and an in-process compile would bundle them.
 
@@ -350,15 +368,19 @@
    import each other under its import path, and the caller's go.mod and go.sum
    are used as they are. `imports` names Go packages to link into the program
    for their init(), typically ones registering namespaces; it needs
-   module-dir, whose go.mod must require them. Returns compile-program's result
-   plus :out, or a map with :error."
-  ([files out work-dir host] (build-program files out work-dir nil nil host))
-  ([files out work-dir module-dir host] (build-program files out work-dir module-dir nil host))
+   module-dir, whose go.mod must require them. `lowered-core?` also lowers
+   let-go's own core to Go and links it, so the program's calls into core run
+   native code; it fails the build when the core cannot be lowered. Returns
+   compile-program's result plus :out, or a map with :error."
+  ([files out work-dir host] (build-program files out work-dir nil nil false host))
+  ([files out work-dir module-dir host] (build-program files out work-dir module-dir nil false host))
   ([files out work-dir module-dir imports host]
+   (build-program files out work-dir module-dir imports false host))
+  ([files out work-dir module-dir imports lowered-core? host]
    (cond
      module-dir
      (let [m ((:open-module host) module-dir (vec imports))]
-       (build-in files out (:dir m) (:import-path m) true host))
+       (build-in files out (:dir m) (:import-path m) true lowered-core? host))
      ;; The scaffolded module requires only let-go, so any other package
      ;; could not build there.
      (seq imports)
@@ -366,6 +388,6 @@
      :else
      (let [work (or work-dir ((:make-temp-dir host)))]
        (try
-         (build-in files out work program-module false host)
+         (build-in files out work program-module false lowered-core? host)
          (finally
            (when-not work-dir ((:remove-dir host) work))))))))
