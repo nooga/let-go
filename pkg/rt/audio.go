@@ -15,9 +15,14 @@
  * nopAudio otherwise, so every audio/ call is a silent no-op on a host with no
  * sound.
  *
- * Stream is Go-only: a native module that synthesizes continuously (a tracker,
- * a generative engine) joins the host's mixer as a stream instead of opening a
- * device of its own, and gets an ordinary handle back. lg code never sees it.
+ * Stream is how a source that produces sound continuously joins the host's
+ * mixer instead of opening a device of its own, and gets an ordinary handle
+ * back. A native module (a tracker, a generative engine) passes it an
+ * io.Reader. lg code reaches it through audio/stream and audio/feed!: the guest
+ * pushes PCM into a ring the mixer drains (audio_stream.go). feed! returns
+ * nothing about playback; it only waits while the ring is full, so a feeding
+ * guest is paced by the device's clock the way a blocking device write is, and
+ * the quarantine above still holds for logic that doesn't branch on wall time.
  */
 
 package rt
@@ -64,7 +69,8 @@ type Audio interface {
 	// Stream mixes src, interleaved stereo signed 16-bit little-endian PCM at
 	// AudioRate, until it returns an error or the handle is stopped. src is
 	// read on the host's audio goroutine in small slices, so it must not
-	// block.
+	// block. If src implements StreamNotify, the host tells it when the
+	// stream is paused, resumed and ended.
 	Stream(src io.Reader) (AudioHandle, error)
 	Stop(AudioHandle)
 	// Pause holds a sound where it is, with a short fade so it does not
@@ -185,6 +191,30 @@ func installAudioNS() {
 		return audioHandle(a.Play(s))
 	})
 
+	// (audio/stream) or (audio/stream {:buffer-ms 250}) -> handle. Opens a
+	// stream that plays whatever audio/feed! pushes into it, and silence
+	// while nothing has been fed. :buffer-ms is how much PCM it holds ahead
+	// of the device; feed! waits while it is full. The handle stops, pauses,
+	// resumes and fades like any other.
+	def("stream", func(a Audio, vs []vm.Value) (vm.Value, error) {
+		m, err := audioOpts("audio/stream", vs, 0)
+		if err != nil {
+			return vm.NIL, err
+		}
+		ms := optFloat(m, "buffer-ms", defaultStreamBufferMs)
+		if !(ms > 0 && ms <= maxStreamBufferMs) {
+			return vm.NIL, fmt.Errorf("audio/stream: :buffer-ms must be above 0 and at most %v", maxStreamBufferMs)
+		}
+		d, _ := msDuration(ms)
+		return audioHandle(a.Stream(newFeedRing(max(1, int(ms*AudioRate/1000))*4, d)))
+	})
+
+	// feed! blocks, so it needs the scope's context to be cancellable, which
+	// def's plain Audio signature doesn't carry.
+	ns.Def("feed!", vm.NewCtxNativeFn("feed!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return audioFeed(ec, AudioVia(ec), vs)
+	}))
+
 	// (audio/stop h), (audio/pause h) and (audio/resume h) -> nil. A nil h,
 	// the handle a host with no sound returns, is a no-op, so a game needs no
 	// guard to run silent. A paused sound stays in the mix, silent, until it
@@ -255,6 +285,54 @@ func audioHandle(h AudioHandle, err error) (vm.Value, error) {
 		return vm.NIL, nil
 	}
 	return vm.Int(h), nil
+}
+
+// audio/stream's :buffer-ms: 250 ms by default rides out a slow frame or a GC
+// pause in the feeding guest; the 10 s cap is far past any use and keeps a
+// mistyped value from allocating without bound.
+const (
+	defaultStreamBufferMs = 250.0
+	maxStreamBufferMs     = 10000.0
+)
+
+// audioFeed is (audio/feed! h pcm) -> nil. It pushes pcm, a byte-array of
+// interleaved stereo signed 16-bit LE at 44.1 kHz, onto stream h, waiting
+// while the stream's buffer is full. A nil h (a host with no sound), a
+// handle that isn't a live stream (stopped, or never one), a paused stream
+// and a stream the host has stopped reading drop the PCM, the way stop and
+// gain ignore a handle that has ended. A feed! waiting when any of those
+// happens returns; one waiting when its scope is cancelled raises Cancelled.
+func audioFeed(ec *vm.ExecContext, a Audio, vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("audio/feed! expects 2 args (handle pcm), got %d", len(vs))
+	}
+	h, ok := vs[0].(vm.Int)
+	if !ok && vs[0] != vm.NIL {
+		return vm.NIL, fmt.Errorf("audio/feed! expects a handle")
+	}
+	ta, ok := vs[1].(*vm.TypedArray)
+	if !ok || ta.Kind() != vm.ArrayByte {
+		return vm.NIL, fmt.Errorf("audio/feed! expects a byte-array of 16-bit stereo PCM")
+	}
+	b := ta.Unbox().([]byte)
+	if len(b)%4 != 0 {
+		return vm.NIL, fmt.Errorf("audio/feed!: %d bytes is not a whole number of stereo frames", len(b))
+	}
+	if vs[0] == vm.NIL || len(b) == 0 {
+		return vm.NIL, nil
+	}
+	src, ok := a.(AudioSources)
+	if !ok {
+		return vm.NIL, nil
+	}
+	f, ok := src.Source(AudioHandle(h)).(*feedRing)
+	if !ok {
+		return vm.NIL, nil
+	}
+	if _, cancelled := f.write(ec.Context(), b); cancelled {
+		return vm.NIL, vm.NewThrownError(vm.NewCancelled(ec.Context().Err()))
+	}
+	return vm.NIL, nil
 }
 
 // audioOpts reads an optional options map; need is how many args are required.
