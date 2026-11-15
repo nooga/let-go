@@ -194,12 +194,11 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 	return nil
 }
 
-// Set while an entry-frame binary loads: the entry var's current fn, the
-// wrapper stored in its place, and whether the wrapper was called.
+// Set while an entry-frame binary loads: each wrapper stored in the entry
+// var mapped to the fn it wraps, and whether any wrapper was called.
 var (
-	programEntryFn      vm.Fn
-	programEntryWrapper vm.Value
-	programEntryRan     atomic.Bool
+	programEntryWrappers map[vm.Value]vm.Fn
+	programEntryRan      atomic.Bool
 )
 
 // WatchProgramEntry makes every fn bound to namespace/name record that it
@@ -210,6 +209,7 @@ var (
 // can be defined (defn, an alias, comp, *ir-compile*) and every call that
 // goes through the var.
 func WatchProgramEntry(namespace, name string) {
+	programEntryWrappers = map[vm.Value]vm.Fn{}
 	vm.SetRootHook(func(v *vm.Var, val vm.Value) vm.Value {
 		if v.VarName() != name || v.NS() != namespace {
 			return val
@@ -218,11 +218,16 @@ func WatchProgramEntry(namespace, name string) {
 		if !ok {
 			return val
 		}
+		// with-redefs and alter-var-root write back the value they saved,
+		// which is already a wrapper.
+		if _, wrapped := programEntryWrappers[val]; wrapped {
+			return val
+		}
 		w := vm.NewCtxNativeFn(name, func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error) {
 			programEntryRan.Store(true)
 			return ec.Invoke(f, args)
 		})
-		programEntryFn, programEntryWrapper = f, w
+		programEntryWrappers[w] = f
 		return w
 	})
 }
@@ -233,11 +238,13 @@ func WatchProgramEntry(namespace, name string) {
 func ProgramEntryRan(namespace, name string) bool {
 	vm.SetRootHook(nil)
 	if ns := LookupNS(namespace); ns != nil {
-		if v := ns.LookupLocal(vm.Symbol(name)); v != nil && v.Root() == programEntryWrapper {
-			v.SetRoot(programEntryFn)
+		if v := ns.LookupLocal(vm.Symbol(name)); v != nil {
+			if f, ok := programEntryWrappers[v.Root()]; ok {
+				v.SetRoot(f)
+			}
 		}
 	}
-	programEntryFn, programEntryWrapper = nil, nil
+	programEntryWrappers = nil
 	return programEntryRan.Load()
 }
 

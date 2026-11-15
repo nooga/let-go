@@ -30,6 +30,11 @@ func TestNativeEntryNamespaceReplay(t *testing.T) {
 			"libx: runtime init ran\n42\n"},
 		{"through an alias", run + "(let [f -main] (mapv (fn [_] (f)) [1]))",
 			"libx: runtime init ran\n42\n"},
+		// start lowers too, but the entry namespace's lowered fns are
+		// installed only after its chunk has run, so this call goes
+		// through the var.
+		{"from another fn", run + "(defn start [] (-main))\n(start)",
+			"libx: runtime init ran\n42\n"},
 		{"entry never called at the top level", run,
 			"libx: runtime init ran\n42\n"},
 	} {

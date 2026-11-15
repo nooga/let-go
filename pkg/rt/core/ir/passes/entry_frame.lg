@@ -366,10 +366,15 @@
          nil)]
       [(gogen/expr-stmt call)])))
 
+(defn- entry-ns-and-name
+  "The entry's namespace and var name, defaulted the same way for every
+   frame call that names the entry."
+  [entry]
+  [(or (:ns entry) "") (or (:name entry) "-main")])
+
 (defn- emit-vm-fallback-stmts [entry]
   "VM fallback when the entry did not lower."
-  (let [var-name (if entry (:name entry) "-main")
-        ns-name  (if entry (:ns entry) "")
+  (let [[ns-name var-name] (entry-ns-and-name entry)
         shape    (if entry (:arity-shape entry) :variadic)
         argv-stmts
         (case shape
@@ -406,9 +411,6 @@
              (gogen/binary "!=" (g-id "err") (g-id "nil"))
              (format-error-exit-stmts)
              nil)])))
-
-(defn- entry-ns-and-name [entry]
-  [(g-str (or (:ns entry) "")) (g-str (or (:name entry) "-main"))])
 
 (defn- emit-boot-stmts [entry]
   ;; Order is load-bearing: publish *command-line-args* before namespace
@@ -453,7 +455,7 @@
    ;; compiler couldn't omit runs the entry then, and the frame returns
    ;; below instead of running it a second time (#1072).
    (gogen/expr-stmt
-     (g-call (g-sel "rt" "WatchProgramEntry") (entry-ns-and-name entry)))
+     (g-call (g-sel "rt" "WatchProgramEntry") (mapv g-str (entry-ns-and-name entry))))
    (gogen/if-stmt
      (gogen/multi-assign ":="
        [(g-id "err")]
@@ -481,7 +483,7 @@
      nil)
    (gogen/if-stmt
      nil
-     (g-call (g-sel "rt" "ProgramEntryRan") (entry-ns-and-name entry))
+     (g-call (g-sel "rt" "ProgramEntryRan") (mapv g-str (entry-ns-and-name entry)))
      [(gogen/return-stmt [])]
      nil)])
 
