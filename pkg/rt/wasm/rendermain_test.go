@@ -62,6 +62,19 @@ func TestRenderMainIsValidGo(t *testing.T) {
 	}
 }
 
+// The template is filled by string replacement, never by a Printf, so a doubled
+// %% reaches the generated main as written and its error messages print a
+// literal %v instead of the error.
+func TestRenderMainFormatVerbsAreSingle(t *testing.T) {
+	for _, hostEval := range []bool{false, true} {
+		for _, audio := range []bool{false, true} {
+			if got := RenderMain("s", hostEval, audio); strings.Contains(got, "%%") {
+				t.Fatalf("hostEval=%v audio=%v: generated main contains %%%%:\n%s", hostEval, audio, got)
+			}
+		}
+	}
+}
+
 // The generated main must decode the program through rt.DecodeExecUnit. That
 // is the decode that marks the embedded core namespaces a program references
 // for loading; an inline resolver skips it, and a web build that requires zip

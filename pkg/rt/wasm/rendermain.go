@@ -77,7 +77,7 @@ func main() {
 	// (#954).
 	unit, err := rt.DecodeExecUnit(lgbData)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return
 	}
 
@@ -97,7 +97,7 @@ func main() {
 			continue
 		}
 		if err := run(chunk); err != nil {
-			fmt.Fprintf(os.Stderr, "error loading %%s: %%v\n", name, err)
+			fmt.Fprintf(os.Stderr, "error loading %s: %v\n", name, err)
 			return
 		}
 	}
