@@ -32,8 +32,14 @@
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"]))))
     (is (re-find #"needs a value" (:error (cmd/parse-args ["a.lg" "-import"]))))
     (is (re-find #"requires -module" (:error (cmd/parse-args ["-import" "x/a" "a.lg"])))))
-  (testing "-named-only takes no value"
-    (is (= {:files ["a.lg"] :named-only true} (cmd/parse-args ["-named-only" "a.lg"]))))
+  (testing "-named-only and -whole-program take no value, and exclude each other"
+    (is (= {:files ["a.lg"] :named-only true} (cmd/parse-args ["-named-only" "a.lg"])))
+    (is (= {:files ["a.lg"] :whole-program true} (cmd/parse-args ["-whole-program" "a.lg"])))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-whole-program" "-named-only" "a.lg"])))))
+  (testing "a build lowers only the named files unless -whole-program is given"
+    (is (cmd/named-only? {:files ["a.lg"]}))
+    (is (cmd/named-only? {:files ["a.lg"] :named-only true}))
+    (is (not (cmd/named-only? {:files ["a.lg"] :whole-program true}))))
   (testing "-- does not skip the checks"
     (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
