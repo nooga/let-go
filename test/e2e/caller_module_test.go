@@ -336,6 +336,28 @@ func init() {
 		}
 	})
 
+	// A page has no command line. An entry frame passes an [argv] entry an
+	// empty vector, as a native build run with no arguments does, and a
+	// [& args] entry no arguments.
+	t.Run("-w -entry-frame-entry calls [argv] and [& args] entries", func(t *testing.T) {
+		mod := newModule(t, true)
+		for _, c := range []struct{ ns, src, want string }{
+			{"argv", "(defn -main [argv] (println (vector? argv) (count argv)))", "true 0\n"},
+			{"rest", "(defn -main [& args] (println (nil? args)))", "true\n"},
+		} {
+			src := filepath.Join(fix, c.ns+".lg")
+			writeFile(t, src, "(ns "+c.ns+")\n"+c.src+"\n(when-not *compiling-aot* (-main []))\n")
+			outDir := filepath.Join(t.TempDir(), "web")
+			if out, err := runCmd(ctx, t, bin, fix, []string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external",
+				"-w-module", mod, "-entry-frame-entry", c.ns + "/-main", src}, env...); err != nil {
+				t.Fatalf("lg -w %s: %v\n%s", c.ns, err, out)
+			}
+			if wout, werr, err := runWasm(t, outDir); err != nil || wout != c.want {
+				t.Errorf("%s entry: err=%v stdout=%q, want %q; stderr=%q", c.ns, err, wout, c.want, werr)
+			}
+		}
+	})
+
 	// A package can ship an lg layer as well as natives: lglib embeds
 	// greet.lg and registers it from init() with rt.RegisterEmbeddedSource
 	// (#1063). Linked by -import, the namespace resolves in the built program

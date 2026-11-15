@@ -123,7 +123,7 @@ func TestRenderMainForEntryFrame(t *testing.T) {
 			}
 			load := strings.Index(got, "rt.LoadProgramNamespaces(unit)")
 			main := strings.Index(got, "rt.RunProgramMainChunk(unit)")
-			entry := strings.Index(got, `rt.InvokeProgramEntry(vm.NewExecContext(), "app.core", "-main", nil)`)
+			entry := strings.Index(got, `rt.InvokeProgramEntryNoArgs(vm.NewExecContext(), "app.core", "-main")`)
 			if load < 0 || main < load || entry < main {
 				t.Fatalf("hostEval=%v audio=%v: want load, main chunk, then entry, in that order:\n%s", hostEval, audio, got)
 			}

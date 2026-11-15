@@ -124,7 +124,8 @@ const wasmReplaySnippet = `	// The unit's TypeScope is active while its chunks r
 // it, so lowered functions linked in with -w-module/-import replace their
 // bytecode before anything runs, and only then is the entry invoked. The entry
 // is invoked through its Var, so a lowered entry runs as Go and an unlowered
-// one on the VM. A failing main chunk skips the entry but, as in the replay,
+// one on the VM. A page has no command line, so an [argv] entry gets an empty
+// vector, as a native build run with no arguments does. A failing main chunk skips the entry but, as in the replay,
 // still reaches -w-host-eval's hooks.
 const wasmEntryFrameSnippet = `	if err := rt.LoadProgramNamespaces(unit); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -132,7 +133,7 @@ const wasmEntryFrameSnippet = `	if err := rt.LoadProgramNamespaces(unit); err !=
 	}
 	if err := rt.RunProgramMainChunk(unit); err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
-	} else if err := rt.InvokeProgramEntry(vm.NewExecContext(), __LG_ENTRY_NS__, __LG_ENTRY_NAME__, nil); err != nil {
+	} else if err := rt.InvokeProgramEntryNoArgs(vm.NewExecContext(), __LG_ENTRY_NS__, __LG_ENTRY_NAME__); err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
 	}`
 

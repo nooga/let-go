@@ -203,26 +203,54 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 // compiler already chose that namespace; searching CurrentNS or the global
 // registry would let a competing entry in another namespace steal the call.
 func InvokeProgramEntry(ec *vm.ExecContext, namespace, name string, args []vm.Value) error {
+	fn, err := programEntry("InvokeProgramEntry", ec, namespace, name)
+	if err != nil {
+		return err
+	}
+	_, err = ec.Invoke(fn, args)
+	return err
+}
+
+// InvokeProgramEntryNoArgs invokes namespace/name as a program started with an
+// empty command line, which is how a web build starts: an entry taking one
+// fixed argument ([argv]) gets an empty vector, and one taking [] or [& args]
+// gets no arguments. These are the shapes the native entry frame accepts, and
+// it passes [argv] the same empty vector when there are no arguments.
+func InvokeProgramEntryNoArgs(ec *vm.ExecContext, namespace, name string) error {
+	fn, err := programEntry("InvokeProgramEntryNoArgs", ec, namespace, name)
+	if err != nil {
+		return err
+	}
+	var args []vm.Value
+	if vf, ok := fn.(interface{ IsVariadic() bool }); !(ok && vf.IsVariadic()) && fn.Arity() == 1 {
+		args = []vm.Value{vm.EmptyVector}
+	}
+	_, err = ec.Invoke(fn, args)
+	return err
+}
+
+// programEntry looks up namespace/name for InvokeProgramEntry and
+// InvokeProgramEntryNoArgs; caller prefixes its errors.
+func programEntry(caller string, ec *vm.ExecContext, namespace, name string) (vm.Fn, error) {
 	if ec == nil {
-		return fmt.Errorf("InvokeProgramEntry: nil ExecContext")
+		return nil, fmt.Errorf("%s: nil ExecContext", caller)
 	}
 	if namespace == "" {
-		return fmt.Errorf("InvokeProgramEntry: empty namespace")
+		return nil, fmt.Errorf("%s: empty namespace", caller)
 	}
 	ns := LookupNS(namespace)
 	if ns == nil {
-		return fmt.Errorf("InvokeProgramEntry: namespace %s not found", namespace)
+		return nil, fmt.Errorf("%s: namespace %s not found", caller, namespace)
 	}
 	v := ns.LookupLocal(vm.Symbol(name))
 	if v == nil {
-		return fmt.Errorf("InvokeProgramEntry: %s/%s not found", namespace, name)
+		return nil, fmt.Errorf("%s: %s/%s not found", caller, namespace, name)
 	}
 	fn, ok := v.Deref().(vm.Fn)
 	if !ok {
-		return fmt.Errorf("InvokeProgramEntry: %s/%s is not callable", namespace, name)
+		return nil, fmt.Errorf("%s: %s/%s is not callable", caller, namespace, name)
 	}
-	_, err := ec.Invoke(fn, args)
-	return err
+	return fn, nil
 }
 
 // runUnitChunk runs one of unit's chunks with the unit's TypeScope active, so
