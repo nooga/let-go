@@ -6,7 +6,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -16,11 +15,34 @@ import (
 
 // TestNativeEntryNamespaceReplay pins both halves of the entry-frame contract:
 // required namespaces initialize under ordinary runtime semantics, and the
-// selected top-level entry invocation executes only in the native frame.
+// selected entry runs once. The guarded call is omitted from the bundle and
+// the native frame makes it; a call the compiler can't omit runs during load,
+// and the frame then skips its own call (#1072).
 func TestNativeEntryNamespaceReplay(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds lg and a native-entry Go binary")
 	}
+	for _, c := range []struct{ name, call, want string }{
+		{"guarded", "(when-not *compiling-aot*\n  (println \"app: runtime init ran\")\n  (-main))",
+			"libx: runtime init ran\napp: runtime init ran\n42\n"},
+		{"under when", "(when true (-main))",
+			"libx: runtime init ran\n42\n"},
+		{"through an alias", "(let [f -main] (mapv (fn [_] (f)) [1]))",
+			"libx: runtime init ran\n42\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stdout, stderr := runNativeEntryApp(t, "(ns app (:require [libx.core :as lib]))\n(defn -main [] (println (lib/helper 1)))\n"+c.call+"\n")
+			if string(stdout) != c.want {
+				t.Fatalf("stdout %q, want %q; stderr=%q", stdout, c.want, stderr)
+			}
+		})
+	}
+}
+
+// runNativeEntryApp builds app source, which requires libx.core, into a
+// native-entry binary and returns what the binary prints.
+func runNativeEntryApp(t *testing.T, appSrc string) (stdout, stderr []byte) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	root := repoRoot(t)
@@ -37,12 +59,7 @@ func TestNativeEntryNamespaceReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := filepath.Join(fix, "app.lg")
-	if err := os.WriteFile(app, []byte(`(ns app (:require [libx.core :as lib]))
-(defn -main [] (println (lib/helper 1)))
-(when-not *compiling-aot*
-  (println "app: runtime init ran")
-  (-main))
-`), 0644); err != nil {
+	if err := os.WriteFile(app, []byte(appSrc), 0644); err != nil {
 		t.Fatal(err)
 	}
 	outDir := t.TempDir()
@@ -71,8 +88,5 @@ func TestNativeEntryNamespaceReplay(t *testing.T) {
 	if err != nil || exit != 0 {
 		t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
 	}
-	want := []byte("libx: runtime init ran\napp: runtime init ran\n42\n")
-	if !bytes.Equal(stdout, want) {
-		t.Fatalf("stdout %q, want %q; stderr=%q", stdout, want, stderr)
-	}
+	return stdout, stderr
 }

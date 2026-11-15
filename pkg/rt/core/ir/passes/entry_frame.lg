@@ -590,7 +590,15 @@
         shape         (when entry (:arity-shape entry))
         needs-error?  (if entry (:needs-error? entry) true)
         imports       (frame-imports entry-alias entry-import blanks lowered?)
-        body-stmts    (into (emit-boot-stmts)
+        ;; A top-level call to the entry that the compiler couldn't omit has
+        ;; already run it during load (the entry's fn marks itself), so the
+        ;; frame returns rather than run it a second time (#1072).
+        body-stmts    (into (conj (emit-boot-stmts)
+                                  (gogen/if-stmt
+                                    nil
+                                    (g-call (g-sel "rt" "ProgramEntryRan") [])
+                                    [(gogen/return-stmt [])]
+                                    nil))
                             (if lowered?
                               (into (emit-argv-setup-stmts shape)
                                     (emit-direct-call-stmts
