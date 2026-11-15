@@ -181,9 +181,13 @@ ordinary runtime execution, useful for keeping side effects out of compile time:
 hand, compile the embedded bytecode with
 `lg -c program.lgb -entry-frame-entry app/-main app.lg` (use `app/main` when
 that is the selected entry). This omits the selected top-level entry call
-from the bytecode because the native frame calls it. Other top-level forms,
-including guarded initialization in required namespaces, run with
-`*compiling-aot*` false at runtime. Ordinary `lg -c` keeps the entry call.
+from the bytecode because the native frame calls it. The call can be written
+`(-main ...)` or `(apply -main ...)`, on its own, in `do`, or in
+`(when-not *compiling-aot* ...)`; a call written any other way, such as under
+`when` or `let`, stays in the bytecode, and the binary runs the entry a second
+time. Other top-level forms, including guarded initialization in
+required namespaces, run with `*compiling-aot*` false at runtime. Ordinary
+`lg -c` keeps the entry call.
 
 `*in-wasm*` is `true` when running inside a WASM build.
 

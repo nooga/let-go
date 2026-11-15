@@ -16,15 +16,25 @@ import (
 
 // TestNativeEntryNamespaceReplay pins both halves of the entry-frame contract:
 // required namespaces initialize under ordinary runtime semantics, and the
-// selected top-level entry invocation executes only in the native frame.
+// selected top-level entry invocation executes only in the native frame,
+// whether it is spelled (-main) or (apply -main ...) (#1072).
 func TestNativeEntryNamespaceReplay(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds lg and a native-entry Go binary")
 	}
+	bin := buildLG(t)
+	for name, call := range map[string]string{
+		"call":  "(-main)",
+		"apply": "(apply -main *command-line-args*)",
+	} {
+		t.Run(name, func(t *testing.T) { testNativeEntryReplay(t, bin, call) })
+	}
+}
+
+func testNativeEntryReplay(t *testing.T, bin, call string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	root := repoRoot(t)
-	bin := buildLG(t)
 	fix := t.TempDir()
 	lib := filepath.Join(fix, "libx", "core.lg")
 	if err := os.MkdirAll(filepath.Dir(lib), 0755); err != nil {
@@ -38,10 +48,10 @@ func TestNativeEntryNamespaceReplay(t *testing.T) {
 	}
 	app := filepath.Join(fix, "app.lg")
 	if err := os.WriteFile(app, []byte(`(ns app (:require [libx.core :as lib]))
-(defn -main [] (println (lib/helper 1)))
+(defn -main [& _] (println (lib/helper 1)))
 (when-not *compiling-aot*
   (println "app: runtime init ran")
-  (-main))
+  `+call+`)
 `), 0644); err != nil {
 		t.Fatal(err)
 	}
