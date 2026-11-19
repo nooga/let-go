@@ -19,10 +19,13 @@
 ;; Ops that constrain their operands to be :int. Conservative — we don't
 ;; try to distinguish :int from :float here; the dominant case in the
 ;; bootstrap codebase is integer arithmetic, and forward typeinfer can
-;; still widen later if needed.
+;; still widen later if needed. The bit ops take only Ints natively
+;; ("bit-and expected Int"), so a param one reads is an int exactly.
 (def ^:private int-constraint-ops
   #{:add :sub :mul :inc :dec
-    :lt :lte :gt :gte})
+    :lt :lte :gt :gte
+    :bit-and :bit-or :bit-xor :bit-and-not :bit-not
+    :bit-shift-left :bit-shift-right :unsigned-bit-shift-right})
 
 (defn- constraint-from-user [user-op]
   "Type constraint a user op imposes on its operands.

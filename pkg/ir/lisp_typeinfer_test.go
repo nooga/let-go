@@ -176,6 +176,27 @@ func TestLatticePreservesExactDTypeFacts(t *testing.T) {
 	}
 }
 
+// A bit op takes only Ints natively ("bit-and expected Int"), so a param it
+// reads is an int, as one + reads is.
+func TestInferArgTypesSeedsIntFromBitOps(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn mix [x y] (bit-xor (bit-and x 255) (unsigned-bit-shift-right y 3)))`)
+
+	passVarCounter++
+	fnVar := fmt.Sprintf("*typeinfra-fn-%d*", passVarCounter)
+	rt.NS(rt.NameCoreNS).Def(fnVar, fn)
+
+	got := runLispExpr(t, fmt.Sprintf(`(let [s (ir.lattice/new-typeinfra-state %[1]s)]
+		(ir.lattice/seed-state-from-inst-types! s %[1]s)
+		(ir.passes.infer-arg-types/infer-arg-types %[1]s s)
+		(pr-str [(ir.lattice/state-type s (ir/fn-load-arg %[1]s 0))
+		         (ir.lattice/state-type s (ir/fn-load-arg %[1]s 1))]))`, fnVar))
+	if string(got.(vm.String)) != "[:int :int]" {
+		t.Fatalf("params read only by bit ops are seeded %s, want [:int :int]", got)
+	}
+}
+
 func TestTypeInfraStateSeedsWithoutTouchingInstTypesUntilFlush(t *testing.T) {
 	ensureLoader()
 
