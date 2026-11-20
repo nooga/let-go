@@ -220,7 +220,7 @@ func Nth(coll vm.Value, i int64) (vm.Value, error) {
 	}
 	// Fast path: positional collections (vm.Indexed) — those addressed by a
 	// 0-based integer index. Maps and sets are key-addressable rather than
-	// positional and fall through to the seq walk below, as do lazy seqs.
+	// positional and are rejected below; lazy seqs fall through to the seq walk.
 	// This path is the only correct route for positional-but-not-seqable
 	// types (transient vectors, chunks): the seq walk would return nil.
 	if ix, ok := coll.(vm.Indexed); ok {
@@ -228,6 +228,9 @@ func Nth(coll vm.Value, i int64) (vm.Value, error) {
 			return vm.NIL, fmt.Errorf("nth index out of bounds")
 		}
 		return ix.Nth(int(i)), nil
+	}
+	if err := vm.NthUnsupported(coll); err != nil {
+		return vm.NIL, err
 	}
 	// Seq path: linear walk. The MaxInt guard matters only where int is
 	// narrower than the index: no in-memory seq has that many elements, so
@@ -258,7 +261,7 @@ func Nth3(coll vm.Value, i int64, notFound vm.Value) (vm.Value, error) {
 	}
 	// Fast path: positional collections (vm.Indexed) — those addressed by a
 	// 0-based integer index. Maps and sets are key-addressable rather than
-	// positional and fall through to the seq walk below, as do lazy seqs.
+	// positional and are rejected below; lazy seqs fall through to the seq walk.
 	// This path is the only correct route for positional-but-not-seqable
 	// types (transient vectors, chunks): the seq walk would return nil.
 	if ix, ok := coll.(vm.Indexed); ok {
@@ -266,6 +269,10 @@ func Nth3(coll vm.Value, i int64, notFound vm.Value) (vm.Value, error) {
 			return notFound, nil
 		}
 		return ix.Nth(int(i)), nil
+	}
+	// A not-found value does not make a map or set positional.
+	if err := vm.NthUnsupported(coll); err != nil {
+		return vm.NIL, err
 	}
 	// Seq path: linear walk. See Nth for why MaxInt is an out-of-bounds index.
 	if i < 0 || i > math.MaxInt {

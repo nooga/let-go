@@ -2363,7 +2363,7 @@ func installLangNS() {
 		}
 		// Fast path: positional collections (vm.Indexed) — those addressed by a
 		// 0-based integer index. Maps and sets are key-addressable rather than
-		// positional and fall through to the seq walk below, as do lazy seqs.
+		// positional and are rejected below; lazy seqs fall through to the seq walk.
 		// This path is the only correct route for positional-but-not-seqable
 		// types (transient vectors, chunks): the seq walk would return nil.
 		if ix, ok := vs[0].(vm.Indexed); ok {
@@ -2374,6 +2374,9 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("nth index out of bounds")
 			}
 			return ix.Nth(n), nil
+		}
+		if err := vm.NthUnsupported(vs[0]); err != nil {
+			return vm.NIL, err
 		}
 		// Seq path: linear walk
 		if n < 0 {
