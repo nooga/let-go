@@ -366,10 +366,15 @@
          nil)]
       [(gogen/expr-stmt call)])))
 
+(defn- entry-ns-and-name
+  "The entry's namespace and var name, defaulted the same way for every
+   frame call that names the entry."
+  [entry]
+  [(or (:ns entry) "") (or (:name entry) "-main")])
+
 (defn- emit-vm-fallback-stmts [entry]
   "VM fallback when the entry did not lower."
-  (let [var-name (if entry (:name entry) "-main")
-        ns-name  (if entry (:ns entry) "")
+  (let [[ns-name var-name] (entry-ns-and-name entry)
         shape    (if entry (:arity-shape entry) :variadic)
         argv-stmts
         (case shape
@@ -407,7 +412,7 @@
              (format-error-exit-stmts)
              nil)])))
 
-(defn- emit-boot-stmts []
+(defn- emit-boot-stmts [entry]
   ;; Order is load-bearing: publish *command-line-args* before namespace
   ;; replay so top-level forms see the real argv; own ShutdownAllPods
   ;; like lg / lg-runtime so pods opened during boot/load are cleaned up.
@@ -446,6 +451,11 @@
    ;; Load program namespaces in dependency order. The program.lgb artifact
    ;; compiled for this frame omits only the selected top-level entry call;
    ;; other runtime initialization, including in required namespaces, runs.
+   ;; Watch the entry's var while the program loads: a top-level call the
+   ;; compiler couldn't omit runs the entry then, and the frame returns
+   ;; below instead of running it a second time (#1072).
+   (gogen/expr-stmt
+     (g-call (g-sel "rt" "WatchProgramEntry") (mapv g-str (entry-ns-and-name entry))))
    (gogen/if-stmt
      (gogen/multi-assign ":="
        [(g-id "err")]
@@ -470,6 +480,11 @@
        [(g-call (g-sel "rt" "RunProgramMainChunk") [(g-id "unit")])])
      (gogen/binary "!=" (g-id "err") (g-id "nil"))
      (exit-on-err-stmts "%v\n" [(g-id "err")])
+     nil)
+   (gogen/if-stmt
+     nil
+     (g-call (g-sel "rt" "ProgramEntryRan") (mapv g-str (entry-ns-and-name entry)))
+     [(gogen/return-stmt [])]
      nil)])
 
 (defn- frame-imports [entry-alias entry-import blanks lowered?]
@@ -590,7 +605,7 @@
         shape         (when entry (:arity-shape entry))
         needs-error?  (if entry (:needs-error? entry) true)
         imports       (frame-imports entry-alias entry-import blanks lowered?)
-        body-stmts    (into (emit-boot-stmts)
+        body-stmts    (into (emit-boot-stmts entry)
                             (if lowered?
                               (into (emit-argv-setup-stmts shape)
                                     (emit-direct-call-stmts

@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync/atomic"
 
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/vm"
@@ -191,6 +192,60 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 		ApplyGoOverrides(ns)
 	}
 	return nil
+}
+
+// Set while an entry-frame binary loads: each wrapper stored in the entry
+// var mapped to the fn it wraps, and whether any wrapper was called.
+var (
+	programEntryWrappers map[vm.Value]vm.Fn
+	programEntryRan      atomic.Bool
+)
+
+// WatchProgramEntry makes every fn bound to namespace/name record that it
+// was called, until ProgramEntryRan. The native frame calls it before
+// loading the program: a top-level call to the entry that the compiler
+// couldn't omit then runs during load, and the frame skips its own call
+// (#1072). Watching the var rather than the fn covers every way the entry
+// can be defined (defn, an alias, comp, *ir-compile*) and every call that
+// goes through the var.
+func WatchProgramEntry(namespace, name string) {
+	programEntryWrappers = map[vm.Value]vm.Fn{}
+	vm.SetRootHook(func(v *vm.Var, val vm.Value) vm.Value {
+		if v.VarName() != name || v.NS() != namespace {
+			return val
+		}
+		f, ok := val.(vm.Fn)
+		if !ok {
+			return val
+		}
+		// with-redefs and alter-var-root write back the value they saved,
+		// which is already a wrapper.
+		if _, wrapped := programEntryWrappers[val]; wrapped {
+			return val
+		}
+		w := vm.NewCtxNativeFn(name, func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+			programEntryRan.Store(true)
+			return ec.Invoke(f, args)
+		})
+		programEntryWrappers[w] = f
+		return w
+	})
+}
+
+// ProgramEntryRan ends the watch WatchProgramEntry started, puts the entry's
+// own fn back in its var, and reports whether the entry ran while the
+// program loaded.
+func ProgramEntryRan(namespace, name string) bool {
+	vm.SetRootHook(nil)
+	if ns := LookupNS(namespace); ns != nil {
+		if v := ns.LookupLocal(vm.Symbol(name)); v != nil {
+			if f, ok := programEntryWrappers[v.Root()]; ok {
+				v.SetRoot(f)
+			}
+		}
+	}
+	programEntryWrappers = nil
+	return programEntryRan.Load()
 }
 
 // InvokeProgramEntry looks up name ("-main" or "main") in the given

@@ -99,7 +99,24 @@ func NewVar(nsref *Namespace, ns string, name string) *Var {
 	return v
 }
 
+// rootHook, when set, sees every value stored as a var root and returns the
+// value to store instead. An entry-frame binary uses it to learn whether its
+// entry ran while the program loaded; see rt.WatchProgramEntry.
+var rootHook atomic.Pointer[func(*Var, Value) Value]
+
+// SetRootHook installs h as the root hook, or removes it when h is nil.
+func SetRootHook(h func(*Var, Value) Value) {
+	if h == nil {
+		rootHook.Store(nil)
+		return
+	}
+	rootHook.Store(&h)
+}
+
 func (v *Var) SetRoot(val Value) *Var {
+	if h := rootHook.Load(); h != nil {
+		val = (*h)(v, val)
+	}
 	v.root.Store(valPtr(val))
 	v.updateGuard(val)
 	return v
@@ -257,6 +274,9 @@ func (v *Var) AlterRootArgs(fn Fn, args []Value) (Value, error) {
 	result, err := fn.Invoke(append([]Value{old}, args...))
 	if err != nil {
 		return NIL, err
+	}
+	if h := rootHook.Load(); h != nil {
+		result = (*h)(v, result)
 	}
 	v.root.Store(valPtr(result))
 	v.updateGuard(result)
