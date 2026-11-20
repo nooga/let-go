@@ -1,0 +1,186 @@
+name: Perf compile
+
+# What `lg compile` buys, base vs head, on one runner. The other perf checks
+# time Go micro-benchmarks, which cannot see a program lowered to Go: this one
+# builds each program under benchmark/compile three ways (the VM, lg compile,
+# lg compile -lowered-core) with the merge-base's lg and with the head's, runs
+# them interleaved, and posts the times, the count of functions that lowered,
+# and the speedup over the VM.
+#
+# Informational only. It never fails the PR on a timing; the job is red only
+# when the measurement is broken (a head build or run fails, or an arm's result
+# differs between base and head). On a shared runner a few percent is noise:
+# read the lowered-function counts first, then the ratios between arms.
+#
+# Opt-in via the `perf-compile` label; without it the job is skipped with no
+# runner allocated. It re-runs on each push while the label is on.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'pkg/**'
+      - 'cmd/**'
+      - 'benchmark/compile/**'
+      - 'scripts/perf_compile.py'
+      - '.github/workflows/perf-compile.yml'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to benchmark'
+        required: true
+      rounds:
+        description: 'runs per arm (interleaved)'
+        default: '5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-compile-${{ github.event.pull_request.number || github.event.inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'perf-compile')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      pr: ${{ steps.refs.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve base and head
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          PR_FROM_INPUT: ${{ github.event.inputs.pr }}
+          BASE_FROM_EVENT: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Same resolution as perf-pr.yml: the merge-base is the PR's own
+          # fork point, so the delta is the PR's and not drift on the base.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            pr="$PR_FROM_INPUT"
+            [[ "$pr" =~ ^[0-9]+$ ]] || { echo "pr input must be a number, got: ${pr}" >&2; exit 1; }
+            base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" --jq .base.ref)"
+          else
+            pr="$PR_FROM_EVENT"
+            base_ref="$BASE_FROM_EVENT"
+          fi
+          git fetch --no-tags origin "$base_ref" "refs/pull/${pr}/head:pr-head"
+          {
+            echo "pr=${pr}"
+            echo "head=$(git rev-parse pr-head)"
+            echo "base=$(git merge-base "origin/${base_ref}" pr-head)"
+          } >> "$GITHUB_OUTPUT"
+
+      # -buildvcs=false keeps each lg a dev build, so the Go module lg compile
+      # generates points at that side's worktree (LETGO_SRC) and not at a
+      # pseudo-version on the module proxy.
+      - name: Build lg at base and head
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          git worktree add --force ../wt-base "$BASE"
+          git worktree add --force ../wt-head "$HEAD"
+          for side in base head; do
+            ( cd "../wt-${side}" && git submodule update --init --recursive \
+              && go build -buildvcs=false -o "${RUNNER_TEMP}/lg-${side}" . )
+          done
+
+      # Both sides build the HEAD's programs, so a PR that edits a program
+      # still compares like with like.
+      - name: Build the programs three ways on each side
+        run: |
+          set -euo pipefail
+          for side in base head; do
+            python3 ../wt-head/scripts/perf_compile.py build \
+              --lg "${RUNNER_TEMP}/lg-${side}" --src "../wt-${side}" \
+              --programs ../wt-head/benchmark/compile \
+              --out "${RUNNER_TEMP}/perf-compile/${side}"
+          done
+
+      - name: Run interleaved and report
+        env:
+          ROUNDS: ${{ github.event.inputs.rounds || '5' }}
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          # Nonzero only for a broken measurement; capture it so the report
+          # still posts.
+          rc=0
+          python3 ../wt-head/scripts/perf_compile.py run \
+            --base "${RUNNER_TEMP}/perf-compile/base" \
+            --head "${RUNNER_TEMP}/perf-compile/head" \
+            --rounds "$ROUNDS" > "${RUNNER_TEMP}/report.md" || rc=$?
+          {
+            echo "## Perf compile — base vs head, same runner"
+            echo
+            echo "Base \`${BASE:0:12}\` vs head \`${HEAD:0:12}\`."
+            echo
+            cat "${RUNNER_TEMP}/report.md"
+          } > "${RUNNER_TEMP}/comment.md"
+          cat "${RUNNER_TEMP}/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: Upload PR comment body
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-compile-comment
+          path: ${{ runner.temp }}/comment.md
+          if-no-files-found: warn
+
+  comment:
+    needs: bench
+    # always(): a broken measurement fails the bench job, and its report is
+    # what explains why.
+    if: always() && needs.bench.result != 'skipped' && needs.bench.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download PR comment body
+        uses: actions/download-artifact@v4
+        with:
+          name: perf-compile-comment
+          path: ${{ runner.temp }}/perf-compile-comment
+
+      # Sticky PR comment (upsert by marker). Fork PRs get a read-only token,
+      # so this cannot post there; the job summary still carries the report.
+      - name: Upsert PR comment
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR: ${{ needs.bench.outputs.pr }}
+          COMMENT_PATH: ${{ runner.temp }}/perf-compile-comment/comment.md
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- perf-compile-report -->';
+            const body = marker + '\n' + fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            const {owner, repo} = context.repo;
+            const issue_number = Number(process.env.PR);
+            const comments = await github.paginate(github.rest.issues.listComments, {owner, repo, issue_number});
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }
