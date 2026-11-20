@@ -344,10 +344,10 @@ func (c *Context) compileMultiple(reader io.Reader, entry *entryFrameCall) (comp
 }
 
 // omitTopLevelEntryCall removes only a call to the selected entry from a
-// top-level expression. The documented guard and sequential do forms are
-// traversed, while fn bodies, quotes, and other nested expressions are left
-// untouched. Replacing a call with nil preserves sibling side effects and the
-// surrounding form's result shape.
+// top-level expression: (entry ...) or (apply entry ...). The documented guard
+// and sequential do forms are traversed, while fn bodies, quotes, and other
+// nested expressions are left untouched. Replacing a call with nil preserves
+// sibling side effects and the surrounding form's result shape.
 func omitTopLevelEntryCall(form vm.Value, entry entryFrameCall) (vm.Value, bool) {
 	lst, ok := form.(*vm.List)
 	if !ok || lst.RawCount() == 0 {
@@ -357,12 +357,11 @@ func omitTopLevelEntryCall(form vm.Value, entry entryFrameCall) (vm.Value, bool)
 	if !ok {
 		return form, false
 	}
-	name := string(head)
-	if name == entry.name || name == entry.namespace+"/"+entry.name {
+	if isEntryCall(lst, head, entry) {
 		return vm.NIL, true
 	}
 	var start int
-	switch name {
+	switch string(head) {
 	case "do", "clojure.core/do":
 		start = 1
 	case "when-not", "clojure.core/when-not":
@@ -385,6 +384,27 @@ func omitTopLevelEntryCall(form vm.Value, entry entryFrameCall) (vm.Value, bool)
 		return form, false
 	}
 	return vm.NewList(parts).(*vm.List).WithMeta(lst.Meta()), true
+}
+
+// isEntryCall reports whether lst, headed by head, calls the entry directly
+// or through apply.
+func isEntryCall(lst *vm.List, head vm.Symbol, entry entryFrameCall) bool {
+	if entry.names(head) {
+		return true
+	}
+	if head != "apply" && head != "clojure.core/apply" {
+		return false
+	}
+	parts := lst.Unbox().([]vm.Value)
+	if len(parts) < 2 {
+		return false
+	}
+	f, ok := parts[1].(vm.Symbol)
+	return ok && entry.names(f)
+}
+
+func (e entryFrameCall) names(s vm.Symbol) bool {
+	return string(s) == e.name || string(s) == e.namespace+"/"+e.name
 }
 
 func isCompilingAOTGuard(form vm.Value) bool {
