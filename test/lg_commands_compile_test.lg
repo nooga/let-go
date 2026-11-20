@@ -188,7 +188,7 @@
     (spit app "(ns app (:require [util :as u] [lib] [clojure.string :as s]))\n(defn -main [] (u/f))\n")
     (spit util "(ns util (:require [app]))\n(defn f [] 1)\n")
     (spit lib "(ns lib)\n(defn g [] 2)\n")
-    (let [res (lg.compiler/program-files [app] [root] (fn [ns] (get paths ns)))]
+    (let [res (lg.compiler/program-files [app] [root] [] (fn [ns] (get paths ns)))]
       (testing "adds a required file under a root, once, despite the require cycle"
         (is (= [app util] (:files res)))
         (is (= ["util"] (:added res))))
@@ -198,6 +198,29 @@
         (is (not-any? (fn [[ns _]] (= "clojure.string" ns)) (:outside res)))))
     (syscall/rm-rf root)
     (syscall/rm-rf ext)))
+
+;; An input at the project root with LG_SOURCE_PATHS=.:vendor has the root .,
+;; which contains vendor/, so a dependency is judged by its own search-path
+;; entry, not by whether a root contains it.
+(deftest program-files-leaves-a-vendored-dependency-of-a-root-level-input
+  (let [root (scratch-dir "rootlevel")
+        app  (str root "/app.lg")
+        util (str root "/lib/util.lg")
+        libx (str root "/vendor/libx/core.lg")
+        search [root (str root "/vendor")]
+        paths {"util" util "libx.core" libx}]
+    (doseq [d ["/lib" "/vendor" "/vendor/libx"]] (mkdir (str root d)))
+    (spit app "(ns app (:require [util] [libx.core]))\n(defn -main [] 1)\n")
+    (spit util "(ns util)\n(defn f [] 1)\n")
+    (spit libx "(ns libx.core)\n(defn g [] 2)\n")
+    (let [roots (lg.compiler/program-roots [app] search)
+          res   (lg.compiler/program-files [app] roots search (fn [ns] (get paths ns)))]
+      (is (= [root] roots))
+      (testing "a dependency under . on no narrower entry is part of the program"
+        (is (= ["util"] (:added res))))
+      (testing "a dependency on vendor/ stays on the VM"
+        (is (= [["libx.core" libx]] (:outside res)))))
+    (syscall/rm-rf root)))
 
 (deftest program-roots-are-the-inputs-search-roots
   (testing "a dependency on another search-path entry (vendor/) is outside the roots"

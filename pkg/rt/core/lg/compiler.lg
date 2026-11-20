@@ -80,21 +80,34 @@
 
 ;; Whole-program lowering. Given the files named on the command line, also find
 ;; the files of the namespaces they require, transitively, and lower those that
-;; belong to the program. A namespace belongs when its source is a file under one
-;; of `roots`: each search-path entry an input was found under, or the input's
-;; own directory when it is under none. A dependency kept on another search-path
-;; entry (vendor/, an lgx checkout) is not under a root, so it stays on the VM
-;; and is reported. Embedded namespaces (core, lg.*) have no source file and are
-;; never added. `source-path` maps a namespace name to the absolute,
+;; belong to the program. Every file, input or dependency, is placed on the most
+;; specific search-path entry that contains it. The program's `roots` are the
+;; inputs' entries, or an input's own directory when it is on none. A dependency
+;; belongs when its own entry is one of those roots, or, when it is on no entry,
+;; when it sits under one. A dependency kept on another entry (vendor/, an lgx
+;; checkout) stays on the VM and is reported, even when a broader entry such as
+;; . also contains it. Embedded namespaces (core, lg.*) have no source file and
+;; are never added. `source-path` maps a namespace name to the absolute,
 ;; symlink-resolved path of the file the resolver would load, or nil.
 (defn- under-root? [roots path]
   (boolean (some (fn [r] (clojure.string/starts-with? path (if (= r "/") r (str r "/")))) roots)))
+
+(defn- home-root
+  "The most specific of search-roots that contains path, or nil."
+  [search-roots path]
+  (let [found (filter (fn [r] (under-root? [r] path)) search-roots)]
+    (when (seq found) (apply max-key count found))))
+
+(defn- in-program? [roots search-roots path]
+  (if-let [home (home-root search-roots path)]
+    (boolean (some #{home} roots))
+    (under-root? roots path)))
 
 (defn program-files
   "files (absolute paths) plus the program files they require, transitively.
    Returns {:files [...] :added [ns...] :outside [[ns path]...]}, inputs first,
    in discovery order."
-  [files roots source-path]
+  [files roots search-roots source-path]
   (loop [queue (vec files) seen (set files) out [] added [] outside [] skipped #{}]
     (if (empty? queue)
       {:files out :added added :outside outside}
@@ -106,7 +119,7 @@
                            p  (source-path ns)]
                        (cond
                          (or (nil? p) (contains? (:seen acc) p) (contains? (:skipped acc) ns)) acc
-                         (under-root? roots p)
+                         (in-program? roots search-roots p)
                          (-> acc (update :queue conj p) (update :seen conj p) (update :added conj ns))
                          :else
                          (-> acc (update :outside conj [ns p]) (update :skipped conj ns)))))
@@ -123,10 +136,8 @@
   [inputs search-roots]
   (vec (distinct
         (map (fn [f]
-               (let [found (filter (fn [r] (under-root? [r] f)) search-roots)]
-                 (if (seq found)
-                   (apply max-key count found)
-                   (clojure.string/replace f #"/[^/]*$" ""))))
+               (or (home-root search-roots f)
+                   (clojure.string/replace f #"/[^/]*$" "")))
              inputs))))
 
 (defn- program-summary
@@ -155,8 +166,9 @@
     (if (or named-only? (nil? source-path) (nil? (:source-roots host))
             (nil? (:abs-path host)))
       {:files files :inputs files}
-      (let [abs (mapv (:abs-path host) files)
-            res (program-files abs (program-roots abs ((:source-roots host))) source-path)]
+      (let [abs    (mapv (:abs-path host) files)
+            search ((:source-roots host))
+            res    (program-files abs (program-roots abs search) search source-path)]
         (when-let [line (program-summary res)] (println line))
         {:files (:files res) :inputs abs}))))
 
