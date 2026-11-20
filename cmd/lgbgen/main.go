@@ -752,8 +752,30 @@ func refreshManifest() {
 // mungeID(getLastNSPart(ns)).
 func nsToGoPkgName(nsName string) string {
 	parts := strings.Split(nsName, ".")
-	last := parts[len(parts)-1]
-	return strings.ReplaceAll(last, "-", "_")
+	return goPkgSegment(parts[len(parts)-1])
+}
+
+// unusableGoPkgNames are names a lowered package cannot take: Go's keywords
+// are not identifiers, a package named main is a program, which nothing can
+// import, and one named init cannot be imported under its own name.
+// gogen/ns->go-pkg in pkg/rt/gogen/gogen.lg has the same set.
+var unusableGoPkgNames = map[string]bool{
+	"main": true, "init": true,
+	"break": true, "case": true, "chan": true, "const": true, "continue": true,
+	"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,
+	"func": true, "go": true, "goto": true, "if": true, "import": true,
+	"interface": true, "map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true, "var": true,
+}
+
+// goPkgSegment is the last namespace segment as a package name: hyphens become
+// underscores, and a name Go cannot use takes a trailing underscore.
+func goPkgSegment(segment string) string {
+	munged := strings.ReplaceAll(segment, "-", "_")
+	if unusableGoPkgNames[munged] {
+		return munged + "_"
+	}
+	return munged
 }
 
 // nsToGoRelDir converts a let-go namespace name to the relative directory path
@@ -762,8 +784,15 @@ func nsToGoPkgName(nsName string) string {
 // (ir.passes.pipeline → ir/passes/pipeline, ir.lower-go → ir/lower_go).
 // Mirrors Glojure's nsToPath.
 func nsToGoRelDir(nsName string) string {
-	s := strings.ReplaceAll(nsName, "-", "_")
-	return filepath.FromSlash(strings.ReplaceAll(s, ".", "/"))
+	parts := strings.Split(nsName, ".")
+	last := len(parts) - 1
+	for i := range parts[:last] {
+		parts[i] = strings.ReplaceAll(parts[i], "-", "_")
+	}
+	// The last directory is named like the package: an import's package
+	// identifier is read off the import path's last segment.
+	parts[last] = goPkgSegment(parts[last])
+	return filepath.Join(parts...)
 }
 
 // goGeneratedBanner is stamped on the first line of every Go file lgbgen
