@@ -19,6 +19,7 @@
 ;; Usage: ./benchmark/letgo benchmark/aot/build.lg [--go <path>] [--out <path>]
 
 (require 'ir.passes.pipeline)
+(require 'gogen)
 (require 'string)
 
 (defn flag [argv name default]
@@ -55,10 +56,10 @@
 (defn- ns-form? [form] (and (seq? form) (= 'ns (first form))))
 
 (defn- nsname->pkg [ns-name]
-  (string/replace (last (string/split (str ns-name) #"\.")) "-" "_"))
+  (gogen/ns->go-pkg (str ns-name)))
 
 (defn- nsname->reldir [ns-name]
-  (string/replace (string/replace (str ns-name) "-" "_") "." "/"))
+  (gogen/ns->go-reldir (str ns-name)))
 
 ;; Lower one fixture into pkg/rt/core_go_lowered/<reldir>/<pkg>.go.
 (defn lower-fixture! [fixture]

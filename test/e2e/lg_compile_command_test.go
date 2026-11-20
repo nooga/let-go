@@ -224,6 +224,73 @@ func TestLgCompileCommand(t *testing.T) {
 		}
 	})
 
+	// A namespace's last segment names its Go package. main would make it a
+	// program, which the entry frame cannot import, init cannot be imported
+	// under its own name, and go and type are not identifiers; each takes a
+	// trailing underscore, on the directory too.
+	t.Run("namespaces named main, init, go and type", func(t *testing.T) {
+		files := map[string]string{
+			"named/init.lg": "(ns named.init)\n(defn setup [] :set)\n",
+			"named/type.lg": "(ns named.type (:require [named.init :as i]))\n(defn kind [] [:typed (i/setup)])\n",
+			"named/go.lg":   "(ns named.go (:require [named.type :as t]))\n(defn run [] [:ran (t/kind)])\n",
+			"named/main.lg": `(ns named.main (:require [named.go :as g]))
+(defn -main [] (println (g/run)))
+(when-not *compiling-aot* (-main))
+`,
+		}
+		var paths []string
+		for _, rel := range []string{"named/init.lg", "named/type.lg", "named/go.lg", "named/main.lg"} {
+			path := filepath.Join(fix, rel)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(files[rel]), 0644); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, path)
+		}
+		work := t.TempDir()
+		exe := filepath.Join(t.TempDir(), "named.native")
+		if out, err := runCmd(ctx, t, bin, fix,
+			append([]string{"compile", "-o", exe, "-work", work}, paths...), env...); err != nil {
+			t.Fatalf("lg compile: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(work, "named", "main_", "main_.go")); err != nil {
+			t.Errorf("named.main was not lowered into named/main_: %v", err)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 || string(stdout) != "[:ran [:typed :set]]\n" {
+			t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
+		}
+	})
+
+	// named.main and named.main- would both be written to named/main_, the
+	// second over the first, and calls into one would reach the other.
+	t.Run("two namespaces that lower to one directory are refused", func(t *testing.T) {
+		var paths []string
+		for rel, src := range map[string]string{
+			"twin/main.lg":  "(ns twin.main)\n(defn v [] 11)\n",
+			"twin/main_.lg": "(ns twin.main-)\n(defn v [] 22)\n",
+		} {
+			path := filepath.Join(fix, rel)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, path)
+		}
+		out, err := runCmd(ctx, t, bin, fix,
+			append([]string{"compile", "-o", filepath.Join(t.TempDir(), "twin")}, paths...), env...)
+		if err == nil {
+			t.Fatalf("lg compile built two namespaces into one directory:\n%s", out)
+		}
+		if !bytes.Contains([]byte(out), []byte("twin.main and twin.main- both lower to the Go package directory twin/main_")) {
+			t.Fatalf("missing the diagnostic naming both namespaces:\n%s", out)
+		}
+	})
+
 	t.Run("usage errors exit 2", func(t *testing.T) {
 		for _, args := range [][]string{{"compile"}, {"compile", "-bogus", app}, {"compile", "-o"}} {
 			cmd := exec.CommandContext(ctx, bin, args...)
