@@ -285,6 +285,97 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[3]), go.importObject)
 		}
 	})
 
+	// -entry-frame-entry with -w: the module holds a package whose init()
+	// registers a Go override for ovr/greet, as a package lowered by lg compile
+	// does. A plain -w bundle replays the program, and its top-level (-main)
+	// runs before anything installs the override, so it prints the bytecode
+	// greet; that run is what makes the second check mean something. The
+	// entry-frame bundle installs the override first and invokes -main itself,
+	// once.
+	t.Run("-w -entry-frame-entry installs linked Go overrides before the entry", func(t *testing.T) {
+		mod := newModule(t, true)
+		if err := os.MkdirAll(filepath.Join(mod, "override"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(mod, "override", "override.go"), `package override
+
+import (
+	"fmt"
+
+	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/vm"
+)
+
+func init() {
+	rt.RegisterGoOverrides("ovr", map[string]vm.Value{
+		"greet": vm.NewCtxNativeFn("greet", func(*vm.ExecContext, []vm.Value) (vm.Value, error) {
+			return vm.String("go"), nil
+		}),
+	})
+	// A lowered [argv] entry is built like this, and reports itself variadic.
+	rt.RegisterGoOverrides("ovrargv", map[string]vm.Value{
+		"-main": vm.NewTypedCtxNativeFn("-main", func(_ *vm.ExecContext, argv vm.Value) (vm.Value, error) {
+			fmt.Println("go", argv)
+			return vm.NIL, nil
+		}),
+	})
+}
+`)
+		ovrApp := filepath.Join(fix, "ovr.lg")
+		writeFile(t, ovrApp, `(ns ovr)
+(defn greet [] "vm")
+(defn -main [] (println (greet)))
+(when-not *compiling-aot* (-main))
+`)
+		build := func(t *testing.T, extra ...string) string {
+			t.Helper()
+			outDir := filepath.Join(t.TempDir(), "web")
+			args := append([]string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external",
+				"-w-module", mod, "-import", "example.com/host/override"}, extra...)
+			if out, err := runCmd(ctx, t, bin, fix, append(args, ovrApp), env...); err != nil {
+				t.Fatalf("lg %v: %v\n%s", args, err, out)
+			}
+			return outDir
+		}
+		if wout, werr, err := runWasm(t, build(t)); err != nil || wout != "vm\n" {
+			t.Fatalf("plain -w: err=%v stdout=%q, want %q; stderr=%q", err, wout, "vm\n", werr)
+		}
+		if wout, werr, err := runWasm(t, build(t, "-entry-frame-entry", "ovr/-main")); err != nil || wout != "go\n" {
+			t.Fatalf("-w -entry-frame-entry: err=%v stdout=%q, want %q; stderr=%q", err, wout, "go\n", werr)
+		}
+		// The lowered entry itself takes [argv], and gets the empty vector.
+		ovrApp = filepath.Join(fix, "ovrargv.lg")
+		writeFile(t, ovrApp, `(ns ovrargv)
+(defn -main [argv] (println "vm" argv))
+(when-not *compiling-aot* (-main []))
+`)
+		if wout, werr, err := runWasm(t, build(t, "-entry-frame-entry", "ovrargv/-main")); err != nil || wout != "go []\n" {
+			t.Fatalf("lowered [argv] entry: err=%v stdout=%q, want %q; stderr=%q", err, wout, "go []\n", werr)
+		}
+	})
+
+	// A page has no command line. An entry frame passes an [argv] entry an
+	// empty vector, as a native build run with no arguments does, and a
+	// [& args] entry no arguments.
+	t.Run("-w -entry-frame-entry calls [argv] and [& args] entries", func(t *testing.T) {
+		mod := newModule(t, true)
+		for _, c := range []struct{ ns, src, want string }{
+			{"argv", "(defn -main [argv] (println (vector? argv) (count argv)))", "true 0\n"},
+			{"rest", "(defn -main [& args] (println (nil? args)))", "true\n"},
+		} {
+			src := filepath.Join(fix, c.ns+".lg")
+			writeFile(t, src, "(ns "+c.ns+")\n"+c.src+"\n(when-not *compiling-aot* (-main []))\n")
+			outDir := filepath.Join(t.TempDir(), "web")
+			if out, err := runCmd(ctx, t, bin, fix, []string{"-w", outDir, "-w-shell", "none", "-w-wasm", "external",
+				"-w-module", mod, "-entry-frame-entry", c.ns + "/-main", src}, env...); err != nil {
+				t.Fatalf("lg -w %s: %v\n%s", c.ns, err, out)
+			}
+			if wout, werr, err := runWasm(t, outDir); err != nil || wout != c.want {
+				t.Errorf("%s entry: err=%v stdout=%q, want %q; stderr=%q", c.ns, err, wout, c.want, werr)
+			}
+		}
+	})
+
 	// A package can ship an lg layer as well as natives: lglib embeds
 	// greet.lg and registers it from init() with rt.RegisterEmbeddedSource
 	// (#1063). Linked by -import, the namespace resolves in the built program

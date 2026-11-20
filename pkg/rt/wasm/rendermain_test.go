@@ -62,6 +62,19 @@ func TestRenderMainIsValidGo(t *testing.T) {
 	}
 }
 
+// The template is filled by string replacement, never by a Printf, so a doubled
+// %% reaches the generated main as written and its error messages print a
+// literal %v instead of the error.
+func TestRenderMainFormatVerbsAreSingle(t *testing.T) {
+	for _, hostEval := range []bool{false, true} {
+		for _, audio := range []bool{false, true} {
+			if got := RenderMain("s", hostEval, audio); strings.Contains(got, "%%") {
+				t.Fatalf("hostEval=%v audio=%v: generated main contains %%%%:\n%s", hostEval, audio, got)
+			}
+		}
+	}
+}
+
 // The generated main must decode the program through rt.DecodeExecUnit. That
 // is the decode that marks the embedded core namespaces a program references
 // for loading; an inline resolver skips it, and a web build that requires zip
@@ -91,5 +104,56 @@ func TestRenderMainAudio(t *testing.T) {
 		if got := RenderMain("s", hostEval, true); !strings.Contains(got, imp) {
 			t.Fatalf("hostEval=%v: -w-audio output missing %s", hostEval, imp)
 		}
+	}
+}
+
+// An entry-frame main loads the program's dependencies, draining the Go
+// overrides of linked lowered packages, runs the main chunk on its own so a
+// failure there still reaches the -w-host-eval hooks, and invokes the entry
+// itself. The default replay loop must be absent: it would run the program
+// without draining them.
+func TestRenderMainForEntryFrame(t *testing.T) {
+	for _, hostEval := range []bool{false, true} {
+		for _, audio := range []bool{false, true} {
+			got := RenderMainForEntryFrame("s", hostEval, audio, "app.core", "-main", false)
+			if _, err := format.Source([]byte(got)); err != nil {
+				t.Fatalf("hostEval=%v audio=%v: generated main is not valid Go: %v", hostEval, audio, err)
+			}
+			if strings.Contains(got, "__LG_") {
+				t.Fatalf("hostEval=%v audio=%v: unsubstituted marker remains:\n%s", hostEval, audio, got)
+			}
+			load := strings.Index(got, "rt.LoadProgramDependencies(unit)")
+			main := strings.Index(got, "rt.RunMainChunk(unit)")
+			entry := strings.Index(got, `rt.InvokeProgramEntry(vm.NewExecContext(), "app.core", "-main", nil)`)
+			if load < 0 || main < load || entry < main {
+				t.Fatalf("hostEval=%v audio=%v: want load, main chunk, then entry, in that order:\n%s", hostEval, audio, got)
+			}
+			if strings.Contains(got, "unit.NSOrder") {
+				t.Fatalf("hostEval=%v audio=%v: entry-frame main still has the replay loop", hostEval, audio)
+			}
+			if hostEval && !strings.Contains(got, "_lgEval") {
+				t.Fatalf("audio=%v: -w-host-eval body missing from the entry-frame main", audio)
+			}
+		}
+	}
+}
+
+// The entry's namespace and name are spliced in as Go string literals.
+func TestRenderMainForEntryFrameQuotesEntry(t *testing.T) {
+	got := RenderMainForEntryFrame("s", false, false, `odd"ns`, "main", false)
+	if !strings.Contains(got, `"odd\"ns", "main"`) {
+		t.Fatalf("entry not quoted:\n%s", got)
+	}
+}
+
+// An [argv] entry gets an empty vector, spelled into the generated main because
+// a lowered entry cannot report its arity when the page runs.
+func TestRenderMainForEntryFrameArgv(t *testing.T) {
+	got := RenderMainForEntryFrame("s", false, false, "app.core", "-main", true)
+	if !strings.Contains(got, `"app.core", "-main", []vm.Value{vm.EmptyVector})`) {
+		t.Fatalf("[argv] entry not passed an empty vector:\n%s", got)
+	}
+	if _, err := format.Source([]byte(got)); err != nil {
+		t.Fatalf("generated main is not valid Go: %v", err)
 	}
 }
