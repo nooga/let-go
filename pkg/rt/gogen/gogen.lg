@@ -660,19 +660,41 @@
 ;; scripts/lg-compile (the multi-namespace AOT driver) name packages identically.
 ;; Mirrors Glojure's mungeID(getLastNSPart(ns)) / nsToPath.
 
+(def ^:private unusable-go-pkg-names
+  "Names a lowered package cannot take: Go's keywords are not identifiers, a
+   package named main is a program, which nothing can import, and one named
+   init cannot be imported under its own name."
+  #{"main" "init"
+    "break" "case" "chan" "const" "continue" "default" "defer" "else"
+    "fallthrough" "for" "func" "go" "goto" "if" "import" "interface" "map"
+    "package" "range" "return" "select" "struct" "switch" "type" "var"})
+
+(defn- go-pkg-segment
+  "The last namespace segment as a package name: hyphens become underscores,
+   and a name Go cannot use takes a trailing underscore (main -> main_)."
+  [segment]
+  (let [munged (str/replace segment "-" "_")]
+    (if (contains? unusable-go-pkg-names munged) (str munged "_") munged)))
+
 (defn ns->go-pkg
   "The Go package name for namespace `ns-name`: the LAST dot-segment with
    hyphens turned into underscores. This is both the `package` identifier and
    the per-namespace filename stem.
      (gogen/ns->go-pkg \"ir.passes.pipeline\") => \"pipeline\"
-     (gogen/ns->go-pkg \"ir.lower-go\")        => \"lower_go\""
+     (gogen/ns->go-pkg \"ir.lower-go\")        => \"lower_go\"
+     (gogen/ns->go-pkg \"app.main\")           => \"main_\""
   [ns-name]
-  (str/replace (last (str/split ns-name ".")) "-" "_"))
+  (go-pkg-segment (last (str/split ns-name "."))))
 
 (defn ns->go-reldir
   "The relative directory path (under the lowered-output root) that mirrors the
    namespace nesting: dots become path separators, hyphens become underscores.
      (gogen/ns->go-reldir \"ir.passes.pipeline\") => \"ir/passes/pipeline\"
-     (gogen/ns->go-reldir \"ir.lower-go\")        => \"ir/lower_go\""
+     (gogen/ns->go-reldir \"ir.lower-go\")        => \"ir/lower_go\"
+   The last directory is named like the package, because an import's package
+   identifier is read off the import path's last segment:
+     (gogen/ns->go-reldir \"app.main\")           => \"app/main_\""
   [ns-name]
-  (str/replace (str/replace ns-name "-" "_") "." "/"))
+  (let [segments (str/split ns-name ".")]
+    (str/join "/" (conj (mapv (fn [s] (str/replace s "-" "_")) (butlast segments))
+                        (go-pkg-segment (last segments))))))
