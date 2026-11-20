@@ -1,0 +1,35 @@
+;; A float loop with no collections: the escape-time count over a small grid.
+;; Lowering the program is the whole gain here; the lowered core adds nothing.
+;; The hints are what let the loop lower to raw float64 and int64; without
+;; them it stays on boxed values and compiles to about the VM's speed.
+;; The checksum can differ between the VM and a compiled arm on arm64, where
+;; Go fuses x*y+z into one rounding; the driver reports that as a note.
+(ns perfc.numeric)
+
+(defn escape [^double cr ^double ci ^long limit]
+  (loop [zr 0.0 zi 0.0 i 0]
+    (if (or (>= i limit) (> (+ (* zr zr) (* zi zi)) 4.0))
+      i
+      (recur (+ (- (* zr zr) (* zi zi)) cr)
+             (+ (* 2.0 zr zi) ci)
+             (inc i)))))
+
+(defn run []
+  (loop [y 0 acc 0]
+    (if (< y 60)
+      (recur (inc y)
+             (loop [x 0 acc acc]
+               (if (< x 90)
+                 (recur (inc x)
+                        (+ acc (escape (- (* x 0.035) 2.2) (- (* y 0.04) 1.2) 200)))
+                 acc)))
+      acc)))
+
+(defn -main [& _]
+  (loop [i 0 best nil out nil]
+    (if (< i 7)
+      (let [t0 (System/nanoTime) r (run) dt (- (System/nanoTime) t0)]
+        (recur (inc i) (if (or (nil? best) (< dt best)) dt best) r))
+      (println "PERF" "numeric" (quot best 1000) out))))
+
+(when-not *compiling-aot* (-main))
