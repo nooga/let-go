@@ -152,8 +152,15 @@
     (is (= :default (nth (mapcat (fn [x] [x]) []) 0 :default)))
     (is (= :caught (try (nth (mapcat (fn [x] [x]) []) 0) (catch e :caught)))))
 
-  (testing "nth on seqable non-indexed collection (maps are unordered)"
-    (is (contains? #{[:a 1] [:b 2] [:c 3]} (vec (nth (array-map :a 1 :b 2 :c 3) 1)))))
+  (testing "nth on maps and sets throws, as in Clojure (#742)"
+    (is (thrown? Exception (nth #{1 2 3} 0)))
+    (is (thrown? Exception (nth (sorted-set 3 1 2) 0)))
+    (is (thrown? Exception (nth {:a 1 :b 2} 0)))
+    (is (thrown? Exception (nth (sorted-map :b 1 :a 2) 0)))
+    (is (thrown? Exception (nth #{1 2 3} 0 :none))))
+
+  (testing "nth on a map entry still works"
+    (is (= :a (nth (first {:a 1}) 0))))
 
   (testing "nth on string"
     (is (= \e (nth "hello" 1)))))

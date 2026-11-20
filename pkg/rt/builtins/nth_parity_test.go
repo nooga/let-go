@@ -49,3 +49,32 @@ func TestNthMatchesCanonical(t *testing.T) {
 		t.Errorf("Nth3(empty-lazy, 0, :missing) = %v, %v; want :missing", v, err)
 	}
 }
+
+// TestNthRejectsMapsAndSets pins #742 on the AOT direct-call targets: maps and
+// sets, sorted or not, are not positional, so nth throws on them even with a
+// not-found value or a negative index, like clojure.core/nth. A map entry is
+// Indexed and still works.
+func TestNthRejectsMapsAndSets(t *testing.T) {
+	colls := map[string]vm.Value{
+		"set":        vm.NewPersistentSet([]vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)}),
+		"sorted-set": vm.NewSortedSet(vm.DefaultCompare, []vm.Value{vm.Int(3), vm.Int(1), vm.Int(2)}),
+		"map":        vm.NewPersistentMap([]vm.Value{vm.Keyword("a"), vm.Int(1), vm.Keyword("b"), vm.Int(2)}),
+		"sorted-map": vm.NewSortedMap(vm.DefaultCompare, []vm.Value{vm.Keyword("b"), vm.Int(1), vm.Keyword("a"), vm.Int(2)}),
+	}
+	for name, coll := range colls {
+		if v, err := Nth(coll, vm.Int(0)); err == nil {
+			t.Errorf("Nth(%s, 0) = %v; want a throw", name, v)
+		}
+		if v, err := Nth3(coll, vm.Int(0), vm.Keyword("missing")); err == nil {
+			t.Errorf("Nth3(%s, 0, :missing) = %v; want a throw", name, v)
+		}
+		if v, err := Nth3(coll, vm.Int(-1), vm.Keyword("missing")); err == nil {
+			t.Errorf("Nth3(%s, -1, :missing) = %v; want a throw", name, v)
+		}
+	}
+
+	entry := vm.NewPersistentMap([]vm.Value{vm.Keyword("a"), vm.Int(1)}).Seq().First()
+	if v, err := Nth(entry, vm.Int(0)); err != nil || v != vm.Keyword("a") {
+		t.Errorf("Nth(first {:a 1}, 0) = %v, %v; want :a", v, err)
+	}
+}

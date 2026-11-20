@@ -194,6 +194,9 @@ func Nth(coll, i vm.Value) (vm.Value, error) {
 		}
 		return indexed.Nth(idx), nil
 	}
+	if err := vm.NthUnsupported(coll); err != nil {
+		return vm.NIL, err
+	}
 
 	// Handle sequences. Realize a lazy seq at the head and each step (mirrors
 	// rt.forceSeq): an EMPTY lazy seq is non-nil until forced, so First() on it
@@ -239,6 +242,10 @@ func Nth3(coll, i, notFound vm.Value) (vm.Value, error) {
 		idx = int(iv)
 	default:
 		return vm.NIL, fmt.Errorf("nth: index must be numeric, got %s", i.Type().Name())
+	}
+	// A not-found value does not make a map or set positional.
+	if err := vm.NthUnsupported(coll); err != nil {
+		return vm.NIL, err
 	}
 
 	// Negative index

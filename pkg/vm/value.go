@@ -99,6 +99,21 @@ type Indexed interface {
 	RawCount() int
 }
 
+// NthUnsupported is the error clojure.core/nth throws for key-addressed
+// collections: maps and sets, sorted or not, and their transients. They are not
+// Indexed, and walking their seq would return an element in iteration order, so
+// every nth (the interpreter's, rt.Nth/Nth3 and builtins.Nth/Nth3) rejects them
+// before that walk. It returns nil for any other value.
+func NthUnsupported(coll Value) error {
+	switch coll.(type) {
+	case *PersistentMap, Map, *SortedMap, *TransientMap,
+		*PersistentSet, Set, *SortedSet, *TransientSet:
+		return NewThrownError(NewExInfoWithClass(ClassUnsupportedOperation,
+			fmt.Sprintf("nth not supported on this type: %s", coll.Type().Name()), nil))
+	}
+	return nil
+}
+
 type Keyed interface {
 	Value
 	Contains(Value) Boolean
