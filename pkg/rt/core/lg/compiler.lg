@@ -158,12 +158,26 @@
                                        (if (> (count w) 100) (str (subs w 0 100) "...") w))))))
                    []))))))
 
+;; Each namespace is written to the directory its name maps to, and two names
+;; can map to one: app.main and app.main- both lower to app/main_. The second
+;; package would overwrite the first, and calls into the first would silently
+;; reach the second, so such a pair is refused before anything is written.
+(defn- check-distinct-package-dirs! [specs]
+  (doseq [[reldir group] (group-by :reldir specs)]
+    (let [names (distinct (map (fn [s] (str (:nsn s))) group))]
+      (when (> (count names) 1)
+        (throw (ex-info (str "namespaces " (clojure.string/join " and " (sort names))
+                             " both lower to the Go package directory " reldir
+                             "; rename one of them")
+                        {}))))))
+
 ;; Load every ns first, in dependency order, evaluating ONLY definitional forms,
 ;; so cross-ns refers resolve when lower-all-ns-to-go lowers them — regardless of
 ;; input order, and without running top-level user code at compile time. This is
 ;; the call that switches the global current ns. Returns specs with :lf
 ;; recomputed from the expanded forms.
 (defn load-specs! [specs]
+  (check-distinct-package-dirs! specs)
   (let [lfs (reduce (fn [m s]
                       (when-not (:ns-sym s) (eval (list 'ns (:nsn s))))
                       (let [defs (into [] (mapcat definitional-forms! (:forms s)))]

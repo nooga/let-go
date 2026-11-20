@@ -24,6 +24,7 @@
 ;;   flags: --go <path> (default "go")  --lg <path> (default "build/lg")
 
 (require 'ir.passes.pipeline)
+(require 'gogen)
 (require 'string)
 
 ;; --- CLI (same flag idiom as scripts/generate.lg) ---
@@ -66,15 +67,16 @@
 
 (defn- ns-form? [form] (and (seq? form) (= 'ns (first form))))
 
-;; Go package name = leaf namespace segment (hyphens→_); the lowered tree mirrors
-;; namespace nesting, so the package and filename are the last segment only.
+;; Go package name = leaf namespace segment, by gogen's rule (the one lg compile
+;; and lgbgen name packages with); the lowered tree mirrors namespace nesting,
+;; so the package and filename are the last segment only.
 (defn- nsname->pkg [ns-name]
-  (string/replace (last (string/split (str ns-name) #"\.")) "-" "_"))
+  (gogen/ns->go-pkg (str ns-name)))
 
-;; Relative dir under core_go_lowered/ that mirrors the namespace (dots→/,
-;; hyphens→_): ir.passes.pipeline → ir/passes/pipeline. Matches cmd/lgbgen.nsToGoRelDir.
+;; Relative dir under core_go_lowered/ that mirrors the namespace:
+;; ir.passes.pipeline → ir/passes/pipeline.
 (defn- nsname->reldir [ns-name]
-  (string/replace (string/replace (str ns-name) "-" "_") "." "/"))
+  (gogen/ns->go-reldir (str ns-name)))
 
 ;; The lowered Go package's relative dir for a fixture, read independently of
 ;; lowering so cleanup can remove the tree even when lowering/building threw.
