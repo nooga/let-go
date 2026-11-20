@@ -119,21 +119,21 @@ const wasmReplaySnippet = `	// The unit's TypeScope is active while its chunks r
 // wasmEntryFrameSnippet fills __LG_RUN_PROGRAM__ when the bundle is built for
 // an entry frame (lg -w -entry-frame-entry): the program.lgb was compiled with
 // its top-level call to the entry omitted, so replaying it only installs
-// definitions. It follows the native entry frame lg compile generates:
-// LoadProgramNamespaces drains each namespace's Go overrides after replaying
-// it, so lowered functions linked in with -w-module/-import replace their
-// bytecode before anything runs, and only then is the entry invoked. The entry
-// is invoked through its Var, so a lowered entry runs as Go and an unlowered
-// one on the VM. A page has no command line, so an [argv] entry gets an empty
-// vector, as a native build run with no arguments does. A failing main chunk skips the entry but, as in the replay,
-// still reaches -w-host-eval's hooks.
-const wasmEntryFrameSnippet = `	if err := rt.LoadProgramNamespaces(unit); err != nil {
+// definitions. It follows the native entry frame lg compile generates: each
+// namespace's Go overrides are drained after it replays, so lowered functions
+// linked in with -w-module/-import replace their bytecode before anything runs,
+// and only then is the entry invoked. The entry is invoked through its Var, so
+// a lowered entry runs as Go and an unlowered one on the VM. As in the replay,
+// a failing dependency stops the program, and a failing main chunk skips the
+// entry but still reaches -w-host-eval's hooks. __LG_ENTRY_ARGS__ is decided
+// when the bundle is built, because a lowered entry cannot report its arity.
+const wasmEntryFrameSnippet = `	if err := rt.LoadProgramDependencies(unit); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return
 	}
-	if err := rt.RunProgramMainChunk(unit); err != nil {
+	if err := rt.RunMainChunk(unit); err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
-	} else if err := rt.InvokeProgramEntryNoArgs(vm.NewExecContext(), __LG_ENTRY_NS__, __LG_ENTRY_NAME__); err != nil {
+	} else if err := rt.InvokeProgramEntry(vm.NewExecContext(), __LG_ENTRY_NS__, __LG_ENTRY_NAME__, __LG_ENTRY_ARGS__); err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
 	}`
 
@@ -211,10 +211,17 @@ func RenderMain(storeID string, hostEval, audio bool) string {
 // compiled with its top-level call to namespace/name omitted
 // (compiler.Context.CompileMultipleForEntryFrame). The generated main loads the
 // program, installing any Go overrides linked into the build, and then invokes
-// namespace/name itself.
-func RenderMainForEntryFrame(storeID string, hostEval, audio bool, namespace, name string) string {
+// namespace/name itself. A page has no command line, so an entry that takes
+// [argv] (argv true; see rt.ProgramEntryTakesArgv) gets an empty vector, as a
+// native build run with no arguments does, and a [] or [& args] entry nothing.
+func RenderMainForEntryFrame(storeID string, hostEval, audio bool, namespace, name string, argv bool) string {
+	args := "nil"
+	if argv {
+		args = "[]vm.Value{vm.EmptyVector}"
+	}
 	run := strings.ReplaceAll(wasmEntryFrameSnippet, "__LG_ENTRY_NS__", strconv.Quote(namespace))
 	run = strings.ReplaceAll(run, "__LG_ENTRY_NAME__", strconv.Quote(name))
+	run = strings.ReplaceAll(run, "__LG_ENTRY_ARGS__", args)
 	return renderMain(storeID, hostEval, audio, run)
 }
 

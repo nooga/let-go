@@ -147,9 +147,23 @@ func LoadProgramNamespaces(unit *bytecode.ExecUnit) error {
 	if unit == nil {
 		return fmt.Errorf("LoadProgramNamespaces: nil ExecUnit")
 	}
+	return loadNamespaces(unit, nil)
+}
+
+// LoadProgramDependencies is LoadProgramNamespaces without the main chunk, for
+// a frame that runs the main chunk itself with RunMainChunk and keeps going
+// when it fails, as a web build does to install its -w-host-eval hooks.
+func LoadProgramDependencies(unit *bytecode.ExecUnit) error {
+	if unit == nil {
+		return fmt.Errorf("LoadProgramDependencies: nil ExecUnit")
+	}
+	return loadNamespaces(unit, unit.MainChunk)
+}
+
+func loadNamespaces(unit *bytecode.ExecUnit, skip *vm.CodeChunk) error {
 	for _, name := range unit.NSOrder {
 		chunk := unit.NSChunks[name]
-		if chunk == nil {
+		if chunk == nil || chunk == skip {
 			continue
 		}
 		if err := runUnitChunk(unit, chunk); err != nil {
@@ -180,6 +194,18 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 			return nil
 		}
 	}
+	return RunMainChunk(unit)
+}
+
+// RunMainChunk runs unit.MainChunk on the VM and drains the Go overrides of the
+// namespace it defines, whether or not that namespace is also in NSOrder.
+func RunMainChunk(unit *bytecode.ExecUnit) error {
+	if unit == nil {
+		return fmt.Errorf("RunMainChunk: nil ExecUnit")
+	}
+	if unit.MainChunk == nil {
+		return nil
+	}
 	if err := runUnitChunk(unit, unit.MainChunk); err != nil {
 		return err
 	}
@@ -203,58 +229,64 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 // compiler already chose that namespace; searching CurrentNS or the global
 // registry would let a competing entry in another namespace steal the call.
 func InvokeProgramEntry(ec *vm.ExecContext, namespace, name string, args []vm.Value) error {
-	fn, err := programEntry("InvokeProgramEntry", ec, namespace, name)
-	if err != nil {
-		return err
-	}
-	_, err = ec.Invoke(fn, args)
-	return err
-}
-
-// InvokeProgramEntryNoArgs invokes namespace/name as a program started with an
-// empty command line, which is how a web build starts: an entry taking one
-// fixed argument ([argv]) gets an empty vector, and one taking [] or [& args]
-// gets no arguments. These are the shapes the native entry frame accepts, and
-// it passes [argv] the same empty vector when there are no arguments.
-func InvokeProgramEntryNoArgs(ec *vm.ExecContext, namespace, name string) error {
-	fn, err := programEntry("InvokeProgramEntryNoArgs", ec, namespace, name)
-	if err != nil {
-		return err
-	}
-	variadic := false
-	if vf, ok := fn.(interface{ IsVariadic() bool }); ok {
-		variadic = vf.IsVariadic()
-	}
-	var args []vm.Value
-	if !variadic && fn.Arity() == 1 {
-		args = []vm.Value{vm.EmptyVector}
-	}
-	_, err = ec.Invoke(fn, args)
-	return err
-}
-
-// programEntry looks up namespace/name for InvokeProgramEntry and
-// InvokeProgramEntryNoArgs; caller prefixes its errors.
-func programEntry(caller string, ec *vm.ExecContext, namespace, name string) (vm.Fn, error) {
 	if ec == nil {
-		return nil, fmt.Errorf("%s: nil ExecContext", caller)
+		return fmt.Errorf("InvokeProgramEntry: nil ExecContext")
 	}
 	if namespace == "" {
-		return nil, fmt.Errorf("%s: empty namespace", caller)
+		return fmt.Errorf("InvokeProgramEntry: empty namespace")
 	}
 	ns := LookupNS(namespace)
 	if ns == nil {
-		return nil, fmt.Errorf("%s: namespace %s not found", caller, namespace)
+		return fmt.Errorf("InvokeProgramEntry: namespace %s not found", namespace)
 	}
 	v := ns.LookupLocal(vm.Symbol(name))
 	if v == nil {
-		return nil, fmt.Errorf("%s: %s/%s not found", caller, namespace, name)
+		return fmt.Errorf("InvokeProgramEntry: %s/%s not found", namespace, name)
 	}
 	fn, ok := v.Deref().(vm.Fn)
 	if !ok {
-		return nil, fmt.Errorf("%s: %s/%s is not callable", caller, namespace, name)
+		return fmt.Errorf("InvokeProgramEntry: %s/%s is not callable", namespace, name)
 	}
-	return fn, nil
+	_, err := ec.Invoke(fn, args)
+	return err
+}
+
+// ProgramEntryTakesArgv reports whether namespace/name takes one [argv]
+// argument, as opposed to [] or [& args], the other two shapes an entry frame
+// accepts. It reads the binding vector from the Var's :arglists, as lg compile
+// classifies an entry from its defn form, because the Fn cannot say: a lowered
+// override reports itself variadic whatever its source arity. A web build calls
+// this once while it compiles and passes the result to its generated main.
+func ProgramEntryTakesArgv(namespace, name string) (bool, error) {
+	ns := LookupNS(namespace)
+	if ns == nil {
+		return false, fmt.Errorf("namespace %s not found", namespace)
+	}
+	v := ns.LookupLocal(vm.Symbol(name))
+	if v == nil {
+		return false, fmt.Errorf("%s/%s not found", namespace, name)
+	}
+	var arglists vm.Value = vm.NIL
+	if m, ok := v.Meta().(interface{ ValueAt(vm.Value) vm.Value }); ok {
+		arglists = m.ValueAt(vm.Keyword("arglists"))
+	}
+	arities, err := vm.SeqToSlice(arglists)
+	if err != nil || len(arities) != 1 {
+		return false, fmt.Errorf("%s/%s needs a single arity, [], [argv], or [& args]; its arglists are %v", namespace, name, arglists)
+	}
+	params, err := vm.SeqToSlice(arities[0])
+	if err != nil {
+		return false, fmt.Errorf("%s/%s has an unreadable binding vector %v", namespace, name, arities[0])
+	}
+	switch {
+	case len(params) == 0:
+		return false, nil
+	case len(params) == 2 && params[0] == vm.Symbol("&"):
+		return false, nil
+	case len(params) == 1 && params[0] != vm.Symbol("&"):
+		return true, nil
+	}
+	return false, fmt.Errorf("%s/%s takes %v; an entry frame calls [], [argv], or [& args]", namespace, name, arities[0])
 }
 
 // runUnitChunk runs one of unit's chunks with the unit's TypeScope active, so

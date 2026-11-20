@@ -190,7 +190,9 @@ program, so the top-level `(-main)` starts before any Go overrides linked in
 with `-w-module` and `-import` are installed, and the program runs as
 bytecode. With `-entry-frame-entry app/-main`, the bundle loads the program,
 installs those overrides, and then calls the entry, so packages lowered by
-`lg compile` run as Go in the browser.
+`lg compile` run as Go in the browser. The entry is a single-arity `defn` of
+`[]`, `[argv]` or `[& args]`; a page has no command line, so `[argv]` gets an
+empty vector. The build refuses any other shape.
 
 `*in-wasm*` is `true` when running inside a WASM build.
 

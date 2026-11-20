@@ -300,6 +300,8 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[3]), go.importObject)
 		writeFile(t, filepath.Join(mod, "override", "override.go"), `package override
 
 import (
+	"fmt"
+
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -308,6 +310,13 @@ func init() {
 	rt.RegisterGoOverrides("ovr", map[string]vm.Value{
 		"greet": vm.NewCtxNativeFn("greet", func(*vm.ExecContext, []vm.Value) (vm.Value, error) {
 			return vm.String("go"), nil
+		}),
+	})
+	// A lowered [argv] entry is built like this, and reports itself variadic.
+	rt.RegisterGoOverrides("ovrargv", map[string]vm.Value{
+		"-main": vm.NewTypedCtxNativeFn("-main", func(_ *vm.ExecContext, argv vm.Value) (vm.Value, error) {
+			fmt.Println("go", argv)
+			return vm.NIL, nil
 		}),
 	})
 }
@@ -333,6 +342,15 @@ func init() {
 		}
 		if wout, werr, err := runWasm(t, build(t, "-entry-frame-entry", "ovr/-main")); err != nil || wout != "go\n" {
 			t.Fatalf("-w -entry-frame-entry: err=%v stdout=%q, want %q; stderr=%q", err, wout, "go\n", werr)
+		}
+		// The lowered entry itself takes [argv], and gets the empty vector.
+		ovrApp = filepath.Join(fix, "ovrargv.lg")
+		writeFile(t, ovrApp, `(ns ovrargv)
+(defn -main [argv] (println "vm" argv))
+(when-not *compiling-aot* (-main []))
+`)
+		if wout, werr, err := runWasm(t, build(t, "-entry-frame-entry", "ovrargv/-main")); err != nil || wout != "go []\n" {
+			t.Fatalf("lowered [argv] entry: err=%v stdout=%q, want %q; stderr=%q", err, wout, "go []\n", werr)
 		}
 	})
 

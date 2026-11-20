@@ -107,23 +107,24 @@ func TestRenderMainAudio(t *testing.T) {
 	}
 }
 
-// An entry-frame main loads the program through LoadProgramNamespaces, which
-// drains the Go overrides of linked lowered packages, and invokes the entry
+// An entry-frame main loads the program's dependencies, draining the Go
+// overrides of linked lowered packages, runs the main chunk on its own so a
+// failure there still reaches the -w-host-eval hooks, and invokes the entry
 // itself. The default replay loop must be absent: it would run the program
 // without draining them.
 func TestRenderMainForEntryFrame(t *testing.T) {
 	for _, hostEval := range []bool{false, true} {
 		for _, audio := range []bool{false, true} {
-			got := RenderMainForEntryFrame("s", hostEval, audio, "app.core", "-main")
+			got := RenderMainForEntryFrame("s", hostEval, audio, "app.core", "-main", false)
 			if _, err := format.Source([]byte(got)); err != nil {
 				t.Fatalf("hostEval=%v audio=%v: generated main is not valid Go: %v", hostEval, audio, err)
 			}
 			if strings.Contains(got, "__LG_") {
 				t.Fatalf("hostEval=%v audio=%v: unsubstituted marker remains:\n%s", hostEval, audio, got)
 			}
-			load := strings.Index(got, "rt.LoadProgramNamespaces(unit)")
-			main := strings.Index(got, "rt.RunProgramMainChunk(unit)")
-			entry := strings.Index(got, `rt.InvokeProgramEntryNoArgs(vm.NewExecContext(), "app.core", "-main")`)
+			load := strings.Index(got, "rt.LoadProgramDependencies(unit)")
+			main := strings.Index(got, "rt.RunMainChunk(unit)")
+			entry := strings.Index(got, `rt.InvokeProgramEntry(vm.NewExecContext(), "app.core", "-main", nil)`)
 			if load < 0 || main < load || entry < main {
 				t.Fatalf("hostEval=%v audio=%v: want load, main chunk, then entry, in that order:\n%s", hostEval, audio, got)
 			}
@@ -139,8 +140,20 @@ func TestRenderMainForEntryFrame(t *testing.T) {
 
 // The entry's namespace and name are spliced in as Go string literals.
 func TestRenderMainForEntryFrameQuotesEntry(t *testing.T) {
-	got := RenderMainForEntryFrame("s", false, false, `odd"ns`, "main")
+	got := RenderMainForEntryFrame("s", false, false, `odd"ns`, "main", false)
 	if !strings.Contains(got, `"odd\"ns", "main"`) {
 		t.Fatalf("entry not quoted:\n%s", got)
+	}
+}
+
+// An [argv] entry gets an empty vector, spelled into the generated main because
+// a lowered entry cannot report its arity when the page runs.
+func TestRenderMainForEntryFrameArgv(t *testing.T) {
+	got := RenderMainForEntryFrame("s", false, false, "app.core", "-main", true)
+	if !strings.Contains(got, `"app.core", "-main", []vm.Value{vm.EmptyVector})`) {
+		t.Fatalf("[argv] entry not passed an empty vector:\n%s", got)
+	}
+	if _, err := format.Source([]byte(got)); err != nil {
+		t.Fatalf("generated main is not valid Go: %v", err)
 	}
 }
