@@ -8,7 +8,11 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -33,5 +37,32 @@ func TestNamespaceToGoPackageAndDir(t *testing.T) {
 		if got := nsToGoRelDir(tc.ns); got != filepath.FromSlash(tc.dir) {
 			t.Errorf("nsToGoRelDir(%q) = %q, want %q", tc.ns, got, tc.dir)
 		}
+	}
+}
+
+// lgbgen names the packages of the lowered core and gogen.lg names the ones
+// lg compile writes, each from its own copy of the unusable names. A name in
+// only one of them would give the same namespace two package names.
+func TestUnusableGoPkgNamesMatchGogen(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "pkg", "rt", "gogen", "gogen.lg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := regexp.MustCompile(`(?s)\(def \^:private unusable-go-pkg-names.*?#\{(.*?)\}`).FindSubmatch(src)
+	if set == nil {
+		t.Fatal("unusable-go-pkg-names not found in gogen.lg")
+	}
+	var lg []string
+	for _, m := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(set[1], -1) {
+		lg = append(lg, string(m[1]))
+	}
+	var gen []string
+	for name := range unusableGoPkgNames {
+		gen = append(gen, name)
+	}
+	sort.Strings(lg)
+	sort.Strings(gen)
+	if a, b := strings.Join(lg, " "), strings.Join(gen, " "); a != b {
+		t.Errorf("unusable package names differ\n gogen.lg: %s\n lgbgen:   %s", a, b)
 	}
 }
