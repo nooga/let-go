@@ -12,22 +12,21 @@ A **scope** is a node in a supervision tree: it owns a cancellation context
 derived from its parent's, and it knows how many goroutines are live beneath it.
 Cancelling a scope cancels its whole subtree and leaves its siblings running.
 
-**Not every spawn joins the current scope.** `go` blocks and futures do — they
-spawn through the calling execution's scope. The `async` namespace's own
-helpers do **not**: `pipe`, `map`, `reduce`, `split`, `pub` and `timeout` spawn
-into the process-wide root scope regardless of where they are called, because
-they go through `vm.Goroutines` directly rather than through the caller's
-context. Measured inside a `with-scope`:
+**Spawns join the current scope.** `go` blocks, futures and the `async`
+namespace's helpers (`pipe`, `map`, `reduce`, `split`, `pub`, `mult`, `merge`,
+`into`, `take`, `to-chan!`, `onto-chan!`) spawn through the calling execution's
+scope. `timeout` is the exception: its channels are closed by one process-wide
+timer daemon that lives in the root scope. Measured inside a `with-scope`:
 
 ```clojure
 (with-scope [s] (go (<! (chan)))            (sleep 60) (scope-live s))  ;=> 1
 (with-scope [s] (future (sleep 5000))       (sleep 60) (scope-live s))  ;=> 1
-(with-scope [s] (async/pipe (chan) (chan))  (sleep 60) (scope-live s))  ;=> 0
+(with-scope [s] (async/pipe (chan) (chan))  (sleep 60) (scope-live s))  ;=> 1
 (with-scope [s] (async/timeout 5000)        (sleep 60) (scope-live s))  ;=> 0
 ```
 
-So closing a scope neither cancels nor drains an `async/pipe` started inside it.
-That is a gap rather than a design choice — see [Known gaps](#known-gaps).
+So closing a scope cancels and drains an `async/pipe` started inside it, but not
+the shared timer daemon.
 
 A scope supervises *lifetime* — cancelling and awaiting. It does not supervise
 *failure*: a goroutine that throws is not reported to its scope. See
@@ -314,10 +313,6 @@ before you rely on a scope for anything load-bearing.
   agent does not enter a failed state: a later `send` still runs and updates the
   value, where Clojure refuses actions until `restart-agent`. `agent` and `send`
   are synchronous, atom-backed placeholders rather than spawned workers.
-- **The `async` helpers ignore the current scope.** `pipe`, `map`, `reduce`,
-  `split`, `pub` and `timeout` spawn into the root scope, so a `with-scope`
-  around them neither bounds nor drains their workers. `go` and `future` behave
-  as documented above. `alts!` is not affected — it spawns nothing, and is covered under cancellation above.
 - **No exit signals, and no restarts** ([#921]). A goroutine's failure is not
   delivered anywhere a supervisor could act on it: no equivalent of Erlang's
   exit signals or linking, no per-scope handler when a child dies, and no
@@ -325,10 +320,9 @@ before you rely on a scope for anything load-bearing.
 - **Cancellation cannot be forced.** A goroutine that neither parks on a
   cancellable operation nor polls `scope-cancelled?` runs to completion. The
   drain timeout bounds how long anyone *waits*, not how long it *runs*.
-- **Everything defaults to the root.** `go` blocks and futures spawn into
-  whatever scope is current, which is the root unless you opened one, and the
-  `async` helpers use the root even when you did. Nothing is automatically
-  bounded by the function that started it.
+- **Everything defaults to the root.** `go` blocks, futures and the `async`
+  helpers spawn into whatever scope is current, which is the root unless you
+  opened one. Nothing is automatically bounded by the function that started it.
 
 ## See also
 

@@ -503,7 +503,7 @@ func installAsyncNS() {
 
 	// pipe — take from src, put on dst, close dst when src closes
 	// (pipe src dst) or (pipe src dst close?)
-	pipe, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	pipe := vm.NewCtxNativeFn("pipe", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("pipe expects 2-3 args")
 		}
@@ -519,7 +519,7 @@ func installAsyncNS() {
 		if len(vs) == 3 {
 			shouldClose = vm.IsTruthy(vs[2])
 		}
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for {
 				v, ok, live := ctxRecv(ctx, src)
 				if !live {
@@ -541,7 +541,7 @@ func installAsyncNS() {
 
 	// onto-chan! — put all items from coll onto ch, then close
 	// (onto-chan! ch coll) or (onto-chan! ch coll close?)
-	ontoChan, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	ontoChan := vm.NewCtxNativeFn("onto-chan!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("onto-chan! expects 2-3 args")
 		}
@@ -557,7 +557,7 @@ func installAsyncNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("onto-chan! expected Sequable")
 		}
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for s := seq.Seq(); s != nil; s = s.Next() {
 				if !ctxSend(ctx, ch, s.First()) {
 					return
@@ -572,7 +572,7 @@ func installAsyncNS() {
 
 	// merge — take from multiple channels, put onto one output channel
 	// (merge chs) or (merge chs buf-size)
-	mergef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	mergef := vm.NewCtxNativeFn("merge", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("merge expects 1-2 args")
 		}
@@ -597,7 +597,7 @@ func installAsyncNS() {
 			}
 			count++
 			c := ch
-			vm.Goroutines.Go(func(ctx context.Context) {
+			ec.Scope().Go(func(ctx context.Context) {
 				for {
 					v, ok, live := ctxRecv(ctx, c)
 					if !live {
@@ -617,7 +617,7 @@ func installAsyncNS() {
 			})
 		}
 		// Close output when all inputs are done
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for range count {
 				select {
 				case <-done:
@@ -647,7 +647,7 @@ func installAsyncNS() {
 		out := make(vm.Chan, 1)
 		// Convey the caller's bindings into the loop goroutine (like future).
 		childEc := ec.Child()
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			acc := init
 			for {
 				v, ok, live := ctxRecv(ctx, ch)
@@ -670,7 +670,7 @@ func installAsyncNS() {
 	})
 
 	// into — async into: (async/into coll ch) → channel with result
-	intof, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	intof := vm.NewCtxNativeFn("into", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("async/into expects 2 args")
 		}
@@ -680,7 +680,7 @@ func installAsyncNS() {
 			return vm.NIL, fmt.Errorf("async/into expected Chan")
 		}
 		out := make(vm.Chan, 1)
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			acc := coll
 			for {
 				v, ok, live := ctxRecv(ctx, ch)
@@ -701,7 +701,7 @@ func installAsyncNS() {
 	})
 
 	// to-chan! — create a channel with items from coll
-	toChan, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	toChan := vm.NewCtxNativeFn("to-chan!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("to-chan! expects 1 arg")
 		}
@@ -710,7 +710,7 @@ func installAsyncNS() {
 			return vm.NIL, fmt.Errorf("to-chan! expected Sequable")
 		}
 		ch := make(vm.Chan)
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for s := seq.Seq(); s != nil; s = s.Next() {
 				if !ctxSend(ctx, ch, s.First()) {
 					return
@@ -908,7 +908,7 @@ func installAsyncNS() {
 	})
 
 	// mult — create a mult (broadcast) from a source channel
-	multf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	multf := vm.NewCtxNativeFn("mult", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("mult expects 1 arg")
 		}
@@ -917,7 +917,7 @@ func installAsyncNS() {
 			return vm.NIL, fmt.Errorf("mult expected Chan")
 		}
 		m := &Mult{src: src, taps: make(map[vm.Chan]bool)}
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for {
 				v, ok, live := ctxRecv(ctx, src)
 				if !live {
@@ -1034,7 +1034,7 @@ func installAsyncNS() {
 		p := &Pub{src: src, topicFn: topicFn, subs: make(map[any]vm.Chan)}
 		// Convey the caller's bindings into the loop goroutine (like future).
 		childEc := ec.Child()
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for {
 				v, ok, live := ctxRecv(ctx, src)
 				if !live {
@@ -1128,7 +1128,7 @@ func installAsyncNS() {
 		falseCh := make(vm.Chan)
 		// Convey the caller's bindings into the loop goroutine (like future).
 		childEc := ec.Child()
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for {
 				v, ok, live := ctxRecv(ctx, src)
 				if !live {
@@ -1178,7 +1178,7 @@ func installAsyncNS() {
 		out := make(vm.Chan)
 		// Convey the caller's bindings into the loop goroutine (like future).
 		childEc := ec.Child()
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			for {
 				args := make([]vm.Value, len(chs))
 				allOk := true
@@ -1210,7 +1210,7 @@ func installAsyncNS() {
 	})
 
 	// async/take — take n values from ch, put on new channel
-	takef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	takef := vm.NewCtxNativeFn("take", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("async/take expects 2 args (n, ch)")
 		}
@@ -1223,7 +1223,7 @@ func installAsyncNS() {
 			return vm.NIL, fmt.Errorf("async/take expected Chan")
 		}
 		out := make(vm.Chan)
-		vm.Goroutines.Go(func(ctx context.Context) {
+		ec.Scope().Go(func(ctx context.Context) {
 			count := int(n)
 			for range count {
 				v, ok, live := ctxRecv(ctx, ch)
