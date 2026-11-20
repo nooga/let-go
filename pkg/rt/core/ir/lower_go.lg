@@ -607,6 +607,25 @@
       (str munged "_")
       munged)))
 
+(def ^:dynamic *reserved-pkg-idents*
+  "Package names of the program being lowered, bound by the whole-program
+   driver. nil when one namespace is lowered by itself."
+  nil)
+
+(def ^:dynamic *private-name-overrides*
+  "Per-namespace renames for the private top-level fns that cannot keep their
+   plain go-name: {:names {source-name-string -> Go name} :declared #{Go identifier}}
+   (see build-private-name-map). Bound
+   around a namespace's collect and lower passes, like
+   *export-name-overrides*; nil means every private fn keeps go-name."
+  nil)
+
+(defn go-private-name [s]
+  "Unexported Go identifier for a private top-level fn: go-name, unless the
+   namespace's overrides give it another."
+  (or (get (:names *private-name-overrides*) (str s))
+      (go-name s)))
+
 (defn- import-entry [path alias]
   {:path path :alias alias})
 
@@ -3648,7 +3667,10 @@
   ;; A name is coalescable only when it is (1) interference-safe and (2) every
   ;; version shares ONE Go type — versions of differing type (e.g. the and/or
   ;; macro temps, bool vs vm.Value) cannot share a single mutable local.
-  (let [reserved (imported-pkg-aliases)
+  (let [;; What a renamed private fn declares is reserved as well: live renamed
+        ;; to live_ must not be shadowed by a local live-, which munges to the
+        ;; same name, nor a renamed clause-list fn's step__1 by a local step--1.
+        reserved (into (imported-pkg-aliases) (:declared *private-name-overrides*))
         unsafe (into (oos-unsafe-names f) (oos-captured-names f))
         nids   (oos-all-nids f)
         name-types (reduce (fn [m nid]
@@ -4372,10 +4394,12 @@
         ;; violation surfaces as a go-build "undefined: pkg.foo" (caught by
         ;; check-generated), not a silent miscompile. Public/private is carried ON
         ;; THE FORM (ir/fn-private?), like :multi-arity? — no dynamic var, so the
-        ;; native self-hosted lowering path stays correct.
+        ;; native self-hosted lowering path stays correct. The one private name
+        ;; that is not plain go-name is a fn named like a package this file can
+        ;; import (go-private-name).
         emit-go-name (let [nm   (ir/fn-name f)
                            base (if (ir/fn-private? f)
-                                  (go-name nm)
+                                  (go-private-name nm)
                                   (go-export-name nm))]
                        (if (ir/fn-multi-arity? f)
                          ;; `_<arity>`, plus a `v` marker for a variadic arity so
@@ -4522,6 +4546,16 @@
   (or (get *export-name-overrides* (str s))
       (go-export-name* s)))
 
+(defn- form-name-and-meta
+  "[bare-symbol metadata] of a top-level form's name. A raw form carries reader
+   metadata as a literal (with-meta sym {…}) list, not on the symbol, so a
+   ^:private or ^:redef name has to be unwrapped before it is read."
+  [nm]
+  (loop [nm nm m (meta nm)]
+    (if (and (seq? nm) (= 'with-meta (first nm)))
+      (recur (second nm) (merge m (nth nm 2)))
+      [nm m])))
+
 (defn- form-export-name
   "Source-name string of a top-level form that becomes an EXPORTED Go identifier
    (public defn / deftype / defprotocol / defmulti), else nil. defn- and ^:private
@@ -4529,10 +4563,11 @@
    the exported-name space and can't collide there."
   [form]
   (when (seq? form)
-    (let [head (first form)
-          nm   (second form)]
+    (let [head  (first form)
+          parts (form-name-and-meta (second form))
+          nm    (nth parts 0)]
       (cond
-        (= head 'defn)        (when-not (:private (meta nm)) (str nm))
+        (= head 'defn)        (when-not (:private (nth parts 1)) (str nm))
         (= head 'deftype)     (str nm)
         (= head 'defprotocol) (str nm)
         (= head 'defmulti)    (str nm)
@@ -4561,6 +4596,118 @@
              :claimed (conj claimed resolved)})))
       {:map {} :claimed #{}}
       (keep form-export-name forms))))
+
+(def ^:private always-imported-idents
+  "Packages a lowered file may import whatever the program is."
+  #{"rt" "vm" "math" "fmt"})
+
+(def ^:private go-predeclared-idents
+  "Go's predeclared identifiers, and init. A file-level func may shadow most of
+   them, but the generated code writes len, error, string, nil and the numeric
+   types unqualified, and func init has a fixed signature."
+  #{"any" "bool" "byte" "comparable" "complex64" "complex128" "error"
+    "float32" "float64" "int" "int8" "int16" "int32" "int64" "rune" "string"
+    "uint" "uint8" "uint16" "uint32" "uint64" "uintptr"
+    "true" "false" "iota" "nil"
+    "append" "cap" "clear" "close" "complex" "copy" "delete" "imag" "len"
+    "make" "max" "min" "new" "panic" "print" "println" "real" "recover"
+    "init"})
+
+(defn- reserved-pkg-names
+  "Every Go identifier a private fn may not declare: the predeclared ones, and
+   each package a file of this program can import (the fixed ones, the
+   program's own, and the native modules')."
+  []
+  ;; (rt/native-modules) is {ns-string [module …]}, as native-registry reads it.
+  (into (into (into go-predeclared-idents always-imported-idents)
+              *reserved-pkg-idents*)
+        (mapcat (fn [entry]
+                  (keep (fn [m] (when-let [p (:go-pkg m)] (pkg-alias-from p)))
+                        (val entry)))
+                (rt/native-modules))))
+
+(defn- form-private-name
+  "Source-name string of a top-level form that becomes an UNEXPORTED Go func
+   (defn-, or defn with ^:private), else nil."
+  [form]
+  (when (seq? form)
+    (let [head  (first form)
+          parts (form-name-and-meta (second form))
+          nm    (nth parts 0)]
+      (cond
+        (= head 'defn-) (str nm)
+        (= head 'defn)  (when (:private (nth parts 1)) (str nm))
+        :else nil))))
+
+(defn- strip-form-meta
+  "x without the (with-meta x {…}) wrappers a raw form carries reader metadata
+   in, as on a return-hinted params vector."
+  [x]
+  (if (and (seq? x) (= 'with-meta (first x)))
+    (recur (second x))
+    x))
+
+(defn- form-declared-suffixes
+  "What a private fn form's Go funcs add to the fn's Go name: [\"\"] for one
+   params vector, which declares the name itself, and _<arity>[v] per clause
+   for the clause-list spelling, which declares only those members."
+  [form]
+  (let [body  (drop-while (fn [x] (or (string? x) (map? x))) (nnext form))
+        head  (strip-form-meta (first body))]
+    (if (vector? head)
+      [""]
+      (keep (fn [clause]
+              (let [params (when (seq? clause) (strip-form-meta (first clause)))]
+                (when (vector? params)
+                  (str "_" (count (remove (fn [p] (= '& p)) params))
+                       (if (some (fn [p] (= '& p)) params) "v" "")))))
+            body))))
+
+(defn build-private-name-map
+  "Deterministic {:names {source-name -> Go name} :declared #{Go identifier}}
+   for the private fns of a namespace that would otherwise declare an
+   identifier a package the file can import already has. A file-level func may
+   not do that: (defn- live …) beside [app.live] lowered to `func live` and
+   `import \".../live\"`, which go build rejects. Each such fn takes trailing
+   underscores until no identifier it declares is a package's or another
+   private fn's. A fn is judged by what it declares: a clause-list fn named
+   like a package declares only <name>_<arity> members, so it keeps its name.
+   A namespace with no such fn gets an empty map, so its output is unchanged.
+   :declared holds every identifier the renamed fns declare, which
+   coalesce-map keeps locals off.
+
+   The reserved set is every package of the program, not only this file's
+   imports: a namespace does not record what it requires without an alias, and
+   the imports are known only after the bodies are lowered."
+  [forms]
+  (let [reserved (reserved-pkg-names)
+        suffixes (reduce (fn [m form]
+                           (if-let [nm (form-private-name form)]
+                             (update m nm (fnil into #{}) (form-declared-suffixes form))
+                             m))
+                         {} forms)
+        names    (distinct (keep form-private-name forms))
+        idents   (fn [nm base] (map (fn [sfx] (str base sfx)) (get suffixes nm)))
+        clashes? (fn [taken nm base] (some (fn [id] (contains? taken id)) (idents nm base)))]
+    (select-keys
+      (reduce
+        (fn [acc nm]
+          (if (clashes? reserved nm (go-name nm))
+            ;; Against the siblings too: live_ must not be a sibling spelled
+            ;; live-, nor declare live__1 beside a sibling's own live__1.
+            (let [cand (loop [c (str (go-name nm) "_")]
+                         (if (clashes? (into reserved (:taken acc)) nm c)
+                           (recur (str c "_"))
+                           c))
+                  mine (idents nm cand)]
+              {:names    (assoc (:names acc) nm cand)
+               :declared (into (:declared acc) mine)
+               :taken    (into (:taken acc) mine)})
+            acc))
+        {:names {} :declared #{}
+         :taken (set (mapcat (fn [nm] (idents nm (go-name nm))) names))}
+        names)
+      [:names :declared])))
 
 (defn lower-method [f recv-type method-name]
   "Lower an already-built+optimized IR fn as a Go receiver method using the

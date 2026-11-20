@@ -1657,6 +1657,7 @@
               ;; Resolve non-injective PascalCase export collisions deterministically;
               ;; the identical pure map is bound in collect-ns-exports (registry side).
               lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)
+              lower-go/*private-name-overrides* (lower-go/build-private-name-map forms)
               lower-go/*protocol-method-sigs* (let [s (protocol-method-sigs deftypes)]
                                                 (when (seq s) s))]
       (let [;; Native decls for captured protocols (interface) and deftypes
@@ -1956,6 +1957,7 @@
               ;; Same pure map bound in lower-ns-to-go so the registry's :go-name and
               ;; the emitted decl agree on a collision-resolved export name.
               lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)
+              lower-go/*private-name-overrides* (lower-go/build-private-name-map forms)
               lower-go/*deftype-ctors* (when (seq ctors) ctors)
               lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)
               lower-go/*protocol-method-sigs* (let [s (protocol-method-sigs deftypes)]
@@ -2029,6 +2031,17 @@
                 m)))
           {} global-reg))
 
+(defn- program-pkg-idents
+  "Go package identifiers of the program's own packages: each spec's package
+   name and the last segment of its import path. Bound for both phases, so the
+   private-fn names phase 0 records are the ones phase 1 emits."
+  [specs]
+  (reduce (fn [acc s]
+            (let [path (str (nth s 3))
+                  i    (last-index-of path \/)]
+              (conj acc (str (nth s 0)) (if i (subs path (inc i)) path))))
+          #{} specs))
+
 (defn lower-all-ns-to-go-result [specs]
   "Whole-program Go lowering with cross-package direct calls (EPIC-012/ITER-0025).
    specs: vector of positional [pkg-name ns-sym forms import-path]. Phase 0 collects the
@@ -2045,6 +2058,7 @@
    lower-ns-to-go-result maps in spec order; a namespace that fails to lower
    yields nil at its slot (the Go driver treats nil as a per-ns failure,
    preserving per-namespace resilience)."
+  (binding [lower-go/*reserved-pkg-idents* (program-pkg-idents specs)]
   (let [collected  (mapv (fn [s]
                            (try
                              (collect-ns-exports (nth s 0) (nth s 1) (nth s 2) (nth s 3))
@@ -2080,7 +2094,7 @@
                     (catch e
                       (println (str "WARNING: Go lowering failed for " (nth s 1) ": " e))
                       nil)))))
-            specs))))
+            specs)))))
 
 (defn lower-all-ns-to-go [specs]
   "Compatibility wrapper: vector of rendered Go source strings (or nil). Prefer
