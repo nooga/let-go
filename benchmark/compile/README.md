@@ -40,8 +40,10 @@ PR on a timing.
 
 ## Reading the report
 
-- **Fns lowered** first. A count that drops means code went back to the VM,
-  which a noisy timing can hide.
+- **Program fns lowered** first. A count that drops means code went back to
+  the VM, which a noisy timing can hide. It counts the program's own
+  functions only; a `clojure.core` function that falls back to the VM under
+  `-lowered-core` does not show here.
 - **The ratios between arms** second. They move less than the absolute times.
 - A few percent between base and head on a shared runner is noise.
 - `numeric` can print a different checksum on the VM and compiled arms on

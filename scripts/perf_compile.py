@@ -120,7 +120,7 @@ def run(args):
             notes.append(f"`{name}`: arms disagree on the result at head: " + ", ".join(f"{a} {v[0]}" for a, v in at_head.items() if v))
 
     print(f"Best of {args.rounds} runs per arm, base and head interleaved on one runner. Informational, not a gate.\n")
-    print("| Program | Arm | Base | Head | Delta | Fns lowered (base → head) |")
+    print("| Program | Arm | Base | Head | Delta | Program fns lowered (base → head) |")
     print("|---|---|---:|---:|---:|---|")
     for name in names:
         for arm in ARMS:
