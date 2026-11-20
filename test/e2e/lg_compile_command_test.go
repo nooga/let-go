@@ -224,6 +224,73 @@ func TestLgCompileCommand(t *testing.T) {
 		}
 	})
 
+	// A namespace's last segment names its Go package. main would make it a
+	// program, which the entry frame cannot import, init cannot be imported
+	// under its own name, and go and type are not identifiers; each takes a
+	// trailing underscore, on the directory too.
+	t.Run("namespaces named main, init, go and type", func(t *testing.T) {
+		files := map[string]string{
+			"named/init.lg": "(ns named.init)\n(defn setup [] :set)\n",
+			"named/type.lg": "(ns named.type (:require [named.init :as i]))\n(defn kind [] [:typed (i/setup)])\n",
+			"named/go.lg":   "(ns named.go (:require [named.type :as t]))\n(defn run [] [:ran (t/kind)])\n",
+			"named/main.lg": `(ns named.main (:require [named.go :as g]))
+(defn -main [] (println (g/run)))
+(when-not *compiling-aot* (-main))
+`,
+		}
+		var paths []string
+		for _, rel := range []string{"named/init.lg", "named/type.lg", "named/go.lg", "named/main.lg"} {
+			path := filepath.Join(fix, rel)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(files[rel]), 0644); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, path)
+		}
+		work := t.TempDir()
+		exe := filepath.Join(t.TempDir(), "named.native")
+		if out, err := runCmd(ctx, t, bin, fix,
+			append([]string{"compile", "-o", exe, "-work", work}, paths...), env...); err != nil {
+			t.Fatalf("lg compile: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(work, "named", "main_", "main_.go")); err != nil {
+			t.Errorf("named.main was not lowered into named/main_: %v", err)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 || string(stdout) != "[:ran [:typed :set]]\n" {
+			t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
+		}
+	})
+
+	// named.main and named.main- would both be written to named/main_, the
+	// second over the first, and calls into one would reach the other.
+	t.Run("two namespaces that lower to one directory are refused", func(t *testing.T) {
+		var paths []string
+		for rel, src := range map[string]string{
+			"twin/main.lg":  "(ns twin.main)\n(defn v [] 11)\n",
+			"twin/main_.lg": "(ns twin.main-)\n(defn v [] 22)\n",
+		} {
+			path := filepath.Join(fix, rel)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, path)
+		}
+		out, err := runCmd(ctx, t, bin, fix,
+			append([]string{"compile", "-o", filepath.Join(t.TempDir(), "twin")}, paths...), env...)
+		if err == nil {
+			t.Fatalf("lg compile built two namespaces into one directory:\n%s", out)
+		}
+		if !bytes.Contains([]byte(out), []byte("twin.main and twin.main- both lower to the Go package directory twin/main_")) {
+			t.Fatalf("missing the diagnostic naming both namespaces:\n%s", out)
+		}
+	})
+
 	t.Run("usage errors exit 2", func(t *testing.T) {
 		for _, args := range [][]string{{"compile"}, {"compile", "-bogus", app}, {"compile", "-o"}} {
 			cmd := exec.CommandContext(ctx, bin, args...)
@@ -286,6 +353,85 @@ func TestLgCompileCommand(t *testing.T) {
 		}
 		want := "#'defvalue/answer 42\n#'defvalue/hidden 7\nnil 8\n#'defvalue/unbound\n0 1\n"
 		if string(stdout) != want {
+			t.Fatalf("stdout %q, want %q; stderr=%q", stdout, want, stderr)
+		}
+	})
+
+	// A private fn keeps a lowercase Go name, and so does the package of each
+	// namespace the file requires. One named like the other (live beside
+	// clash.live) has to be renamed, or the file does not build. rt, vm and
+	// math are the same clash with packages a lowered file imports by itself.
+	// corefns and builtins are native-module packages, and builtins is private
+	// by ^:private, which a raw form carries as a with-meta list. The fixture
+	// also has the ways a rename can land on another name: a sibling already
+	// spelled live-, a local spelled live-, and a multi-arity step whose
+	// arity-1 member would be step_1, the package of clash.step-1. clash.arity
+	// has the opposite case: a clause-list rt declares only rt_1 and rt_2, so
+	// it keeps its name, and a local rt--1 beside it still builds.
+	t.Run("a private fn named like a package the file imports", func(t *testing.T) {
+		src := map[string]string{
+			"clash/live.lg":     "(ns clash.live)\n(defn start [] :started)\n",
+			"clash/director.lg": "(ns clash.director)\n(defn make [x] [:made x])\n",
+			"clash/step_1.lg":   "(ns clash.step-1)\n(defn advance [x] [:step x])\n",
+			"clash/arity.lg": `(ns clash.arity)
+(defn- rt ([x] (inc x)) ([x y] (+ x y)))
+(defn probe [x] (let [rt--1 (inc x)] [rt--1 (rt x) (rt x 1)]))
+`,
+			"clash/app.lg": `(ns clash.app
+  (:require [clash.live :as live]
+            [clash.director]
+            [clash.step-1 :as s1]
+            [clash.arity :as arity]))
+(defn- live [] (live/start))
+(defn- live- [] :dash)
+(defn- director
+  ([] (director 1))
+  ([x] (clash.director/make x)))
+(defn- step
+  ([x] (s1/advance x))
+  ([x y] [x y]))
+(defn- rt [x] (inc x))
+(defn- vm [x] (str "vm" x))
+(defn- math [x] (if (pos? x) ##Inf x))
+(defn- corefns [xs] (first xs))
+(defn ^:private builtins [x] (count x))
+(defn- shadow [live-] [live- (live)])
+(defn- shadow-multi [x] (let [director- (inc x)] [director- (director) (director 2)]))
+(defn- shadow-member [x] (let [step--1 (inc x)] [step--1 (step 1)]))
+(defn- init [x] (count x))
+(defn- len [x] (count x))
+(defn- error [x] (str "e" x))
+(defn- string [x] (str "s" x))
+(defn foo? [] 1)
+(defn ^:redef foo-qmark [] 2)
+(defn -main []
+  (println (live) (live-) (director) (director 2) (step 1) (step 1 2) (rt 1) (vm 2) (math 1))
+  (println (corefns [7 8]) (builtins [1 2 3]) (shadow :local))
+  (println (shadow-multi 1) (init [1]) (len [1 2]) (error 1) (string 2) (foo?) (foo-qmark))
+  (println (shadow-member 1) (arity/probe 10)))
+(when-not *compiling-aot* (-main))
+`,
+		}
+		var files []string
+		for _, name := range []string{"clash/live.lg", "clash/director.lg", "clash/step_1.lg", "clash/arity.lg", "clash/app.lg"} {
+			p := filepath.Join(fix, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(src[name]), 0644); err != nil {
+				t.Fatal(err)
+			}
+			files = append(files, p)
+		}
+		exe := filepath.Join(t.TempDir(), "clash.native")
+		if out, err := runCmd(ctx, t, bin, fix, append([]string{"compile", "-o", exe}, files...), env...); err != nil {
+			t.Fatalf("lg compile: %v\n%s", err, out)
+		}
+		stdout, stderr, exit, err := runNativeEntryBinary(ctx, exe)
+		if err != nil || exit != 0 {
+			t.Fatalf("run: err=%v exit=%d stdout=%q stderr=%q", err, exit, stdout, stderr)
+		}
+		if want := ":started :dash [:made 1] [:made 2] [:step 1] [1 2] 2 vm2 +Inf\n7 3 [:local :started]\n[2 [:made 1] [:made 2]] 1 2 e1 s2 1 2\n[2 [:step 1]] [11 11 11]\n"; string(stdout) != want {
 			t.Fatalf("stdout %q, want %q; stderr=%q", stdout, want, stderr)
 		}
 	})

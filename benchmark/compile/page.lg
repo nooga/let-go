@@ -1,0 +1,33 @@
+;; Builds a page of text from records: mapv, keyword, str, reduce with update,
+;; sort-by, clojure.string. Most of the time is in natives and allocation.
+(ns perfc.page
+  (:require [clojure.string :as str]))
+
+(defn records [n]
+  (mapv (fn [i] {:id i
+                 :name (str "item-" i)
+                 :tag (keyword (str "t" (mod i 7)))
+                 :score (* i 1.5)})
+        (range n)))
+
+(defn totals [rs]
+  (reduce (fn [acc r] (update acc (:tag r) (fnil + 0) (:score r))) {} rs))
+
+(defn render [rs]
+  (str "<ul>"
+       (str/join (map (fn [[k v]] (str "<li>" (name k) ": " v "</li>"))
+                      (sort-by key (totals rs))))
+       "</ul><p>"
+       (reduce + (map (fn [r] (count (str/upper-case (:name r)))) rs))
+       "</p>"))
+
+(defn run [] (count (render (records 20000))))
+
+(defn -main [& _]
+  (loop [i 0 best nil out nil]
+    (if (< i 7)
+      (let [t0 (System/nanoTime) r (run) dt (- (System/nanoTime) t0)]
+        (recur (inc i) (if (or (nil? best) (< dt best)) dt best) r))
+      (println "PERF" "page" (quot best 1000) out))))
+
+(when-not *compiling-aot* (-main))
