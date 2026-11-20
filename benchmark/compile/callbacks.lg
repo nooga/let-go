@@ -1,0 +1,27 @@
+;; Core functions that call a user function once per element: every?,
+;; not-any?, a filter transducer, remove.
+(ns perfc.callbacks)
+
+(defn small? [x] (< x 1000000))
+(defn third? [x] (= 1 (mod x 3)))
+
+(defn run []
+  (let [xs (vec (range 2000))]
+    (loop [i 0 acc 0]
+      (if (< i 40)
+        (recur (inc i)
+               (+ acc
+                  (if (every? small? xs) 1 0)
+                  (if (not-any? neg? xs) 1 0)
+                  (count (into [] (filter third?) xs))
+                  (count (remove third? xs))))
+        acc))))
+
+(defn -main [& _]
+  (loop [i 0 best nil out nil]
+    (if (< i 7)
+      (let [t0 (System/nanoTime) r (run) dt (- (System/nanoTime) t0)]
+        (recur (inc i) (if (or (nil? best) (< dt best)) dt best) r))
+      (println "PERF" "callbacks" (quot best 1000) out))))
+
+(when-not *compiling-aot* (-main))
