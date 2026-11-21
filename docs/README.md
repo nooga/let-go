@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-21
+last-verified: 2026-11-20
 authoritative-for:
   - docs-index
 human-verified: 2026-08-11
@@ -39,6 +39,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Equality/hashing across types | `clojurelike-refactor-plan.md` (Phase 3) |
 | Transducers, reduction fast paths | `clojurelike-refactor-plan.md` (Phase 4) |
 | Runtime image / stdlib precompile | `design/runtime-image-and-stdlib-cache.md` |
+| Loading a compiled bundle from running code | `design/load-bundle.md` |
 | Go AOT / self-host deployment | `design/go-aot-backend.md` + `contribution-policy.md` §2–3 |
 | JVM-shape interop (strategy) | `jvm-compat-plan.md` |
 | JVM-shape interop (execution) | `clojure-compat-roadmap.md` |
