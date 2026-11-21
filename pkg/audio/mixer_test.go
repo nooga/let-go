@@ -3,7 +3,9 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,3 +290,97 @@ func abs(x int) int {
 	}
 	return x
 }
+
+// closeTracker is a stream source that is an io.Closer but not an
+// rt.StreamNotify: the mixer must leave closing it to its owner.
+type closeTracker struct {
+	constant
+	closed bool
+}
+
+func (c *closeTracker) Close() error { c.closed = true; return nil }
+
+func TestStreamLeavesAPlainCloserOpen(t *testing.T) {
+	m := NewMixer()
+	src := &closeTracker{constant: 100}
+	h, _ := m.Stream(src)
+	m.Stop(h)
+	for range 4 {
+		read(m, edgeFrames)
+	}
+	if src.closed {
+		t.Error("the mixer closed a source that didn't ask for lifecycle calls")
+	}
+}
+
+// notifier records lifecycle calls, and calls back into the mixer from each
+// one, which deadlocks if the mixer notifies while holding its lock.
+type notifier struct {
+	constant
+	m     *Mixer
+	calls []string
+}
+
+func (n *notifier) StreamHeld(held bool) {
+	n.m.Enabled()
+	n.m.Source(0)
+	n.calls = append(n.calls, map[bool]string{true: "held", false: "resumed"}[held])
+}
+
+func (n *notifier) StreamEnded() {
+	n.m.Source(0)
+	n.calls = append(n.calls, "ended")
+}
+
+func TestStreamNotifyOutsideTheLock(t *testing.T) {
+	m := NewMixer()
+	src := &notifier{constant: 100, m: m}
+	h, _ := m.Stream(src)
+	done := make(chan struct{})
+	go func() {
+		m.Pause(h)
+		m.Resume(h)
+		m.Stop(h)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a source calling back into the mixer from a notification deadlocked")
+	}
+	if got := strings.Join(src.calls, " "); got != "held resumed ended" {
+		t.Errorf("calls = %q, want %q", got, "held resumed ended")
+	}
+}
+
+// A stream that ends by itself (its source hits EOF) is notified once, from
+// Read, with the mixer's lock released.
+func TestStreamNotifyOnEOF(t *testing.T) {
+	m := NewMixer()
+	src := &eofNotifier{m: m}
+	m.Stream(src)
+	done := make(chan struct{})
+	go func() {
+		for range 4 {
+			read(m, 64)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("notifying from Read deadlocked")
+	}
+	if src.ended != 1 {
+		t.Errorf("StreamEnded called %d times, want 1", src.ended)
+	}
+}
+
+type eofNotifier struct {
+	m     *Mixer
+	ended int
+}
+
+func (e *eofNotifier) Read([]byte) (int, error) { return 0, io.EOF }
+func (e *eofNotifier) StreamHeld(bool)          {}
+func (e *eofNotifier) StreamEnded()             { e.m.Source(0); e.ended++ }
