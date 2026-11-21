@@ -32,6 +32,32 @@
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"]))))
     (is (re-find #"needs a value" (:error (cmd/parse-args ["a.lg" "-import"]))))
     (is (re-find #"requires -module" (:error (cmd/parse-args ["-import" "x/a" "a.lg"])))))
+  (testing "-named-only and -whole-program take no value, and exclude each other"
+    (is (= {:files ["a.lg"] :named-only true} (cmd/parse-args ["-named-only" "a.lg"])))
+    (is (= {:files ["a.lg"] :whole-program true} (cmd/parse-args ["-whole-program" "a.lg"])))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-whole-program" "-named-only" "a.lg"])))))
+  (testing "a build lowers only the named files unless -whole-program is given"
+    (is (cmd/named-only? {:files ["a.lg"]}))
+    (is (cmd/named-only? {:files ["a.lg"] :named-only true}))
+    (is (not (cmd/named-only? {:files ["a.lg"] :whole-program true}))))
+  (testing "-lower-into is refused unless lg -w set the variable"
+    (is (re-find #"internal to lg -w"
+                 (:error (cmd/parse-args ["-lower-into" "d" "-import-prefix" "p" "-entry-out" "e" "a.lg"]))))
+    (is (re-find #"internal to lg -w" (:error (cmd/parse-args ["-readonly-module" "a.lg"])))))
+  (os/setenv cmd/lower-into-env "1")
+  (testing "-lower-into, the lowering step lg -w -w-aot runs"
+    (is (= {:files ["a.lg"] :lower-into "d" :import-prefix "m/lgprogram" :entry-out "e"
+            :readonly-module true :lowered-core true}
+           (cmd/parse-args ["-lower-into" "d" "-import-prefix" "m/lgprogram" "-entry-out" "e"
+                            "-readonly-module" "-lowered-core" "a.lg"])))
+    (is (re-find #"needs -import-prefix and -entry-out"
+                 (:error (cmd/parse-args ["-lower-into" "d" "a.lg"]))))
+    (is (re-find #"builds nothing"
+                 (:error (cmd/parse-args ["-lower-into" "d" "-import-prefix" "p" "-entry-out" "e"
+                                          "-o" "x" "a.lg"]))))
+    (is (re-find #"need -lower-into" (:error (cmd/parse-args ["-entry-out" "e" "a.lg"]))))
+    (is (re-find #"need -lower-into" (:error (cmd/parse-args ["-readonly-module" "a.lg"])))))
+  (os/setenv cmd/lower-into-env "")
   (testing "-- does not skip the checks"
     (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
@@ -169,3 +195,132 @@
         (is (= [:clear-lowered-core] (second @calls))
             "and an earlier build's core is cleared before the program is written")))
     (remove-fixture path)))
+
+(deftest lower-program-writes-packages-and-imports
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.low)\n(defn sq [^long x] (* x x))\n(defn -main [] (println (sq 3)))\n")
+        dir   (scratch-dir "lower")
+        res   (lg.compiler/lower-program [path] dir "lgprogram" true true false (recording-host calls))
+        imports (slurp (str dir "/" lg.compiler/lowered-imports-file))]
+    (testing "reports the entry as ns/name"
+      (is (nil? (:error res)))
+      (is (= "lgc.low/-main" (:entry-ref res))))
+    (testing "blank-imports each lowered package into the caller's main package"
+      (is (= ["lgprogram/lgc/low"] (:packages res)))
+      (is (re-find #"package main" imports))
+      (is (re-find #"_ \"lgprogram/lgc/low\"" imports)))
+    (testing "emits no entry frame and builds nothing; lowers the core read-only"
+      (is (= [[:lower-core-readonly "lgprogram"]] @calls))
+      (is (not (file-exists? (str dir "/main.go")))))
+    (syscall/rm-rf dir)
+    (remove-fixture path)))
+
+(deftest lower-program-without-entry
+  (let [path (write-fixture "(ns lgc.noentry2)\n(defn f [x] (inc x))\n")
+        dir  (scratch-dir "lower")]
+    (is (re-find #"no program entry"
+                 (:error (lg.compiler/lower-program [path] dir "lgprogram" false false false (recording-host (atom []))))))
+    (syscall/rm-rf dir)
+    (remove-fixture path)))
+
+(deftest lower-program-needs-an-ns-form
+  (let [path (write-fixture "(defn -main [] (println :hi))\n")
+        dir  (scratch-dir "lower")]
+    (is (re-find #"needs an ns form"
+                 (:error (lg.compiler/lower-program [path] dir "lgprogram" false false true (recording-host (atom []))))))
+    (syscall/rm-rf dir)
+    (remove-fixture path)))
+
+(deftest program-files-follows-requires-inside-the-roots
+  (let [root (scratch-dir "prog")
+        ext  (scratch-dir "ext")
+        app  (str root "/app.lg")
+        util (str root "/util.lg")
+        lib  (str ext "/lib.lg")
+        paths {"app" app "util" util "lib" lib}]
+    (spit app "(ns app (:require [util :as u] [lib] [clojure.string :as s]))\n(defn -main [] (u/f))\n")
+    (spit util "(ns util (:require [app]))\n(defn f [] 1)\n")
+    (spit lib "(ns lib)\n(defn g [] 2)\n")
+    (let [res (lg.compiler/program-files [app] [root] [] (fn [ns] (get paths ns)))]
+      (testing "adds a required file under a root, once, despite the require cycle"
+        (is (= [app util] (:files res)))
+        (is (= ["util"] (:added res))))
+      (testing "leaves a file outside the roots on the VM and names it"
+        (is (= [["lib" lib]] (:outside res))))
+      (testing "an embedded namespace (no source path) is neither added nor reported"
+        (is (not-any? (fn [[ns _]] (= "clojure.string" ns)) (:outside res)))))
+    (syscall/rm-rf root)
+    (syscall/rm-rf ext)))
+
+;; An input at the project root with LG_SOURCE_PATHS=.:vendor has the root .,
+;; which contains vendor/, so a dependency is judged by its own search-path
+;; entry, not by whether a root contains it.
+(deftest program-files-leaves-a-vendored-dependency-of-a-root-level-input
+  (let [root (scratch-dir "rootlevel")
+        app  (str root "/app.lg")
+        util (str root "/lib/util.lg")
+        libx (str root "/vendor/libx/core.lg")
+        search [root (str root "/vendor")]
+        paths {"util" util "libx.core" libx}]
+    (doseq [d ["/lib" "/vendor" "/vendor/libx"]] (mkdir (str root d)))
+    (spit app "(ns app (:require [util] [libx.core]))\n(defn -main [] 1)\n")
+    (spit util "(ns util)\n(defn f [] 1)\n")
+    (spit libx "(ns libx.core)\n(defn g [] 2)\n")
+    (let [roots (lg.compiler/program-roots [app] search)
+          res   (lg.compiler/program-files [app] roots search (fn [ns] (get paths ns)))]
+      (is (= [root] roots))
+      (testing "a dependency under . on no narrower entry is part of the program"
+        (is (= ["util"] (:added res))))
+      (testing "a dependency on vendor/ stays on the VM"
+        (is (= [["libx.core" libx]] (:outside res)))))
+    (syscall/rm-rf root)))
+
+(deftest program-roots-are-the-inputs-search-roots
+  (testing "a dependency on another search-path entry (vendor/) is outside the roots"
+    (is (= ["/p/src"] (lg.compiler/program-roots ["/p/src/app/main.lg"] ["/p/src" "/p/vendor"]))))
+  (testing "a broad entry such as . does not claim a sibling entry's files"
+    (is (= ["/p/src"] (lg.compiler/program-roots ["/p/src/app/main.lg"] ["/p" "/p/src" "/p/vendor"]))))
+  (testing "an input under no search-path entry roots its own directory"
+    (is (= ["/q/app"] (lg.compiler/program-roots ["/q/app/main.lg"] ["/p/src"]))))
+  (testing "a root of / contains every absolute path"
+    (is (= ["/"] (lg.compiler/program-roots ["/x.lg"] ["/"])))))
+
+;; The entry comes from the files named. A namespace the program requires is
+;; lowered with it, but its -main never replaces the named file's main.
+(deftest whole-program-entry-comes-from-the-inputs
+  (let [root  (scratch-dir "entry")
+        tool  (str root "/tool.lg")
+        core2 (str root "/core2.lg")
+        calls (atom [])
+        host  (assoc (recording-host calls)
+                     :abs-path     (fn [p] p)
+                     :source-roots (fn [] [root])
+                     :source-path  (fn [ns] (get {"tool" tool} ns)))]
+    (spit tool "(ns tool)\n(defn helper [] :helped)\n(defn -main [] (println \"TOOL main\"))\n")
+    (spit core2 "(ns core2 (:require [tool :as t]))\n(defn main [] (println (t/helper)))\n(when-not *compiling-aot* (main))\n")
+    (let [res  (atom nil)
+          out  (with-out-str (reset! res (lg.compiler/build-program [core2] "out" nil host)))]
+      (testing "the required namespace is lowered, and the build says so"
+        (is (nil? (:error @res)))
+        (is (re-find #"also lowering 1 required program namespace: tool" out)))
+      (testing "and the entry is still the named file's main"
+        (is (some (fn [c] (= c [:compile-lgb "core2/main"])) @calls))))
+    (testing "lg -w -w-aot's lowering step reports the named file's entry too"
+      (let [dir (scratch-dir "lower")
+            res (atom nil)]
+        (with-out-str (reset! res (lg.compiler/lower-program [core2] dir "lgprogram" false false false host)))
+        (is (= "core2/main" (:entry-ref @res)))
+        (is (= ["lgprogram/core2" "lgprogram/tool"] (sort (:packages @res))))
+        (syscall/rm-rf dir)))
+    (testing "lg -w -w-named-only's lowering step lowers the named file alone"
+      (let [dir (scratch-dir "lower")
+            res (lg.compiler/lower-program [core2] dir "lgprogram" false false true host)]
+        (is (= "core2/main" (:entry-ref res)))
+        (is (= ["lgprogram/core2"] (:packages res)))
+        (syscall/rm-rf dir)))
+    (testing "-named-only lowers the named file alone"
+      (reset! calls [])
+      (let [res (lg.compiler/build-program [core2] "out" nil nil nil false true host)]
+        (is (nil? (:error res)))
+        (is (some (fn [c] (= c [:compile-lgb "core2/main"])) @calls))))
+    (syscall/rm-rf root)))

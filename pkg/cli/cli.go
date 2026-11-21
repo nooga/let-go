@@ -394,6 +394,9 @@ var wasmHostEval bool
 var wasmAudio bool
 var wasmModule string
 var wasmImports stringList
+var wasmAOT bool
+var wasmLoweredCore bool
+var wasmNamedOnly bool
 var storageID string
 var stripDebug bool
 var debugOutput string
@@ -433,7 +436,7 @@ func registerFlags() {
 	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
-	flag.StringVar(&entryFrameEntry, "entry-frame-entry", "", "with -c: omit top-level calls to the selected namespace/main or namespace/-main entry; the generated frame invokes it")
+	flag.StringVar(&entryFrameEntry, "entry-frame-entry", "", "with -c or -w: omit top-level calls to the selected namespace/main or namespace/-main entry; the generated frame invokes it. With -w the bundle loads the program, installing the Go overrides of any lowered packages linked in with -w-module/-import, before it invokes the entry")
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
 	flag.BoolVar(&compressBundle, "z", false, "with -c/-b: DEFLATE-compress the bundle body (smaller .lgb / standalone binary; transparently inflated at load)")
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
@@ -445,6 +448,9 @@ func registerFlags() {
 	flag.BoolVar(&wasmHostEval, "w-host-eval", false, "for -w: expose LetGoHost.eval(code) to call into the loaded image and keep it live (park after the program's main returns); works in both boot modes. Pair with -w-shell none")
 	flag.BoolVar(&wasmAudio, "w-audio", false, "for -w: link the browser audio backend, so audio/ calls play through an AudioWorklet (sound starts on the page's first click, tap or key). Without it they are silent no-ops")
 	flag.StringVar(&wasmModule, "w-module", "", "for -w: build inside the Go module at this directory, whose go.mod and go.sum are used as they are (built -mod=readonly); lg writes only <dir>/lgprogram, and refuses that directory unless it carries lg's marker")
+	flag.BoolVar(&wasmAOT, "w-aot", false, "for -w: lower the program to Go, as lg compile -whole-program does, and link it into the bundle, so the code that lowers runs as Go instead of on the VM. Lowered functions call each other directly, so a redefinition (with-redefs, -w-host-eval) is not seen by other lowered code. Needs the Go toolchain; composes with -w-module, -import and LETGO_USE_TINYGO")
+	flag.BoolVar(&wasmLoweredCore, "w-lowered-core", false, "for -w with -w-aot: also lower let-go's own core (clojure.core, clojure.walk) and link it, as lg compile -lowered-core does")
+	flag.BoolVar(&wasmNamedOnly, "w-named-only", false, "for -w with -w-aot: lower only the file named, as lg compile does by default; without it the program namespaces the file requires, found under the same source roots, are lowered too")
 	flag.Var(&wasmImports, "import", "for -w with -w-module: blank-import this Go package into the generated main package, so its init() registers its namespaces; repeatable. The module must already require it")
 	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script or -m namespace name, or current directory for main.lg)")
 	flag.StringVar(&sourcePaths, "source-paths", "",
@@ -608,8 +614,8 @@ func runMain() int {
 	if entryFrameEntry != "" {
 		slash := strings.LastIndexByte(entryFrameEntry, '/')
 		name := entryFrameEntry[slash+1:]
-		if compileOutput == "" || slash <= 0 || (name != "main" && name != "-main") {
-			fmt.Fprintln(os.Stderr, "error: -entry-frame-entry requires -c and a namespace/main or namespace/-main value")
+		if (compileOutput == "" && wasmOutput == "") || slash <= 0 || (name != "main" && name != "-main") {
+			fmt.Fprintln(os.Stderr, "error: -entry-frame-entry requires -c or -w and a namespace/main or namespace/-main value")
 			return 2
 		}
 	}
@@ -623,6 +629,26 @@ func runMain() int {
 	}
 	if wasmModule != "" && wasmOutput == "" {
 		fmt.Fprintln(os.Stderr, "error: -w-module requires -w")
+		return 2
+	}
+	if wasmAOT && wasmOutput == "" {
+		fmt.Fprintln(os.Stderr, "error: -w-aot requires -w")
+		return 2
+	}
+	if wasmLoweredCore && !wasmAOT {
+		fmt.Fprintln(os.Stderr, "error: -w-lowered-core requires -w-aot")
+		return 2
+	}
+	if wasmNamedOnly && !wasmAOT {
+		fmt.Fprintln(os.Stderr, "error: -w-named-only requires -w-aot")
+		return 2
+	}
+	if wasmAOT && wasm.HasBuildTag(strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS")), "gogen_ir") {
+		fmt.Fprintln(os.Stderr, "error: -w-aot links the program's own lowered code; it does not combine with LG_WASM_BUILD_TAGS=gogen_ir")
+		return 2
+	}
+	if wasmAOT && entryFrameEntry != "" {
+		fmt.Fprintln(os.Stderr, "error: -w-aot finds the program's entry itself; drop -entry-frame-entry")
 		return 2
 	}
 	if len(wasmImports) > 0 && wasmModule == "" {
@@ -710,7 +736,11 @@ func runMain() int {
 			fmt.Fprintf(os.Stderr, "error: -w-wasm must be 'inline' or 'external', got %q\n", wasmPayload)
 			return 1
 		}
-		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, wasmAudio, storageIDForScript(files[0]), customShellTemplate, wasmModule, wasmImports); err != nil {
+		var aot *wasmLowering
+		if wasmAOT {
+			aot = &wasmLowering{loweredCore: wasmLoweredCore, namedOnly: wasmNamedOnly}
+		}
+		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, wasmAudio, storageIDForScript(files[0]), customShellTemplate, wasmModule, wasmImports, entryFrameEntry, aot); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}

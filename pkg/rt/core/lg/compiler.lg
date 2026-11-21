@@ -78,6 +78,100 @@
             (when-let [n (dep-ns-of-entry e)] (swap! out conj n))))))
     @out))
 
+;; Whole-program lowering. Given the files named on the command line, also find
+;; the files of the namespaces they require, transitively, and lower those that
+;; belong to the program. Every file, input or dependency, is placed on the most
+;; specific search-path entry that contains it. The program's `roots` are the
+;; inputs' entries, or an input's own directory when it is on none. A dependency
+;; belongs when its own entry is one of those roots, or, when it is on no entry,
+;; when it sits under one. A dependency kept on another entry (vendor/, an lgx
+;; checkout) stays on the VM and is reported, even when a broader entry such as
+;; . also contains it. Embedded namespaces (core, lg.*) have no source file and
+;; are never added. `source-path` maps a namespace name to the absolute,
+;; symlink-resolved path of the file the resolver would load, or nil.
+(defn- under-root? [roots path]
+  (boolean (some (fn [r] (clojure.string/starts-with? path (if (= r "/") r (str r "/")))) roots)))
+
+(defn- home-root
+  "The most specific of search-roots that contains path, or nil."
+  [search-roots path]
+  (let [found (filter (fn [r] (under-root? [r] path)) search-roots)]
+    (when (seq found) (apply max-key count found))))
+
+(defn- in-program? [roots search-roots path]
+  (if-let [home (home-root search-roots path)]
+    (boolean (some #{home} roots))
+    (under-root? roots path)))
+
+(defn program-files
+  "files (absolute paths) plus the program files they require, transitively.
+   Returns {:files [...] :added [ns...] :outside [[ns path]...]}, inputs first,
+   in discovery order."
+  [files roots search-roots source-path]
+  (loop [queue (vec files) seen (set files) out [] added [] outside [] skipped #{}]
+    (if (empty? queue)
+      {:files out :added added :outside outside}
+      (let [path  (first queue)
+            deps  (spec-dep-syms (vec (rest (read-all path))))
+            step  (reduce
+                   (fn [acc d]
+                     (let [ns (str d)
+                           p  (source-path ns)]
+                       (cond
+                         (or (nil? p) (contains? (:seen acc) p) (contains? (:skipped acc) ns)) acc
+                         (in-program? roots search-roots p)
+                         (-> acc (update :queue conj p) (update :seen conj p) (update :added conj ns))
+                         :else
+                         (-> acc (update :outside conj [ns p]) (update :skipped conj ns)))))
+                   {:queue (vec (rest queue)) :seen seen :added added :outside outside :skipped skipped}
+                   deps)]
+        (recur (:queue step) (:seen step) (conj out path) (:added step) (:outside step) (:skipped step))))))
+
+(defn program-roots
+  "The roots program-files takes, for absolute input paths and the absolute
+   search-path entries: for each input, the most specific entry that contains
+   it, or its own directory when none does. Only the most specific one, so a
+   broad entry such as . does not pull a sibling entry like vendor/ into the
+   program."
+  [inputs search-roots]
+  (vec (distinct
+        (map (fn [f]
+               (or (home-root search-roots f)
+                   (clojure.string/replace f #"/[^/]*$" "")))
+             inputs))))
+
+(defn- program-summary
+  "The line a whole-program build prints, or nil when it neither added a
+   namespace nor left one on the VM."
+  [{:keys [added outside]}]
+  (when (or (seq added) (seq outside))
+    (str "lg compile: "
+         (if (seq added)
+           (str "also lowering " (count added) " required program namespace"
+                (when (not= 1 (count added)) "s") ": " (clojure.string/join ", " added))
+           "no required program namespaces to add")
+         (when (seq outside)
+           (str "; left on the VM, outside the program's source roots: "
+                (clojure.string/join ", " (map first outside)))))))
+
+(defn- expand-program-files
+  "{:files [...] :inputs [...]} for a build of the named files: with the
+   host's :source-path, :source-roots and :abs-path, the inputs as absolute
+   paths plus the program files they require, and prints the summary; with
+   named-only?, or a host missing any of the three (one written before
+   whole-program lowering), the files as named. :inputs are the files the
+   entry may come from."
+  [files named-only? host]
+  (let [source-path (:source-path host)]
+    (if (or named-only? (nil? source-path) (nil? (:source-roots host))
+            (nil? (:abs-path host)))
+      {:files files :inputs files}
+      (let [abs    (mapv (:abs-path host) files)
+            search ((:source-roots host))
+            res    (program-files abs (program-roots abs search) search source-path)]
+        (when-let [line (program-summary res)] (println line))
+        {:files (:files res) :inputs abs}))))
+
 ;; Topologically order specs so a namespace loads after the sibling inputs it
 ;; requires (deps outside the input set are ignored — they load via the normal
 ;; path). DFS marks-before-recursing, so a require cycle terminates (its members
@@ -252,15 +346,23 @@
    present, also emit the native-entry frame.
 
    Returns {:emit-fails n :lowered-funcs n :entry <entry-or-nil>
-            :entry-path <path-or-nil> :error <msg>}
+            :entry-path <path-or-nil> :packages [<import path>...] :error <msg>}
+   :packages names the packages written, the ones a main must import.
    instead of exiting, so a Go caller can decide what to do. Printing is kept
    for the scripts/lg-compile shim's stdout contract."
-  [out-dir import-prefix files entry-frame?]
+  ([out-dir import-prefix files entry-frame?]
+   (compile-program out-dir import-prefix files entry-frame? nil))
+  ;; entry-files, when given, limits where the entry may come from: a build
+  ;; that adds the namespaces the program requires must still take its entry
+  ;; from the files it was named, never from a library's -main.
+  ([out-dir import-prefix files entry-frame? entry-files]
   (let [specs (load-specs! (mapv (fn [p] (parse-spec import-prefix p)) files))]
     (let [results    (binding [ir.passes.pipeline/*target* :go]
                        (ir.passes.pipeline/lower-all-ns-to-go-result
                          (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)))
-          entry-spec (pick-entry-spec specs)
+          entry-spec (pick-entry-spec (if entry-files
+                                        (filter (fn [s] (contains? (set entry-files) (:path s))) specs)
+                                        specs))
           ;; Reject unsupported entry arities only when we would emit a frame —
           ;; package-only mode must not fail on shapes gloat handles itself.
           arity-err  (when entry-frame?
@@ -269,10 +371,12 @@
       (if arity-err
         {:error arity-err :emit-fails 0 :lowered-funcs 0 :entry nil}
         (let [fails   (write-packages! out-dir specs results)
-              n-funcs (reduce + (map (fn [r] (count-lowered-funcs (when r (:source r)))) results))]
+              n-funcs (reduce + (map (fn [r] (count-lowered-funcs (when r (:source r)))) results))
+              pkgs    (vec (keep (fn [[s r]] (when (emitted-spec? s r) (:go-pkg s)))
+                                 (map vector specs results)))]
           (if-not entry-spec
             (do (println (ir.passes.entry-frame/entry-summary-line n-funcs nil))
-                {:emit-fails fails :lowered-funcs n-funcs :entry nil})
+                {:emit-fails fails :lowered-funcs n-funcs :entry nil :packages pkgs})
             (let [ei     (first (keep-indexed (fn [i s] (when (= s entry-spec) i)) specs))
                   result (nth results ei)
                   fn-rec (ir.passes.entry-frame/lookup-entry-fn
@@ -287,7 +391,7 @@
                 (emit-frame! out-dir specs results entry-spec entry))
               (println (ir.passes.entry-frame/entry-summary-line n-funcs entry))
               {:emit-fails fails :lowered-funcs n-funcs :entry entry
-               :entry-path (:path entry-spec)})))))))
+               :entry-path (:path entry-spec) :packages pkgs}))))))))
 
 (defn exit-code
   "The shim's exit policy, as a pure function of compile-program's result.
@@ -316,7 +420,7 @@
    holds main.go and program.lgb; lowered packages import each other under
    import-path. A caller-supplied module (module? true) keeps its own go.mod and
    go.sum and is built read-only; otherwise dir gets a scaffolded module."
-  [files out dir import-path module? lowered-core? host]
+  [files out dir import-path module? lowered-core? named-only? host]
   ;; Before the program is written: a kept -work dir may hold an earlier
   ;; build's lowered core, which must not be linked into a build without the
   ;; flag, nor be mistaken for a package of this program. The step is looked
@@ -324,7 +428,8 @@
   ;; still builds; such a host never lowered a core into dir either.
   (when-let [clear (:clear-lowered-core host)]
     (clear dir))
-  (let [res   (compile-program dir import-path files true)
+  (let [prog  (expand-program-files files named-only? host)
+        res   (compile-program dir import-path (:files prog) true (:inputs prog))
         entry (:entry res)]
     (cond
       (:error res) res
@@ -344,6 +449,48 @@
               (when lowered-core? ((:lower-core host) dir import-path))
               ((:go-build host) dir out)))
         (assoc res :out out)))))
+
+;; The blank imports that link a program's lowered packages into a main this
+;; namespace did not write. Each package registers its Go overrides from init().
+(def lowered-imports-file "lowered_imports.go")
+
+(defn- write-lowered-imports! [dir pkgs]
+  (when (seq pkgs)
+    (spit (str dir "/" lowered-imports-file)
+          (str "// Code generated by lg compile -lower-into. DO NOT EDIT.\n\n"
+               "package main\n\nimport (\n"
+               (apply str (map (fn [p] (str "\t_ \"" p "\"\n")) (sort pkgs)))
+               ")\n"))))
+
+(defn lower-program
+  "Lower `files` into dir, a Go package directory whose main someone else
+   writes: lg -w -w-aot does, after this step, with an entry frame of its own.
+   Writes the lowered packages under import-prefix, a file in dir that
+   blank-imports them, and with lowered-core? the lowered core (through the
+   host's :lower-core-readonly when readonly?, for a caller-supplied module).
+   With named-only?, only the named files lower, as for build-program.
+   Emits no entry frame and builds nothing. Returns compile-program's result
+   with :entry-ref, the entry as \"ns/name\", or a map with :error."
+  [files dir import-prefix lowered-core? readonly? named-only? host]
+  (let [prog  (expand-program-files files named-only? host)
+        res   (compile-program dir import-prefix (:files prog) false (:inputs prog))
+        entry (:entry res)]
+    (cond
+      (:error res) res
+      (nil? entry)
+      (assoc res :error (str "lg compile: no program entry; define -main or main in one of: "
+                             (clojure.string/join " " files)))
+      ;; A file with no ns form lowers under a synthetic ys-<stem> namespace
+      ;; that the bytecode bundle never defines, so the page could not find
+      ;; the entry it calls.
+      (nil? (find-ns-name (vec (rest (read-all (:entry-path res))))))
+      (assoc res :error (str "lg compile: -w-aot needs an ns form in " (:entry-path res)
+                             "; the page calls the entry through its namespace"))
+      :else
+      (do (write-lowered-imports! dir (:packages res))
+          (when lowered-core?
+            ((if readonly? (:lower-core-readonly host) (:lower-core host)) dir import-prefix))
+          (assoc res :entry-ref (str (:ns entry) "/" (:name entry)))))))
 
 (defn build-program
   "Compile `files` to a standalone native binary at `out` (nil names it after
@@ -384,17 +531,22 @@
    for their init(), typically ones registering namespaces; it needs
    module-dir, whose go.mod must require them. `lowered-core?` also lowers
    let-go's own core to Go and links it, so the program's calls into core run
-   native code; it fails the build when the core cannot be lowered. Returns
-   compile-program's result plus :out, or a map with :error."
+   native code; it fails the build when the core cannot be lowered.
+   `named-only?` lowers only `files`; otherwise the program namespaces they
+   require are lowered too (see program-files), which needs the host's
+   :source-path, :source-roots and :abs-path. Returns compile-program's result
+   plus :out, or a map with :error."
   ([files out work-dir host] (build-program files out work-dir nil nil false host))
   ([files out work-dir module-dir host] (build-program files out work-dir module-dir nil false host))
   ([files out work-dir module-dir imports host]
    (build-program files out work-dir module-dir imports false host))
   ([files out work-dir module-dir imports lowered-core? host]
+   (build-program files out work-dir module-dir imports lowered-core? false host))
+  ([files out work-dir module-dir imports lowered-core? named-only? host]
    (cond
      module-dir
      (let [m ((:open-module host) module-dir (vec imports))]
-       (build-in files out (:dir m) (:import-path m) true lowered-core? host))
+       (build-in files out (:dir m) (:import-path m) true lowered-core? named-only? host))
      ;; The scaffolded module requires only let-go, so any other package
      ;; could not build there.
      (seq imports)
@@ -402,6 +554,6 @@
      :else
      (let [work (or work-dir ((:make-temp-dir host)))]
        (try
-         (build-in files out work program-module false lowered-core? host)
+         (build-in files out work program-module false lowered-core? named-only? host)
          (finally
            (when-not work-dir ((:remove-dir host) work))))))))

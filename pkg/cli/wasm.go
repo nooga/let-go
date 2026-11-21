@@ -234,8 +234,11 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, audio bool, storeID string, customShellTemplate string, moduleDir string, imports []string) error {
-	// 1. Compile .lg → .lgb in memory
+// compileWasmProgram compiles src and every namespace it loads into the
+// program.lgb a web build embeds. A non-empty entry (ns/name) omits the
+// program's top-level call to it, for a main that invokes the entry itself.
+// With -strip it also returns the split-out debug companion and its path.
+func compileWasmProgram(ctx *compiler.Context, nsRes *resolver.NSResolver, src, entry, outDir string) (lgb, debugData []byte, debugPath string, err error) {
 	ctx.SetSource(src)
 	var chunk *vm.CodeChunk
 	if err := rt.WithFile(src, func() error {
@@ -244,13 +247,17 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 			return err
 		}
 		var cerr error
-		chunk, _, cerr = ctx.CompileMultiple(f)
+		if entry == "" {
+			chunk, _, cerr = ctx.CompileMultiple(f)
+		} else {
+			slash := strings.LastIndexByte(entry, '/')
+			chunk, _, cerr = ctx.CompileMultipleForEntryFrame(f, entry[:slash], entry[slash+1:])
+		}
 		f.Close()
 		return cerr
 	}); err != nil {
-		return err
+		return nil, nil, "", err
 	}
-
 	var lgbBuf bytes.Buffer
 	if len(nsRes.LoadedChunks) > 0 {
 		mainNS := ctx.CurrentNS().Name()
@@ -259,11 +266,11 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
 		if err := bytecode.EncodeBundleOrdered(&lgbBuf, ctx.Consts(), nsChunks, nsOrder); err != nil {
-			return fmt.Errorf("encoding lgb: %w", err)
+			return nil, nil, "", fmt.Errorf("encoding lgb: %w", err)
 		}
 	} else {
 		if err := bytecode.EncodeCompilation(&lgbBuf, ctx.Consts(), chunk); err != nil {
-			return fmt.Errorf("encoding lgb: %w", err)
+			return nil, nil, "", fmt.Errorf("encoding lgb: %w", err)
 		}
 	}
 
@@ -272,16 +279,76 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	// beside the bundle directory rather than inside it: everything in outDir is
 	// served, and a debug sidecar is build output, not something to ship to every
 	// visitor.
-	var debugData []byte
-	var debugPath string
 	if stripDebug {
 		stripped, companion, path, err := wasmassets.SplitProgramDebug(lgbBuf.Bytes(), outDir, debugOutput)
 		if err != nil {
+			return nil, nil, "", err
+		}
+		return stripped, companion, path, nil
+	}
+	return lgbBuf.Bytes(), nil, "", nil
+}
+
+// wasmLowering holds -w-aot's options; buildWasm takes a nil one for a build
+// without -w-aot.
+type wasmLowering struct {
+	loweredCore bool // -w-lowered-core
+	namedOnly   bool // -w-named-only
+}
+
+// lowerForWasm lowers src for -w-aot by running this binary's
+// `lg compile -lower-into` in a child process, for the reason
+// compileLGBSubprocess gives: lowering loads ir.*, gogen and lg.compiler into
+// the resolver, and the program.lgb compiled afterwards must bundle only the
+// program. The child writes the lowered packages and a file importing them into
+// dir, and reports the program's entry (ns/name), which it returns.
+func lowerForWasm(dir, importPrefix, src string, opts wasmLowering, readonly bool, scratch string) (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("finding lg executable: %w", err)
+	}
+	entryFile := filepath.Join(scratch, "lg-entry")
+	args := []string{"compile", "-lower-into", dir, "-import-prefix", importPrefix, "-entry-out", entryFile}
+	if readonly {
+		args = append(args, "-readonly-module")
+	}
+	if opts.loweredCore {
+		args = append(args, "-lowered-core")
+	}
+	if opts.namedOnly {
+		args = append(args, "-named-only")
+	}
+	cmd := exec.Command(self, append(args, src)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	// lg compile accepts -lower-into only from this step (lower-into-env in
+	// lg.commands.compile). The child resolves namespaces as this process
+	// does; a -source-paths flag reaches it as the variable it stands in for.
+	cmd.Env = append(os.Environ(), "LG_COMPILE_LOWER_INTO=1")
+	if sourcePaths != "" {
+		cmd.Env = append(cmd.Env, "LG_SOURCE_PATHS="+sourcePaths)
+	}
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("lowering %s: %w", src, err)
+	}
+	b, err := os.ReadFile(entryFile)
+	if err != nil {
+		return "", fmt.Errorf("lowering %s: no entry reported: %w", src, err)
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, audio bool, storeID string, customShellTemplate string, moduleDir string, imports []string, entryFrameEntry string, aot *wasmLowering) error {
+	// 1. Compile .lg → .lgb. With -w-aot the program is lowered first, below,
+	// because the lowering step names the entry the bytecode must omit.
+	entry := entryFrameEntry
+	var lgbData, debugData []byte
+	var debugPath string
+	if aot == nil {
+		var err error
+		if lgbData, debugData, debugPath, err = compileWasmProgram(ctx, nsRes, src, entry, outDir); err != nil {
 			return err
 		}
-		lgbBuf.Reset()
-		lgbBuf.Write(stripped)
-		debugData, debugPath = companion, path
 	}
 
 	// 2. Create temp build directory. With a caller-supplied module
@@ -300,19 +367,49 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	buildTags := strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS"))
 	useTinyGo := os.Getenv("LETGO_USE_TINYGO") == "1"
 	srcDir := tmpDir
+	importPrefix := wasmModuleName
 	if moduleDir != "" {
 		m, err := openCallerModule(moduleDir, imports)
 		if err != nil {
 			return err
 		}
 		srcDir = m.GenDir()
+		importPrefix = m.ImportPath()
+	}
+
+	// -w-aot: lower the program into srcDir, beside the main written below,
+	// and compile the bytecode only now, with the entry the lowering found.
+	// A scaffolded module needs its go.mod first: lowering the core runs
+	// lgbgen from it.
+	if aot != nil {
+		if moduleDir == "" {
+			if err := writeGoModule(tmpDir, wasmModuleName); err != nil {
+				return err
+			}
+		}
+		if entry, err = lowerForWasm(srcDir, importPrefix, src, *aot, moduleDir != "", tmpDir); err != nil {
+			return err
+		}
+		if lgbData, debugData, debugPath, err = compileWasmProgram(ctx, nsRes, src, entry, outDir); err != nil {
+			return err
+		}
 	}
 
 	// 3. Write generated source files
-	if err := os.WriteFile(filepath.Join(srcDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "program.lgb"), lgbData, 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval, audio)), 0644); err != nil {
+	mainSrc := wasmassets.RenderMain(storeID, hostEval, audio)
+	if entry != "" {
+		slash := strings.LastIndexByte(entry, '/')
+		entryNS, entryName := entry[:slash], entry[slash+1:]
+		argv, err := rt.ProgramEntryTakesArgv(entryNS, entryName)
+		if err != nil {
+			return fmt.Errorf("entry frame: %w", err)
+		}
+		mainSrc = wasmassets.RenderMainForEntryFrame(storeID, hostEval, audio, entryNS, entryName, argv)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(mainSrc), 0644); err != nil {
 		return err
 	}
 	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
@@ -325,8 +422,8 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 	}
 
-	// 4. Write go.mod, unless the caller supplied one.
-	if moduleDir == "" {
+	// 4. Write go.mod, unless the caller supplied one or -w-aot already did.
+	if moduleDir == "" && aot == nil {
 		if err := writeGoModule(tmpDir, wasmModuleName); err != nil {
 			return err
 		}

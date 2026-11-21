@@ -15,7 +15,7 @@
 
 (def usage
   (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir> [-import <pkg>]...]\n"
-       "                  [-lowered-core] <file.lg>...\n"
+       "                  [-whole-program | -named-only] [-lowered-core] <file.lg>...\n"
        "\n"
        "Compiles a let-go program to a standalone native binary through the Go\n"
        "backend. One input must define -main or main. Needs a Go toolchain.\n"
@@ -27,16 +27,61 @@
        "  -import <pkg> with -module: blank-import the Go package <pkg> into the\n"
        "                program, so its init() registers its namespaces; repeatable.\n"
        "                The module must already require it\n"
+       "  -whole-program also lower the program namespaces the named files\n"
+       "                require, found under the same source roots\n"
+       "  -named-only   lower only the files named (the default)\n"
        "  -lowered-core also lower let-go's own core (clojure.core, clojure.walk)\n"
        "                to Go and link it, so calls into core run native code.\n"
        "                The first build lowers the core, which takes a few seconds\n"))
+
+;; lg -w -w-aot runs the lowering step alone in a child process:
+;;   lg compile -lower-into <dir> -import-prefix <p> -entry-out <file>
+;;              [-readonly-module] [-lowered-core] [-named-only] <file.lg>...
+;; which writes the lowered packages and a file importing them into <dir>,
+;; builds nothing, and writes the program's entry (ns/name) to <file>. These
+;; flags are that process's interface, not part of lg compile's: they are left
+;; out of the usage text and refused unless the parent set lower-into-env.
+(def lower-into-env "LG_COMPILE_LOWER_INTO")
+
+(def whole-program-default
+  "Whether lg compile lowers the namespaces the named files require when
+   neither -whole-program nor -named-only is given. Off, so a build behaves as
+   it did before whole-program lowering existed; both flags stay accepted
+   whichever way this is set."
+  false)
+
+(def ^:private switch-flags
+  "Flags that take no value, each with the option it sets."
+  {"-lowered-core"   :lowered-core
+   "-named-only"     :named-only
+   "-whole-program"  :whole-program
+   "-readonly-module" :readonly-module})
 
 (def ^:private valued-flags
   "Flags that take a value, each with how that value joins the options."
   {"-o"      (fn [opts v] (assoc opts :out v))
    "-work"   (fn [opts v] (assoc opts :work-dir v))
    "-module" (fn [opts v] (assoc opts :module-dir v))
-   "-import" (fn [opts v] (update opts :imports (fnil conj []) v))})
+   "-import" (fn [opts v] (update opts :imports (fnil conj []) v))
+   "-lower-into"    (fn [opts v] (assoc opts :lower-into v))
+   "-import-prefix" (fn [opts v] (assoc opts :import-prefix v))
+   "-entry-out"     (fn [opts v] (assoc opts :entry-out v))})
+
+(defn- lower-into-error
+  "The error for -lower-into and its flags used wrongly, or nil."
+  [opts]
+  (let [into?      (:lower-into opts)
+        companion? (some opts [:import-prefix :entry-out :readonly-module])]
+    (when (or into? companion?)
+      (cond
+        (not= "1" (os/getenv lower-into-env))
+        {:error "lg compile: -lower-into and its flags are internal to lg -w -w-aot"}
+        (not into?)
+        {:error "lg compile: -import-prefix, -entry-out and -readonly-module need -lower-into"}
+        (some opts [:out :work-dir :module-dir])
+        {:error "lg compile: -lower-into builds nothing; it takes no -o, -work or -module"}
+        (not-every? opts [:import-prefix :entry-out])
+        {:error "lg compile: -lower-into needs -import-prefix and -entry-out"}))))
 
 (defn- check-opts [opts]
   (cond
@@ -45,12 +90,22 @@
     {:error "lg compile: -work and -module are exclusive"}
     (and (seq (:imports opts)) (not (:module-dir opts)))
     {:error "lg compile: -import requires -module"}
-    :else opts))
+    (and (:whole-program opts) (:named-only opts))
+    {:error "lg compile: -whole-program and -named-only are exclusive"}
+    :else (or (lower-into-error opts) opts)))
+
+(defn named-only?
+  "Whether a build with these options lowers only the named files."
+  [opts]
+  (cond (:whole-program opts) false
+        (:named-only opts)    true
+        :else                 (not whole-program-default)))
 
 (defn parse-args
   "argv → {:files [..] :out s :work-dir s :module-dir s :imports [..]
-   :lowered-core true}, {:help true}, or {:error msg}. :imports and
-   :lowered-core are present only when their flags are."
+   :lowered-core true :named-only true :whole-program true :lower-into s
+   :import-prefix s :entry-out s :readonly-module true}, {:help true}, or
+   {:error msg}. Each key past :files is present only when its flag is."
   [argv]
   (loop [args (seq argv) opts {:files []}]
     (if-not args
@@ -59,7 +114,7 @@
         (cond
           (contains? #{"-h" "-help" "--help"} a) {:help true}
           (= "--" a) (check-opts (update opts :files into (rest args)))
-          (= "-lowered-core" a) (recur (next args) (assoc opts :lowered-core true))
+          (contains? switch-flags a) (recur (next args) (assoc opts (get switch-flags a) true))
           (contains? valued-flags a)
           (if-let [v (second args)]
             (recur (nnext args) ((get valued-flags a) opts v))
@@ -82,11 +137,26 @@
       (:error opts) (do (err-println (:error opts))
                         (binding [*out* *err*] (print usage))
                         2)
+      (:lower-into opts)
+      (let [res (try
+                  (lg.compiler/lower-program (:files opts) (:lower-into opts) (:import-prefix opts)
+                                             (boolean (:lowered-core opts))
+                                             (boolean (:readonly-module opts))
+                                             ;; -w-aot lowers the whole program unless
+                                             ;; -w-named-only; the flag is new, so it has no
+                                             ;; old behaviour to keep.
+                                             (boolean (:named-only opts)) host)
+                  (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
+        (if (:error res)
+          (do (err-println (:error res)) 1)
+          (do (spit (:entry-out opts) (:entry-ref res)) 0)))
+
       :else
       (let [res (try
                   (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
                                              (:module-dir opts) (:imports opts)
-                                             (boolean (:lowered-core opts)) host)
+                                             (boolean (:lowered-core opts))
+                                             (named-only? opts) host)
                   (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
         (if (:error res)
           (do (err-println (:error res)) 1)
