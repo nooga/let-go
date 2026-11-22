@@ -5045,6 +5045,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 
 	installJVMStatics(ns)
 	installCoreCompatFns(ns)
+	installLoadBundle(ns)
 	installJVMStubs(ns)
 
 	// Mutable JVM collection shims (see host_hashmap.go / host_arraydeque.go).
