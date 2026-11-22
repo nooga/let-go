@@ -1,6 +1,6 @@
 ---
-status: proposed
-last-verified: 2026-11-20
+status: active
+last-verified: 2026-11-22
 authoritative-for:
   - load-bundle
 human-verified:
@@ -16,9 +16,9 @@ An lg program that keeps a large generated namespace needs to load it fast. let-
 
 ## The design
 
-`load-bundle` takes a path string. It reads the file and decodes it with `bytecode.DecodeBundle`, asking to defer every namespace. The decoder never defers the main chunk, and it decodes eagerly any namespace the bundle did not mark self-contained (`FlagNSRanges`). Under the unit's type scope (`runUnitChunk`), it then runs every eagerly decoded namespace chunk in `NSOrder`, then the main chunk if it wasn't one of them, applying `ApplyGoOverrides` after each, as `RunExecUnit` does. It returns the main chunk's value, as `load-string` returns its last form's. A read, decode or run error raises with the path in its message. A bundle whose debug information was split loads its companion the way `runLGB` does.
+`load-bundle` takes a path string. It reads the file and decodes it with `bytecode.DecodeBundle`, asking to defer every namespace. The decoder decodes the main chunk at once even when asked to defer it, and decodes eagerly any namespace the bundle did not mark self-contained (`FlagNSRanges`). `lg -c` writes no namespace ranges, so every namespace in its bundles loads eagerly; deferral applies to bundles written with ranges, as lgbgen writes them. Under the unit's type scope (`runUnitChunk`), it then runs every eagerly decoded namespace chunk in `NSOrder`, then the main chunk if it wasn't one of them, applying `ApplyGoOverrides` after each, as `RunExecUnit` does. It returns the main chunk's value, as `load-string` returns its last form's. A read, decode or run error raises with the path in its message. A bundle whose debug information was split loads its companion the way `runLGB` does, and decodes eagerly: the companion attaches to chunks by index. Every chunk the feature runs, eager or deferred, runs with `*ns*` saved and restored, as `LoadCoreBundle` does around its replay.
 
-Each namespace left deferred maps to its unit in a table in `pkg/rt`, guarded by `nsMu`, and is registered and marked needs-load, as core boot does. A namespace already loaded is not marked: as under `require`, it stays as it is.
+Before any chunk runs, each namespace left deferred maps to its unit in a table in `pkg/rt`, guarded by `nsMu`, and is registered and marked needs-load, as core boot does, so an eager chunk that requires one finds it. A namespace loaded before the call is not marked: as under `require`, it stays as it is.
 
 When a needs-load namespace is in that table, `LookupOrRegisterNS` materializes its chunk (`ExecUnit.NSChunk`), runs it, applies the overrides, drops the entry and clears the mark. This happens before `nsLoader` is asked, whether or not one is installed. A failure keeps the mark and records the error, so `RequireNS` reports it and a later `require` retries, as with `bytecodeNSLoader`. `RequireNS`'s failure check counts the table as a loader.
 
@@ -41,7 +41,3 @@ The native needs no compiler, so it works from the interpreter binary alone (`co
 - `require` finding a namespace's `.lgb` on `-source-paths`: it changes the resolver's file lookup and gets its own issue.
 - Decoding a namespace's entries on demand rather than whole, the random-access step #1145 names.
 - Any change to core boot.
-
-## Open
-
-- Whether a deferred namespace's chunk runs with `*ns*` saved and restored, as `LoadCoreBundle` does around its replay; it should, if a chunk's `ns` form would otherwise leave `*ns*` moved.
