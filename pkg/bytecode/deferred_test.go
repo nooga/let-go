@@ -384,3 +384,48 @@ func tagOf(t *testing.T, d *decoder) byte {
 	}
 	return b[0] & tagIDMask
 }
+
+// TestDecodeBundleMaterializesADeferrableMainNamespace covers a bundle whose
+// last namespace, the unit's main chunk, qualifies for deferral and the caller
+// asks to defer every namespace: the decoder decodes that one at once and
+// defers the rest.
+func TestDecodeBundleMaterializesADeferrableMainNamespace(t *testing.T) {
+	pool := vm.NewConsts()
+	mkFn := func(ret int32) *vm.Func {
+		c := vm.NewCodeChunk(pool)
+		c.Append(vm.OP_LOAD_CONST, ret, vm.OP_RETURN)
+		c.SetMaxStack(int(ret) + 1)
+		return vm.MakeFunc(0, false, c)
+	}
+	fz := pool.Intern(mkFn(0)) // 0
+	fa := pool.Intern(mkFn(1)) // 1
+	fb := pool.Intern(mkFn(2)) // 2
+	mkMain := func(fn int) *vm.CodeChunk {
+		c := vm.NewCodeChunk(pool)
+		c.Append(vm.OP_LOAD_CONST, int32(fn), vm.OP_RETURN)
+		c.SetMaxStack(1)
+		return c
+	}
+	var buf bytes.Buffer
+	// z comes first: its main chunk is chunk 0, which is never deferred.
+	ranges := map[string]ConstRange{"z": {Lo: 0, Hi: 1}, "a": {Lo: 1, Hi: 2}, "b": {Lo: 2, Hi: 3}}
+	mains := map[string]*vm.CodeChunk{"z": mkMain(fz), "a": mkMain(fa), "b": mkMain(fb)}
+	if err := EncodeBundleDeferrable(&buf, pool, mains, []string{"z", "a", "b"}, ranges, false); err != nil {
+		t.Fatal(err)
+	}
+	eager, err := DecodeToExecUnitBytes(buf.Bytes(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lazy, err := DecodeBundle(buf.Bytes(), nil, func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("DecodeBundle: %v", err)
+	}
+	if !lazy.DeferredNS("a") {
+		t.Fatal("a was not deferred")
+	}
+	if lazy.DeferredNS("b") || lazy.MainChunk == nil || lazy.NSChunks["b"] != lazy.MainChunk {
+		t.Fatalf("main namespace b not decoded: deferred=%v main=%v", lazy.DeferredNS("b"), lazy.MainChunk)
+	}
+	compareChunk(t, "main", eager.MainChunk, lazy.MainChunk)
+}

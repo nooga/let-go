@@ -479,6 +479,7 @@ func RemoveNS(name string) {
 	nsMu.Lock()
 	delete(nsRegistry, canonical)
 	delete(nsNeedsLoad, canonical)
+	delete(bundleTable, canonical)
 	nsMu.Unlock()
 }
 
@@ -518,11 +519,16 @@ func RequireNS(name string) (*vm.Namespace, error) {
 	loadErr := nsLoadErrors[canonical]
 	nsMu.RUnlock()
 
-	if nsLoader != nil && needsLoad {
+	inBundle := bundleTableHas(canonical)
+	if needsLoad && (nsLoader != nil || inBundle) {
 		// Loader is configured but namespace still needs loading (load failed).
-		// Back out the placeholder registration so retry is clean.
+		// Back out the placeholder registration so retry is clean. A bundle's
+		// namespace keeps its registration: the bundle's code refers to the
+		// vars in it.
 		nsMu.Lock()
-		delete(nsRegistry, canonical)
+		if !inBundle {
+			delete(nsRegistry, canonical)
+		}
 		delete(nsLoadErrors, canonical)
 		nsMu.Unlock()
 		if loadErr != nil {
@@ -634,6 +640,25 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 	// If namespace exists and doesn't need loading, return it
 	if e != nil && !needsLoad {
 		return e
+	}
+
+	// A namespace a loaded bundle left deferred runs from that bundle, before
+	// and regardless of any loader.
+	if needsLoad && bundleTableHas(name) {
+		loadedNS, _, loadErr := loadFromBundleTable(name)
+		nsMu.Lock()
+		if loadErr == nil {
+			delete(nsLoadErrors, name)
+		} else {
+			nsLoadErrors[name] = loadErr
+		}
+		nsMu.Unlock()
+		if loadedNS != nil {
+			return loadedNS
+		}
+		if loadErr != nil {
+			return DefNSBare(name)
+		}
 	}
 
 	// Try to load if: (a) namespace exists but needs loading, or (b) loader is configured
