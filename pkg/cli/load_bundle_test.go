@@ -327,3 +327,19 @@ func TestLoadBundleMainRequiresDeferred(t *testing.T) {
 		t.Fatalf("lbr.a/y = %v, want 7", got)
 	}
 }
+
+func TestLoadBundleReturnsMainValue(t *testing.T) {
+	cleanupNS(t, "lbv.first", "lbv.b", "lbv.a")
+	path := writeBundle(t, []nsSource{
+		{"lbv.first", "(ns lbv.first)"},
+		{"lbv.b", "(ns lbv.b) (def x 7)"},
+		{"lbv.a", "(ns lbv.a) (def y 1) :main-value"},
+	})
+	got, err := rt.LoadBundle(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got != vm.Keyword("main-value") {
+		t.Fatalf("load-bundle returned %v, want :main-value", got)
+	}
+}

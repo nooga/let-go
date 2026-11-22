@@ -20,7 +20,7 @@ An lg program that keeps a large generated namespace needs to load it fast. let-
 
 Before any chunk runs, each namespace left deferred maps to its unit in a table in `pkg/rt`, guarded by `nsMu`, and is registered and marked needs-load, as core boot does, so an eager chunk that requires one finds it. A namespace loaded before the call is not marked: as under `require`, it stays as it is.
 
-When a needs-load namespace is in that table, `LookupOrRegisterNS` materializes its chunk (`ExecUnit.NSChunk`), runs it, applies the overrides, drops the entry and clears the mark. This happens before `nsLoader` is asked, whether or not one is installed. A failure keeps the mark and records the error, so `RequireNS` reports it and a later `require` retries, as with `bytecodeNSLoader`. `RequireNS`'s failure check counts the table as a loader.
+When a needs-load namespace is in that table, `LookupOrRegisterNS` materializes its chunk (`ExecUnit.NSChunk`), runs it, applies the overrides, drops the entry and clears the mark. This happens before `nsLoader` is asked, whether or not one is installed. A failure keeps the mark and records the error, so `RequireNS` reports it and a later `require` retries, as with `bytecodeNSLoader`. `RequireNS`'s failure check counts the table as a loader. Two goroutines that require the same deferred namespace at once can see it half-built or run its chunk twice, as with the namespace loaders today; a per-entry loading state that waiters block on is a follow-up, and needs a way to tell the loading goroutine's own re-entry from a second goroutine.
 
 The native needs no compiler, so it works from the interpreter binary alone (`contribution-policy.md`, design contract 1).
 

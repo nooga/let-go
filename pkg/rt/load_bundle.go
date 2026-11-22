@@ -16,9 +16,13 @@ import (
 // LoadBundle loads the compiled bundle at path into the running program, as
 // running it would: it runs the bundle's namespaces in order and then its
 // main chunk, and returns the main chunk's value. A namespace the bundle
-// marks self-contained is left undecoded until something requires it, and a
-// namespace loaded before the call stays as it is. *ns* is unchanged
-// afterwards.
+// marks self-contained is left undecoded until something requires it, unless
+// it was loaded before the call, in which case it stays as it is. Namespaces
+// the bundle runs eagerly are redefined, as load-string would. *ns* is
+// unchanged afterwards.
+//
+// Two goroutines that require the same deferred namespace at once can see
+// it half-built, as with the namespace loaders.
 func LoadBundle(path string) (vm.Value, error) {
 	v, err := loadBundle(path)
 	if err != nil {
@@ -50,24 +54,26 @@ func loadBundle(path string) (vm.Value, error) {
 
 	saved := CurrentNS.Deref()
 	defer CurrentNS.SetRoot(saved)
+	var mainValue vm.Value = vm.NIL
 	mainRan := false
 	for _, name := range unit.NSOrder {
 		chunk := unit.NSChunks[name]
 		if chunk == nil {
 			continue
 		}
-		if err := runUnitChunk(unit, chunk); err != nil {
+		v, err := runUnitChunkValue(unit, chunk)
+		if err != nil {
 			return nil, fmt.Errorf("loading namespace %s: %w", name, err)
 		}
 		if ns := LookupNS(name); ns != nil {
 			ApplyGoOverrides(ns)
 		}
 		if chunk == unit.MainChunk {
-			mainRan = true
+			mainValue, mainRan = v, true
 		}
 	}
 	if mainRan || unit.MainChunk == nil {
-		return vm.NIL, nil
+		return mainValue, nil
 	}
 	v, err := runUnitChunkValue(unit, unit.MainChunk)
 	if err != nil {
@@ -130,6 +136,6 @@ func installLoadBundle(ns *vm.Namespace) {
 	}))
 	v.SetMeta(vm.NewPersistentMap([]vm.Value{
 		vm.Keyword("arglists"), vm.NewList([]vm.Value{vm.NewArrayVector([]vm.Value{vm.Symbol("path")})}),
-		vm.Keyword("doc"), vm.String("Loads the compiled bundle (.lgb) at path, as running it would, and returns its main chunk's value. A namespace the bundle marks self-contained stays undecoded until required; a namespace already loaded stays as it is."),
+		vm.Keyword("doc"), vm.String("Loads the compiled bundle (.lgb) at path, as running it would, and returns its main chunk's value. A namespace the bundle marks self-contained stays undecoded until required, or stays as it is if already loaded; namespaces the bundle runs eagerly are redefined, as load-string would."),
 	}))
 }
