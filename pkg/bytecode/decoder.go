@@ -383,6 +383,7 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		MainChunk: d.chunks[0],
 		Types:     d.types,
 	}
+	var mainDeferred string
 
 	if len(nsTable) > 0 {
 		unit.NSChunks = make(map[string]*vm.CodeChunk, len(nsTable))
@@ -414,7 +415,9 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		} else if len(entries) > 0 {
 			last := entries[len(entries)-1]
 			if last.idx != 0 && d.chunks[last.idx] == nil {
-				return nil, fmt.Errorf("the unit's main chunk (namespace %s) cannot be deferred", last.name)
+				// The caller deferred the namespace that is the unit's main
+				// chunk; it is decoded below, once the deferred state is set.
+				mainDeferred = last.name
 			}
 			unit.MainChunk = d.chunks[last.idx]
 		}
@@ -430,6 +433,14 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		d.deferred.consts = sharedConsts
 		d.deferred.chunks = d.chunks
 		unit.deferred = d.deferred
+	}
+	if mainDeferred != "" {
+		main, err := unit.NSChunk(mainDeferred)
+		if err != nil {
+			return nil, fmt.Errorf("decoding the unit's main chunk (namespace %s): %w", mainDeferred, err)
+		}
+		unit.NSChunks[mainDeferred] = main
+		unit.MainChunk = main
 	}
 
 	if err := d.finishCompressedBody(); err != nil {
