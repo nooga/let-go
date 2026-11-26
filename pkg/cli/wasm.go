@@ -387,6 +387,8 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		// them where tinygo offers "none" (0.44+). -panic=print keeps them.
 		var unwindNone bool
 		if panicMode == "trap" {
+			// The error is ignored on purpose: a failed probe yields empty
+			// help, which means no flag and no warning, i.e. the old argv.
 			help, _ := exec.Command("tinygo", "build", "-h").CombinedOutput()
 			var warn bool
 			unwindNone, warn = tinyGoUnwindDecision(panicMode, string(help))
