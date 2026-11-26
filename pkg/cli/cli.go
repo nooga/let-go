@@ -433,7 +433,7 @@ func registerFlags() {
 	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
-	flag.StringVar(&entryFrameEntry, "entry-frame-entry", "", "with -c: omit top-level calls to the selected namespace/main or namespace/-main entry; the generated frame invokes it")
+	flag.StringVar(&entryFrameEntry, "entry-frame-entry", "", "with -c or -w: omit top-level calls to the selected namespace/main or namespace/-main entry; the generated frame invokes it. With -w the bundle loads the program, installing the Go overrides of any lowered packages linked in with -w-module/-import, before it invokes the entry")
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
 	flag.BoolVar(&compressBundle, "z", false, "with -c/-b: DEFLATE-compress the bundle body (smaller .lgb / standalone binary; transparently inflated at load)")
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
@@ -608,8 +608,8 @@ func runMain() int {
 	if entryFrameEntry != "" {
 		slash := strings.LastIndexByte(entryFrameEntry, '/')
 		name := entryFrameEntry[slash+1:]
-		if compileOutput == "" || slash <= 0 || (name != "main" && name != "-main") {
-			fmt.Fprintln(os.Stderr, "error: -entry-frame-entry requires -c and a namespace/main or namespace/-main value")
+		if (compileOutput == "" && wasmOutput == "") || slash <= 0 || (name != "main" && name != "-main") {
+			fmt.Fprintln(os.Stderr, "error: -entry-frame-entry requires -c or -w and a namespace/main or namespace/-main value")
 			return 2
 		}
 	}
@@ -710,7 +710,7 @@ func runMain() int {
 			fmt.Fprintf(os.Stderr, "error: -w-wasm must be 'inline' or 'external', got %q\n", wasmPayload)
 			return 1
 		}
-		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, wasmAudio, storageIDForScript(files[0]), customShellTemplate, wasmModule, wasmImports); err != nil {
+		if err := buildWasm(context, nsResolver, files[0], wasmOutput, xtermShell, wasmPayload == "external", wasmHostEval, wasmAudio, storageIDForScript(files[0]), customShellTemplate, wasmModule, wasmImports, entryFrameEntry); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
