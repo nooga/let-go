@@ -15,7 +15,7 @@
 
 (def usage
   (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir> [-import <pkg>]...]\n"
-       "                  [-lowered-core] <file.lg>...\n"
+       "                  [-whole-program | -named-only] [-lowered-core] <file.lg>...\n"
        "\n"
        "Compiles a let-go program to a standalone native binary through the Go\n"
        "backend. One input must define -main or main. Needs a Go toolchain.\n"
@@ -27,9 +27,25 @@
        "  -import <pkg> with -module: blank-import the Go package <pkg> into the\n"
        "                program, so its init() registers its namespaces; repeatable.\n"
        "                The module must already require it\n"
+       "  -whole-program also lower the program namespaces the named files\n"
+       "                require, found under the same source roots\n"
+       "  -named-only   lower only the files named (the default)\n"
        "  -lowered-core also lower let-go's own core (clojure.core, clojure.walk)\n"
        "                to Go and link it, so calls into core run native code.\n"
        "                The first build lowers the core, which takes a few seconds\n"))
+
+(def whole-program-default
+  "Whether lg compile lowers the namespaces the named files require when
+   neither -whole-program nor -named-only is given. Off, so a build behaves as
+   it did before whole-program lowering existed; both flags stay accepted
+   whichever way this is set."
+  false)
+
+(def ^:private switch-flags
+  "Flags that take no value, each with the option it sets."
+  {"-lowered-core"   :lowered-core
+   "-named-only"     :named-only
+   "-whole-program"  :whole-program})
 
 (def ^:private valued-flags
   "Flags that take a value, each with how that value joins the options."
@@ -45,12 +61,22 @@
     {:error "lg compile: -work and -module are exclusive"}
     (and (seq (:imports opts)) (not (:module-dir opts)))
     {:error "lg compile: -import requires -module"}
+    (and (:whole-program opts) (:named-only opts))
+    {:error "lg compile: -whole-program and -named-only are exclusive"}
     :else opts))
+
+(defn named-only?
+  "Whether a build with these options lowers only the named files."
+  [opts]
+  (cond (:whole-program opts) false
+        (:named-only opts)    true
+        :else                 (not whole-program-default)))
 
 (defn parse-args
   "argv → {:files [..] :out s :work-dir s :module-dir s :imports [..]
-   :lowered-core true}, {:help true}, or {:error msg}. :imports and
-   :lowered-core are present only when their flags are."
+   :lowered-core true :named-only true :whole-program true}, {:help true}, or
+   {:error msg}. Each
+   key past :files is present only when its flag is."
   [argv]
   (loop [args (seq argv) opts {:files []}]
     (if-not args
@@ -59,7 +85,7 @@
         (cond
           (contains? #{"-h" "-help" "--help"} a) {:help true}
           (= "--" a) (check-opts (update opts :files into (rest args)))
-          (= "-lowered-core" a) (recur (next args) (assoc opts :lowered-core true))
+          (contains? switch-flags a) (recur (next args) (assoc opts (get switch-flags a) true))
           (contains? valued-flags a)
           (if-let [v (second args)]
             (recur (nnext args) ((get valued-flags a) opts v))
@@ -86,7 +112,8 @@
       (let [res (try
                   (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
                                              (:module-dir opts) (:imports opts)
-                                             (boolean (:lowered-core opts)) host)
+                                             (boolean (:lowered-core opts))
+                                             (named-only? opts) host)
                   (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
         (if (:error res)
           (do (err-println (:error res)) 1)
