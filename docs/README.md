@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-21
+last-verified: 2026-11-19
 authoritative-for:
   - docs-index
 human-verified: 2026-08-11
@@ -35,6 +35,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Phase skeleton, success metrics | `master-plan.md` |
 | Calling convention, allocation, TCO | `design/vm-performance-optimization.md` |
 | Numeric/value representation | `design/value-representation-and-numeric-performance.md` |
+| Type lattice: kind mask, numeric track | `design/type-lattice-numeric-track.md` |
 | Persistent collections, seq tower, transients | `clojurelike-refactor-plan.md` |
 | Equality/hashing across types | `clojurelike-refactor-plan.md` (Phase 3) |
 | Transducers, reduction fast paths | `clojurelike-refactor-plan.md` (Phase 4) |
