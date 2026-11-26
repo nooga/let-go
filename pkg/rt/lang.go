@@ -9366,7 +9366,8 @@ func CoreInternf(vs ...vm.Value) (vm.Value, error) {
 		if existing := targetNS.LookupLocal(sym); existing != nil {
 			return existing, nil
 		}
-		return targetNS.Def(string(sym), vm.NIL), nil
+		// As in Clojure, the var stays unbound: Def would set a root of nil.
+		return targetNS.LookupOrAdd(sym), nil
 	}
 
 	if existing := targetNS.LookupLocal(sym); existing != nil {
