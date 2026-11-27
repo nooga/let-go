@@ -32,6 +32,26 @@
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "a.lg"]))))
     (is (re-find #"needs a value" (:error (cmd/parse-args ["a.lg" "-import"]))))
     (is (re-find #"requires -module" (:error (cmd/parse-args ["-import" "x/a" "a.lg"])))))
+  (testing "-named-only and -whole-program take no value, and exclude each other"
+    (is (= {:files ["a.lg"] :named-only true} (cmd/parse-args ["-named-only" "a.lg"])))
+    (is (= {:files ["a.lg"] :whole-program true} (cmd/parse-args ["-whole-program" "a.lg"])))
+    (is (re-find #"exclusive" (:error (cmd/parse-args ["-whole-program" "-named-only" "a.lg"])))))
+  (testing "a build lowers only the named files unless -whole-program is given"
+    (is (cmd/named-only? {:files ["a.lg"]}))
+    (is (cmd/named-only? {:files ["a.lg"] :named-only true}))
+    (is (not (cmd/named-only? {:files ["a.lg"] :whole-program true}))))
+  (testing "-w and --wasm name the web app's directory; lg -w flags pass through in order"
+    (is (= {:files ["a.lg"] :wasm-out "site"} (cmd/parse-args ["-w" "site" "a.lg"])))
+    (is (= {:files ["a.lg"] :wasm-out "site"} (cmd/parse-args ["--wasm" "site" "a.lg"])))
+    (is (= {:files ["a.lg"] :wasm-out "site" :lowered-core true
+            :wasm-args ["-w-shell" "none" "-w-audio" "-w-wasm" "external" "-w-host-eval"]}
+           (cmd/parse-args ["-w" "site" "-w-shell" "none" "-w-audio" "-lowered-core"
+                            "-w-wasm" "external" "-w-host-eval" "a.lg"]))))
+  (testing "-w usage errors"
+    (is (re-find #"need -w" (:error (cmd/parse-args ["-w-audio" "a.lg"]))))
+    (is (re-find #"need -w" (:error (cmd/parse-args ["-w-shell" "none" "a.lg"]))))
+    (is (re-find #"drop -o" (:error (cmd/parse-args ["-w" "site" "-o" "x" "a.lg"]))))
+    (is (re-find #"needs a value" (:error (cmd/parse-args ["a.lg" "-w"])))))
   (testing "-- does not skip the checks"
     (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
@@ -55,7 +75,9 @@
                       (swap! calls conj [:open-module module-dir imports])
                       {:dir (scratch-dir "gen") :import-path "example.com/host/lgprogram"})
    :make-temp-dir   (fn [] (swap! calls conj [:make-temp-dir]) (scratch-dir "tmp"))
-   :remove-dir      (fn [dir] (swap! calls conj [:remove-dir]) (syscall/rm-rf dir))})
+   :remove-dir      (fn [dir] (swap! calls conj [:remove-dir]) (syscall/rm-rf dir))
+   :wasm-build      (fn [src dir out entry module? args]
+                      (swap! calls conj [:wasm-build out entry module? args]))})
 
 (defn- write-fixture [src]
   (let [path (str (scratch-dir "src") "/prog.lg")]
@@ -169,3 +191,147 @@
         (is (= [:clear-lowered-core] (second @calls))
             "and an earlier build's core is cleared before the program is written")))
     (remove-fixture path)))
+
+(deftest build-web-program-steps
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.web)\n(defn sq [^long x] (* x x))\n(defn -main [] (println (sq 3)))\n")
+        work  (scratch-dir "web")
+        res   (lg.compiler/build-web-program [path] "site" work nil nil true true ["-w-audio"]
+                                             (recording-host calls))
+        imports (slurp (str work "/" lg.compiler/lowered-imports-file))]
+    (testing "lowers without a native frame and blank-imports each package into lg -w's main"
+      (is (nil? (:error res)))
+      (is (= ["lgprogram/lgc/web"] (:packages res)))
+      (is (re-find #"package main" imports))
+      (is (re-find #"_ \"lgprogram/lgc/web\"" imports))
+      (is (not (file-exists? (str work "/main.go")))))
+    (testing "scaffolds the module, lowers the core, then hands the dir to lg -w with the entry"
+      (is (= [[:clear-lowered-core]
+              [:scaffold-module "lgprogram"]
+              [:lower-core "lgprogram"]
+              [:wasm-build "site" "lgc.web/-main" false ["-w-audio"]]]
+             @calls))
+      (is (= "site" (:out res))))
+    (syscall/rm-rf work)
+    (remove-fixture path)))
+
+(deftest build-web-program-in-a-caller-module
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.webmod)\n(defn -main [] (println 1))\n")
+        res   (lg.compiler/build-web-program [path] "site" nil "mod" ["x/a"] true true []
+                                             (recording-host calls))]
+    (is (nil? (:error res)))
+    (testing "opens the module and builds it read-only, without scaffolding one"
+      (is (= [[:open-module "mod" ["x/a"]]
+              [:clear-lowered-core]
+              [:lower-core-readonly "example.com/host/lgprogram"]
+              [:wasm-build "site" "lgc.webmod/-main" true []]]
+             @calls)))
+    (remove-fixture path)))
+
+(deftest build-web-program-without-entry
+  (let [path (write-fixture "(ns lgc.noentry2)\n(defn f [x] (inc x))\n")]
+    (is (re-find #"no program entry"
+                 (:error (lg.compiler/build-web-program [path] "site" nil nil nil false true []
+                                                        (recording-host (atom []))))))
+    (remove-fixture path)))
+
+(deftest build-web-program-needs-an-ns-form
+  (let [calls (atom [])
+        path  (write-fixture "(defn -main [] (println :hi))\n")]
+    (is (re-find #"needs an ns form"
+                 (:error (lg.compiler/build-web-program [path] "site" nil nil nil false true []
+                                                        (recording-host calls)))))
+    (testing "and stops before lg -w runs"
+      (is (not (some (fn [c] (= :wasm-build (first c))) @calls))))
+    (remove-fixture path)))
+
+(deftest program-files-follows-requires-inside-the-roots
+  (let [root (scratch-dir "prog")
+        ext  (scratch-dir "ext")
+        app  (str root "/app.lg")
+        util (str root "/util.lg")
+        lib  (str ext "/lib.lg")
+        paths {"app" app "util" util "lib" lib}]
+    (spit app "(ns app (:require [util :as u] [lib] [clojure.string :as s]))\n(defn -main [] (u/f))\n")
+    (spit util "(ns util (:require [app]))\n(defn f [] 1)\n")
+    (spit lib "(ns lib)\n(defn g [] 2)\n")
+    (let [res (lg.compiler/program-files [app] [root] [] (fn [ns] (get paths ns)))]
+      (testing "adds a required file under a root, once, despite the require cycle"
+        (is (= [app util] (:files res)))
+        (is (= ["util"] (:added res))))
+      (testing "leaves a file outside the roots on the VM and names it"
+        (is (= [["lib" lib]] (:outside res))))
+      (testing "an embedded namespace (no source path) is neither added nor reported"
+        (is (not-any? (fn [[ns _]] (= "clojure.string" ns)) (:outside res)))))
+    (syscall/rm-rf root)
+    (syscall/rm-rf ext)))
+
+;; An input at the project root with LG_SOURCE_PATHS=.:vendor has the root .,
+;; which contains vendor/, so a dependency is judged by its own search-path
+;; entry, not by whether a root contains it.
+(deftest program-files-leaves-a-vendored-dependency-of-a-root-level-input
+  (let [root (scratch-dir "rootlevel")
+        app  (str root "/app.lg")
+        util (str root "/lib/util.lg")
+        libx (str root "/vendor/libx/core.lg")
+        search [root (str root "/vendor")]
+        paths {"util" util "libx.core" libx}]
+    (doseq [d ["/lib" "/vendor" "/vendor/libx"]] (mkdir (str root d)))
+    (spit app "(ns app (:require [util] [libx.core]))\n(defn -main [] 1)\n")
+    (spit util "(ns util)\n(defn f [] 1)\n")
+    (spit libx "(ns libx.core)\n(defn g [] 2)\n")
+    (let [roots (lg.compiler/program-roots [app] search)
+          res   (lg.compiler/program-files [app] roots search (fn [ns] (get paths ns)))]
+      (is (= [root] roots))
+      (testing "a dependency under . on no narrower entry is part of the program"
+        (is (= ["util"] (:added res))))
+      (testing "a dependency on vendor/ stays on the VM"
+        (is (= [["libx.core" libx]] (:outside res)))))
+    (syscall/rm-rf root)))
+
+(deftest program-roots-are-the-inputs-search-roots
+  (testing "a dependency on another search-path entry (vendor/) is outside the roots"
+    (is (= ["/p/src"] (lg.compiler/program-roots ["/p/src/app/main.lg"] ["/p/src" "/p/vendor"]))))
+  (testing "a broad entry such as . does not claim a sibling entry's files"
+    (is (= ["/p/src"] (lg.compiler/program-roots ["/p/src/app/main.lg"] ["/p" "/p/src" "/p/vendor"]))))
+  (testing "an input under no search-path entry roots its own directory"
+    (is (= ["/q/app"] (lg.compiler/program-roots ["/q/app/main.lg"] ["/p/src"]))))
+  (testing "a root of / contains every absolute path"
+    (is (= ["/"] (lg.compiler/program-roots ["/x.lg"] ["/"])))))
+
+;; The entry comes from the files named. A namespace the program requires is
+;; lowered with it, but its -main never replaces the named file's main.
+(deftest whole-program-entry-comes-from-the-inputs
+  (let [root  (scratch-dir "entry")
+        tool  (str root "/tool.lg")
+        core2 (str root "/core2.lg")
+        calls (atom [])
+        host  (assoc (recording-host calls)
+                     :abs-path     (fn [p] p)
+                     :source-roots (fn [] [root])
+                     :source-path  (fn [ns] (get {"tool" tool} ns)))]
+    (spit tool "(ns tool)\n(defn helper [] :helped)\n(defn -main [] (println \"TOOL main\"))\n")
+    (spit core2 "(ns core2 (:require [tool :as t]))\n(defn main [] (println (t/helper)))\n(when-not *compiling-aot* (main))\n")
+    (let [res  (atom nil)
+          out  (with-out-str (reset! res (lg.compiler/build-program [core2] "out" nil host)))]
+      (testing "the required namespace is lowered, and the build says so"
+        (is (nil? (:error @res)))
+        (is (re-find #"also lowering 1 required program namespace: tool" out)))
+      (testing "and the entry is still the named file's main"
+        (is (some (fn [c] (= c [:compile-lgb "core2/main"])) @calls))))
+    (testing "lg compile -w -whole-program reports the named file's entry too"
+      (reset! calls [])
+      (let [res (atom nil)]
+        (with-out-str (reset! res (lg.compiler/build-web-program [core2] "site" nil nil nil false false [] host)))
+        (is (= ["lgprogram/core2" "lgprogram/tool"] (sort (:packages @res))))
+        (is (some (fn [c] (= c [:wasm-build "site" "core2/main" false []])) @calls))))
+    (testing "lg compile -w lowers the named file alone by default"
+      (let [res (lg.compiler/build-web-program [core2] "site" nil nil nil false true [] host)]
+        (is (= ["lgprogram/core2"] (:packages res)))))
+    (testing "-named-only lowers the named file alone"
+      (reset! calls [])
+      (let [res (lg.compiler/build-program [core2] "out" nil nil nil false true host)]
+        (is (nil? (:error res)))
+        (is (some (fn [c] (= c [:compile-lgb "core2/main"])) @calls))))
+    (syscall/rm-rf root)))

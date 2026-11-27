@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/gomod"
 	"github.com/nooga/let-go/pkg/resolver"
 	"github.com/nooga/let-go/pkg/rt"
@@ -30,7 +31,9 @@ const compileCommand = "compile"
 func runCompile(args []string) int {
 	defer rt.ShutdownAllPods()
 	ctx := initCompiler(false)
-	rt.SetNSLoader(resolver.NewNSResolver(ctx, buildSearchPaths()))
+	searchPaths := buildSearchPaths()
+	nsResolver := resolver.NewNSResolver(ctx, searchPaths)
+	rt.SetNSLoader(nsResolver)
 
 	if _, err := runForm(ctx, "(require 'lg.commands.compile)"); err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
@@ -54,7 +57,7 @@ func runCompile(args []string) int {
 	for i, a := range args {
 		argv[i] = vm.String(a)
 	}
-	res, err := vm.RootExecContext.Invoke(fn, []vm.Value{vm.NewPersistentVector(argv), compileHost()})
+	res, err := vm.RootExecContext.Invoke(fn, []vm.Value{vm.NewPersistentVector(argv), compileHost(nsResolver, searchPaths)})
 	if err != nil {
 		fmt.Fprint(os.Stderr, vm.FormatError(err))
 		return 1
@@ -67,10 +70,69 @@ func runCompile(args []string) int {
 	return int(code)
 }
 
+// hostSourcePath is compileHost's :source-path step: the file a namespace
+// loads from, or nil for one the loader would not read from disk.
+func hostSourcePath(nsResolver *resolver.NSResolver) vm.Value {
+	return vm.NewCtxNativeFn("source-path", func(_ *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("source-path expects 1 arg, got %d", len(vs))
+		}
+		ns, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("source-path: arg is %s, not a string", vs[0].Type())
+		}
+		p, err := programSourcePath(nsResolver, string(ns))
+		if err != nil || p == "" {
+			return vm.NIL, err
+		}
+		return vm.String(p), nil
+	})
+}
+
+// hostAbsPath is compileHost's :abs-path step: a path made absolute with its
+// symlinks resolved, so it compares with :source-path's answers.
+func hostAbsPath() vm.Value {
+	return vm.NewCtxNativeFn("abs-path", func(_ *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("abs-path expects 1 arg, got %d", len(vs))
+		}
+		p, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("abs-path: arg is %s, not a string", vs[0].Type())
+		}
+		abs, err := resolvedPath(string(p))
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(abs), nil
+	})
+}
+
+// hostSourceRoots is compileHost's :source-roots step: the search paths,
+// resolved as hostAbsPath resolves a path.
+func hostSourceRoots(searchPaths []string) vm.Value {
+	return vm.NewCtxNativeFn("source-roots", func(_ *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 0 {
+			return vm.NIL, fmt.Errorf("source-roots expects no args, got %d", len(vs))
+		}
+		// An entry that does not exist roots nothing, so it is dropped.
+		var roots []vm.Value
+		for _, sp := range searchPaths {
+			if abs, err := resolvedPath(sp); err == nil {
+				roots = append(roots, vm.String(abs))
+			}
+		}
+		return vm.NewPersistentVector(roots), nil
+	})
+}
+
 // compileHost is the host map lg.compiler/build-program takes. Each fn
 // returns nil or an error, which surfaces in let-go as an exception.
-func compileHost() vm.Value {
+func compileHost(nsResolver *resolver.NSResolver, searchPaths []string) vm.Value {
 	return vm.NewArrayMap([]vm.Value{
+		vm.Keyword("source-path"), hostSourcePath(nsResolver),
+		vm.Keyword("abs-path"), hostAbsPath(),
+		vm.Keyword("source-roots"), hostSourceRoots(searchPaths),
 		vm.Keyword("compile-lgb"), hostFn("compile-lgb", 3, func(s []string) error {
 			return compileLGBSubprocess(s[0], s[1], s[2])
 		}),
@@ -131,6 +193,7 @@ func compileHost() vm.Value {
 		vm.Keyword("remove-dir"), hostFn("remove-dir", 1, func(s []string) error {
 			return os.RemoveAll(s[0])
 		}),
+		vm.Keyword("wasm-build"), vm.NewCtxNativeFn("wasm-build", hostWasmBuild),
 	})
 }
 
@@ -170,6 +233,64 @@ func compileLGBSubprocess(src, dst, entry string) error {
 	return nil
 }
 
+// hostWasmBuild is compileHost's :wasm-build step for lg compile -w:
+// (src dir out entry module? wasm-args), as lg.compiler/build-web-program
+// documents.
+func hostWasmBuild(_ *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 6 {
+		return vm.NIL, fmt.Errorf("wasm-build expects 6 args, got %d", len(vs))
+	}
+	var s [4]string
+	for i := range s {
+		str, ok := vs[i].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("wasm-build: arg %d is %s, not a string", i+1, vs[i].Type())
+		}
+		s[i] = string(str)
+	}
+	module, ok := vs[4].(vm.Boolean)
+	if !ok {
+		return vm.NIL, fmt.Errorf("wasm-build: arg 5 is %s, not a boolean", vs[4].Type())
+	}
+	argVals, err := vm.SeqToSlice(vs[5])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("wasm-build: arg 6: %w", err)
+	}
+	args := make([]string, len(argVals))
+	for i, a := range argVals {
+		str, ok := a.(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("wasm-build: flag %d is %s, not a string", i+1, a.Type())
+		}
+		args[i] = string(str)
+	}
+	return vm.NIL, wasmBuildSubprocess(s[0], s[1], s[2], s[3], bool(module), args)
+}
+
+// wasmBuildSubprocess runs this binary's own lg -w on src in a child process,
+// for the reason compileLGBSubprocess gives. The child builds in dir, where
+// the lowered packages already are, instead of a directory of its own, and
+// calls entry from an entry frame. callerModule says dir is in a caller's
+// module, which the child builds read-only.
+func wasmBuildSubprocess(src, dir, out, entry string, callerModule bool, wasmArgs []string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding lg executable: %w", err)
+	}
+	args := append([]string{"-w", out, "-entry-frame-entry", entry}, wasmArgs...)
+	cmd := exec.Command(self, append(args, src)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), preparedDirEnv+"="+dir)
+	if callerModule {
+		cmd.Env = append(cmd.Env, preparedModuleEnv+"=1")
+	}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("building the web app: %w", err)
+	}
+	return nil
+}
+
 // goBuild builds the generated package in dir to out. It skips `go mod tidy`
 // for the reason -w does: writeGoModule already resolved the one require the
 // module has, and tidy would also walk let-go's test-only dependencies.
@@ -197,4 +318,37 @@ func goBuild(dir, out string, readonly bool) error {
 		return fmt.Errorf("go build: %w", err)
 	}
 	return nil
+}
+
+// programSourcePath is the absolute path of the file the resolver would load
+// for namespace ns, or "" when it would load none: an embedded namespace
+// (clojure.core, lg.*, a precompiled core namespace) resolves before any file,
+// so it is never a program file even when a file of that name exists.
+func programSourcePath(nsResolver *resolver.NSResolver, ns string) (string, error) {
+	if _, ok := rt.EmbeddedSource(ns); ok {
+		return "", nil
+	}
+	chunk, err := compiler.PrecompiledNSChunk(ns)
+	if err != nil {
+		return "", err
+	}
+	if chunk != nil {
+		return "", nil
+	}
+	p := nsResolver.SourcePath(ns)
+	if p == "" {
+		return "", nil
+	}
+	return resolvedPath(p)
+}
+
+// resolvedPath is p made absolute with symlinks resolved, so that a program
+// root and a namespace's file compare as the same tree however each was
+// reached (macOS's /var is a link to /private/var, for one).
+func resolvedPath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
 }

@@ -1,6 +1,7 @@
 ;; lg.commands.compile — the `lg compile` subcommand (#596).
 ;;
-;; CLI adaptation only: parse argv, call lg.compiler/build-program, turn the
+;; CLI adaptation only: parse argv, call lg.compiler/build-program (or
+;; build-web-program for -w), turn the
 ;; result into diagnostics and an exit status. The compilation itself lives in
 ;; lg.compiler (#786). The Go side of the CLI (pkg/cli/compile.go) dispatches
 ;; here and supplies the toolchain steps as the `host` map build-program takes.
@@ -14,29 +15,62 @@
    [lg.compiler]))
 
 (def usage
-  (str "usage: lg compile [-o <out>] [-work <dir> | -module <dir> [-import <pkg>]...]\n"
-       "                  [-lowered-core] <file.lg>...\n"
+  (str "usage: lg compile [-o <out> | -w <dir> [<web flags>]]\n"
+       "                  [-work <dir> | -module <dir> [-import <pkg>]...]\n"
+       "                  [-whole-program | -named-only] [-lowered-core] <file.lg>...\n"
        "\n"
-       "Compiles a let-go program to a standalone native binary through the Go\n"
-       "backend. One input must define -main or main. Needs a Go toolchain.\n"
+       "Compiles a let-go program through the Go backend to a standalone native\n"
+       "binary, or with -w to a web app. One input must define -main or main.\n"
+       "Needs a Go toolchain.\n"
        "\n"
        "  -o <out>      output path (default: the entry file's name, no .lg)\n"
+       "  -w <dir>      (or --wasm <dir>) write a web app to <dir>, as lg -w does,\n"
+       "                with the lowered program linked into its wasm. The entry's\n"
+       "                file needs an ns form. These lg -w flags pass through to it:\n"
+       "                -w-shell <s>, -w-wasm <mode>, -w-host-eval, -w-audio\n"
        "  -work <dir>   build the generated Go module in <dir> and keep it\n"
        "  -module <dir> build inside the Go module at <dir>, whose go.mod and\n"
        "                go.sum are used as they are; lg writes only <dir>/lgprogram\n"
        "  -import <pkg> with -module: blank-import the Go package <pkg> into the\n"
        "                program, so its init() registers its namespaces; repeatable.\n"
        "                The module must already require it\n"
+       "  -whole-program also lower the program namespaces the named files\n"
+       "                require, found under the same source roots\n"
+       "  -named-only   lower only the files named (the default)\n"
        "  -lowered-core also lower let-go's own core (clojure.core, clojure.walk)\n"
        "                to Go and link it, so calls into core run native code.\n"
        "                The first build lowers the core, which takes a few seconds\n"))
+
+(def whole-program-default
+  "Whether lg compile lowers the namespaces the named files require when
+   neither -whole-program nor -named-only is given. Off, so a build behaves as
+   it did before whole-program lowering existed; both flags stay accepted
+   whichever way this is set."
+  false)
+
+(def ^:private switch-flags
+  "Flags that take no value, each with the option it sets."
+  {"-lowered-core"   :lowered-core
+   "-named-only"     :named-only
+   "-whole-program"  :whole-program})
+
+(def ^:private web-switches
+  "lg -w flags taking no value that lg compile -w passes through."
+  #{"-w-host-eval" "-w-audio"})
+
+(defn- pass-through [opts & args]
+  (update opts :wasm-args (fnil into []) args))
 
 (def ^:private valued-flags
   "Flags that take a value, each with how that value joins the options."
   {"-o"      (fn [opts v] (assoc opts :out v))
    "-work"   (fn [opts v] (assoc opts :work-dir v))
    "-module" (fn [opts v] (assoc opts :module-dir v))
-   "-import" (fn [opts v] (update opts :imports (fnil conj []) v))})
+   "-import" (fn [opts v] (update opts :imports (fnil conj []) v))
+   "-w"      (fn [opts v] (assoc opts :wasm-out v))
+   "--wasm"  (fn [opts v] (assoc opts :wasm-out v))
+   "-w-shell" (fn [opts v] (pass-through opts "-w-shell" v))
+   "-w-wasm"  (fn [opts v] (pass-through opts "-w-wasm" v))})
 
 (defn- check-opts [opts]
   (cond
@@ -45,12 +79,26 @@
     {:error "lg compile: -work and -module are exclusive"}
     (and (seq (:imports opts)) (not (:module-dir opts)))
     {:error "lg compile: -import requires -module"}
+    (and (:whole-program opts) (:named-only opts))
+    {:error "lg compile: -whole-program and -named-only are exclusive"}
+    (and (:wasm-args opts) (not (:wasm-out opts)))
+    {:error "lg compile: -w-shell, -w-wasm, -w-host-eval and -w-audio need -w"}
+    (and (:wasm-out opts) (:out opts))
+    {:error "lg compile: -w names the output directory; drop -o"}
     :else opts))
+
+(defn named-only?
+  "Whether a build with these options lowers only the named files."
+  [opts]
+  (cond (:whole-program opts) false
+        (:named-only opts)    true
+        :else                 (not whole-program-default)))
 
 (defn parse-args
   "argv → {:files [..] :out s :work-dir s :module-dir s :imports [..]
-   :lowered-core true}, {:help true}, or {:error msg}. :imports and
-   :lowered-core are present only when their flags are."
+   :lowered-core true :named-only true :whole-program true :wasm-out s
+   :wasm-args [..]}, {:help true}, or {:error msg}. Each key past :files is
+   present only when its flag is."
   [argv]
   (loop [args (seq argv) opts {:files []}]
     (if-not args
@@ -59,7 +107,8 @@
         (cond
           (contains? #{"-h" "-help" "--help"} a) {:help true}
           (= "--" a) (check-opts (update opts :files into (rest args)))
-          (= "-lowered-core" a) (recur (next args) (assoc opts :lowered-core true))
+          (contains? switch-flags a) (recur (next args) (assoc opts (get switch-flags a) true))
+          (contains? web-switches a) (recur (next args) (pass-through opts a))
           (contains? valued-flags a)
           (if-let [v (second args)]
             (recur (nnext args) ((get valued-flags a) opts v))
@@ -82,11 +131,23 @@
       (:error opts) (do (err-println (:error opts))
                         (binding [*out* *err*] (print usage))
                         2)
+      (:wasm-out opts)
+      (let [res (try
+                  (lg.compiler/build-web-program (:files opts) (:wasm-out opts) (:work-dir opts)
+                                                 (:module-dir opts) (:imports opts)
+                                                 (boolean (:lowered-core opts))
+                                                 (named-only? opts) (:wasm-args opts) host)
+                  (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
+        (if (:error res)
+          (do (err-println (:error res)) 1)
+          (do (println (str "built " (:out res))) 0)))
+
       :else
       (let [res (try
                   (lg.compiler/build-program (:files opts) (:out opts) (:work-dir opts)
                                              (:module-dir opts) (:imports opts)
-                                             (boolean (:lowered-core opts)) host)
+                                             (boolean (:lowered-core opts))
+                                             (named-only? opts) host)
                   (catch e {:error (str "lg compile: " (or (ex-message e) (str e)))}))]
         (if (:error res)
           (do (err-println (:error res)) 1)

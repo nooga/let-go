@@ -108,6 +108,40 @@ or key; sounds triggered before that are dropped, not saved up. A native `lg`
 plays the same calls when built with `-tags audio_oto`; without either, every
 `audio/` call is a silent no-op.
 
+### Lowered programs in the browser
+
+`lg compile -w <dir>` (long form `--wasm <dir>`) writes the same web app with
+the program lowered to Go and linked in, so the code that lowers runs as Go
+instead of on the VM inside wasm:
+
+```bash
+lg compile -w site app.lg
+LETGO_USE_TINYGO=1 lg compile -w site app.lg    # the same, built with TinyGo
+```
+
+It lowers what a native `lg compile` would: the files you name, or with
+`-whole-program` the program namespaces they require, and with
+`-lowered-core` let-go's core too (see [Native binaries](#native-binaries)).
+`-work` and `-module` choose the build directory as they do there, and
+`-import` needs `-module`. The `lg -w` flags `-w-shell`, `-w-wasm`,
+`-w-host-eval` and `-w-audio` pass through to the page. The program needs a
+`-main` or `main` in a file that starts with an `ns` form, and keeps
+`(when-not *compiling-aot* (-main))` at top level, as for a native build: the
+page loads the program, installs the lowered functions, and then calls
+`-main` itself.
+
+Lowered functions call each other directly, so redefining one (with
+`with-redefs`, or through `-w-host-eval`) changes what VM code sees and not
+what other lowered code calls. That is why plain `lg -w` keeps the program on
+the VM.
+
+`-lowered-core` with the standard Go toolchain speeds up data-heavy code in
+the browser as it does natively. With TinyGo, measure first: in probes on
+TinyGo 0.44 (main at `e37ed200`, 2026-11-14) it sped up core code over maps
+(`assoc-in`, `select-keys`) and slowed down per-element callbacks into your
+own function (`every?`, or a transducer such as `(filter f)`), which allocate
+on every element there.
+
 ## Native binaries
 
 `lg compile` builds a program into a standalone native executable through the
@@ -123,8 +157,32 @@ One input must define `-main` or `main`, which the binary calls natively.
 Code that lowers runs as Go; what does not lower stays on the VM, and the build
 still succeeds. The generated module requires the let-go this `lg` came from: a
 release pins its own version, and a dev build uses `LETGO_SRC` or the checkout
-it finds, as `-w` does. Pass several files when the program's own namespaces
-should lower too; namespaces you don't pass run from bytecode.
+it finds, as `-w` does.
+
+By default `lg compile` lowers only the files you pass; a namespace they
+require runs from bytecode. `-whole-program` lowers the rest of the program
+too. Starting from the files you pass, it follows each `require` and lowers
+every namespace whose source file is under the same source root as a file you
+passed: the most specific search-path entry that contains it, or its own
+directory if it is under none. Built-in namespaces never count, and neither
+does a file on another search-path entry, such as `vendor/` or an lgx
+dependency, even when a broader entry such as `.` also contains it: those run
+from bytecode. The entry is always taken from the files you passed. When the
+build adds a namespace or leaves one on the VM, it says which:
+
+```bash
+lg compile -whole-program app.lg
+```
+
+```
+lg compile: also lowering 1 required program namespace: app.util; left on the VM, outside the program's source roots: some.lib
+```
+
+Two things follow from lowering more of the program. A namespace whose
+lowered Go does not compile fails the build, where it would have run from
+bytecode. And lowered functions call each other directly, so `with-redefs` on
+a function in a lowered namespace is not seen by its lowered callers.
+`-named-only` asks for the default explicitly.
 
 ### Lowering the core too
 
@@ -184,6 +242,15 @@ that is the selected entry). This omits the selected top-level entry call
 from the bytecode because the native frame calls it. Other top-level forms,
 including guarded initialization in required namespaces, run with
 `*compiling-aot*` false at runtime. Ordinary `lg -c` keeps the entry call.
+
+`-entry-frame-entry` also works with `-w`. A web build normally replays its
+program, so the top-level `(-main)` starts before any Go overrides linked in
+with `-w-module` and `-import` are installed, and the program runs as
+bytecode. With `-entry-frame-entry app/-main`, the bundle loads the program,
+installs those overrides, and then calls the entry, so packages lowered by
+`lg compile` run as Go in the browser. The entry is a single-arity `defn` of
+`[]`, `[argv]` or `[& args]`; a page has no command line, so `[argv]` gets an
+empty vector. The build refuses any other shape.
 
 `*in-wasm*` is `true` when running inside a WASM build.
 

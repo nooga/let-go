@@ -234,7 +234,49 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, audio bool, storeID string, customShellTemplate string, moduleDir string, imports []string) error {
+// The variables lg compile -w sets on the lg -w child it runs
+// (wasmBuildSubprocess). They are that step's interface, not lg -w's: the
+// child builds in the directory preparedDirEnv names, where the lowered
+// packages already are, and preparedModuleEnv=1 says it is in a caller's
+// module.
+const (
+	preparedDirEnv    = "LG_WASM_PREPARED_DIR"
+	preparedModuleEnv = "LG_WASM_PREPARED_MODULE"
+)
+
+// wasmPrepared is a build directory lg compile -w prepared; buildWasm takes a
+// nil one for a plain lg -w build.
+type wasmPrepared struct {
+	dir          string
+	callerModule bool // dir is in a caller's module: build it read-only
+}
+
+// preparedWasmBuild reads the directory lg compile -w handed this lg -w, or
+// returns nil when it handed none. That build always has an entry and its own
+// module handling, and links lowered code a second way only by mistake.
+func preparedWasmBuild(moduleDir, entry string) (*wasmPrepared, error) {
+	dir := os.Getenv(preparedDirEnv)
+	if dir == "" {
+		return nil, nil
+	}
+	switch {
+	case entry == "":
+		return nil, fmt.Errorf("%s is set by lg compile -w, which also passes -entry-frame-entry", preparedDirEnv)
+	case moduleDir != "":
+		return nil, fmt.Errorf("%s is set by lg compile -w, which takes -module instead of -w-module", preparedDirEnv)
+	case wasmassets.HasBuildTag(strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS")), "gogen_ir"):
+		return nil, fmt.Errorf("lg compile -w links the program's own lowered code; it does not combine with LG_WASM_BUILD_TAGS=gogen_ir")
+	}
+	return &wasmPrepared{dir: dir, callerModule: os.Getenv(preparedModuleEnv) == "1"}, nil
+}
+
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, audio bool, storeID string, customShellTemplate string, moduleDir string, imports []string, entryFrameEntry string, prepared *wasmPrepared) error {
+	var entryNS, entryName string
+	if entryFrameEntry != "" {
+		slash := strings.LastIndexByte(entryFrameEntry, '/')
+		entryNS, entryName = entryFrameEntry[:slash], entryFrameEntry[slash+1:]
+	}
+
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	var chunk *vm.CodeChunk
@@ -244,11 +286,22 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 			return err
 		}
 		var cerr error
-		chunk, _, cerr = ctx.CompileMultiple(f)
+		if entryFrameEntry == "" {
+			chunk, _, cerr = ctx.CompileMultiple(f)
+		} else {
+			chunk, _, cerr = ctx.CompileMultipleForEntryFrame(f, entryNS, entryName)
+		}
 		f.Close()
 		return cerr
 	}); err != nil {
 		return err
+	}
+	entryArgv := false
+	if entryFrameEntry != "" {
+		var err error
+		if entryArgv, err = rt.ProgramEntryTakesArgv(entryNS, entryName); err != nil {
+			return fmt.Errorf("-entry-frame-entry: %w", err)
+		}
 	}
 
 	var lgbBuf bytes.Buffer
@@ -300,6 +353,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	buildTags := strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS"))
 	useTinyGo := os.Getenv("LETGO_USE_TINYGO") == "1"
 	srcDir := tmpDir
+	callerModule := moduleDir != ""
 	if moduleDir != "" {
 		m, err := openCallerModule(moduleDir, imports)
 		if err != nil {
@@ -307,12 +361,22 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 		srcDir = m.GenDir()
 	}
+	// lg compile -w wrote the lowered program and its go.mod, or chose a
+	// caller's module, before running this build.
+	if prepared != nil {
+		srcDir = prepared.dir
+		callerModule = prepared.callerModule
+	}
 
 	// 3. Write generated source files
 	if err := os.WriteFile(filepath.Join(srcDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval, audio)), 0644); err != nil {
+	mainSrc := wasmassets.RenderMain(storeID, hostEval, audio)
+	if entryFrameEntry != "" {
+		mainSrc = wasmassets.RenderMainForEntryFrame(storeID, hostEval, audio, entryNS, entryName, entryArgv)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(mainSrc), 0644); err != nil {
 		return err
 	}
 	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
@@ -325,8 +389,8 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 	}
 
-	// 4. Write go.mod, unless the caller supplied one.
-	if moduleDir == "" {
+	// 4. Write go.mod, unless the caller supplied one or lg compile -w did.
+	if moduleDir == "" && prepared == nil {
 		if err := writeGoModule(tmpDir, wasmModuleName); err != nil {
 			return err
 		}
@@ -396,11 +460,11 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 		build = exec.Command("tinygo", tinyGoBuildArgs(wasmPath, optLevel, panicMode, stack, gc, buildTags, unwindNone)...)
 		build.Dir = srcDir
-		build.Env = tinyGoBuildEnv(os.Environ(), moduleDir != "")
+		build.Env = tinyGoBuildEnv(os.Environ(), callerModule)
 	} else {
 		fmt.Println("building wasm...")
 		args := wasmassets.GoBuildArgs(wasmPath, buildTags)
-		if moduleDir != "" {
+		if callerModule {
 			// Explicit, so GOFLAGS=-mod=mod cannot edit the caller's go.mod.
 			args = append([]string{args[0], "-mod=readonly"}, args[1:]...)
 		}

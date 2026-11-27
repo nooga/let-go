@@ -286,3 +286,95 @@ func TestRunProgramMainChunkDrainsOnlyTheNamespaceItDefines(t *testing.T) {
 		t.Fatalf("%s: override no longer pending; its chunk has not run", stubNS)
 	}
 }
+
+// ProgramEntryTakesArgv classifies an entry by the binding vector in its
+// :arglists, not by its Fn, which for a lowered override says nothing about
+// the source arity.
+func TestProgramEntryTakesArgv(t *testing.T) {
+	const nsName = "entryframeargv"
+	nsMu.Lock()
+	delete(nsRegistry, nsName)
+	nsMu.Unlock()
+	ns := DefNSBare(nsName)
+
+	sym := func(names ...string) vm.Value {
+		vs := make([]vm.Value, len(names))
+		for i, n := range names {
+			vs[i] = vm.Symbol(n)
+		}
+		return vm.NewArrayVector(vs)
+	}
+	variadicNative, err := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) { return vm.NIL, nil })
+	if err != nil {
+		t.Fatalf("wrap native: %v", err)
+	}
+	for _, tc := range []struct {
+		name     string
+		arglists []vm.Value
+		argv     bool
+		wantErr  bool
+	}{
+		{"none", []vm.Value{sym()}, false, false},
+		{"argv", []vm.Value{sym("argv")}, true, false},
+		{"variadic", []vm.Value{sym("&", "args")}, false, false},
+		{"two", []vm.Value{sym("a", "b")}, false, true},
+		{"fixed-and-rest", []vm.Value{sym("a", "&", "r")}, false, true},
+		{"multi", []vm.Value{sym(), sym("a")}, false, true},
+		{"no-arglists", nil, false, true},
+	} {
+		v := ns.Def(tc.name, variadicNative)
+		if tc.arglists != nil {
+			v.SetMeta(vm.NewMap([]vm.Value{vm.Keyword("arglists"), vm.NewList(tc.arglists)}))
+		}
+		argv, err := ProgramEntryTakesArgv(nsName, tc.name)
+		if (err != nil) != tc.wantErr || argv != tc.argv {
+			t.Errorf("%s: got argv=%v err=%v, want argv=%v err=%v", tc.name, argv, err, tc.argv, tc.wantErr)
+		}
+	}
+	if _, err := ProgramEntryTakesArgv(nsName, "missing"); err == nil {
+		t.Error("missing entry: want an error")
+	}
+}
+
+// LoadProgramDependencies leaves the main chunk to RunMainChunk, even when the
+// main namespace is in NSOrder, so a failure there is the caller's to report.
+func TestLoadProgramDependenciesSkipsMainChunk(t *testing.T) {
+	consts := vm.NewConsts()
+	ran := 0
+	counter, err := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+		ran++
+		return vm.NIL, nil
+	})
+	if err != nil {
+		t.Fatalf("wrap native: %v", err)
+	}
+	main := vm.NewCodeChunk(consts)
+	main.Append(vm.OP_LOAD_CONST)
+	main.Append32(consts.Intern(counter))
+	main.Append(vm.OP_INVOKE)
+	main.Append32(0)
+	main.Append(vm.OP_RETURN)
+	main.SetMaxStack(1)
+	dep := vm.NewCodeChunk(consts)
+	dep.Append(vm.OP_LOAD_CONST)
+	dep.Append32(consts.Intern(vm.NIL))
+	dep.Append(vm.OP_RETURN)
+	dep.SetMaxStack(1)
+	unit := &bytecode.ExecUnit{
+		NSOrder:   []string{"entryframedep", "entryframemain2"},
+		NSChunks:  map[string]*vm.CodeChunk{"entryframedep": dep, "entryframemain2": main},
+		MainChunk: main,
+	}
+	if err := LoadProgramDependencies(unit); err != nil {
+		t.Fatalf("LoadProgramDependencies: %v", err)
+	}
+	if ran != 0 {
+		t.Fatalf("main chunk ran %d times during dependency load, want 0", ran)
+	}
+	if err := RunMainChunk(unit); err != nil {
+		t.Fatalf("RunMainChunk: %v", err)
+	}
+	if ran != 1 {
+		t.Fatalf("main chunk ran %d times after RunMainChunk, want 1", ran)
+	}
+}
