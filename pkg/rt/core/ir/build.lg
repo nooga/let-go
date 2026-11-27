@@ -877,7 +877,10 @@
   "(var sym) and reader macro #'sym resolve sym at build time and emit
    a Const Inst with the *vm.Var as the Aux — same as bytecode's
    varCompiler: LOAD_CONST of the Var object itself (not its value)."
-  (let [[_ sym] form
+  (let [[_ raw] form
+        sym     (if (and (seq? raw) (= (first raw) 'with-meta)) (second raw) raw)
+        _       (when-not (symbol? sym)
+                  (throw (ex-info (str "ir/build: var argument must be a symbol, got " (pr-str sym)) {:fn :build-var :type (type sym) :value sym})))
         v       (resolve-for-var sym)]
     (if (nil? v)
       (throw (ex-info (str "ir/build: can't resolve var " sym) {:fn :build-var :type (type sym) :value sym}))
