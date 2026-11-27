@@ -4,6 +4,7 @@
 
 (deftest sample (is (= 1 1)))
 (deftest- private-sample (is (= 1 1)))
+(deftest ^:integration tagged-sample (is (= 1 1)))
 (with-test (defn adder [a b] (+ a b)) (is (= 3 (adder 1 2))))
 (defn plain [] 1)
 (set-test plain (is (= 1 (plain))))
@@ -14,6 +15,10 @@
   (is (fn? (:test (meta (var plain)))))
   (is (:private (meta (var private-sample))))
   (is (not (contains? (ns-publics 'test.deftest-family-test) 'private-sample))))
+
+(deftest reader-metadata-on-the-name-reaches-the-var
+  (is (fn? (:test (meta (var tagged-sample)))))
+  (is (:integration (meta (var tagged-sample)))))
 
 (deftest calling-the-var-runs-through-test-var
   (let [events (atom [])]
