@@ -193,6 +193,7 @@ func compileHost(nsResolver *resolver.NSResolver, searchPaths []string) vm.Value
 		vm.Keyword("remove-dir"), hostFn("remove-dir", 1, func(s []string) error {
 			return os.RemoveAll(s[0])
 		}),
+		vm.Keyword("wasm-build"), vm.NewCtxNativeFn("wasm-build", hostWasmBuild),
 	})
 }
 
@@ -228,6 +229,64 @@ func compileLGBSubprocess(src, dst, entry string) error {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("compiling %s to bytecode: %w", src, err)
+	}
+	return nil
+}
+
+// hostWasmBuild is compileHost's :wasm-build step for lg compile -w:
+// (src dir out entry module? wasm-args), as lg.compiler/build-web-program
+// documents.
+func hostWasmBuild(_ *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 6 {
+		return vm.NIL, fmt.Errorf("wasm-build expects 6 args, got %d", len(vs))
+	}
+	var s [4]string
+	for i := range s {
+		str, ok := vs[i].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("wasm-build: arg %d is %s, not a string", i+1, vs[i].Type())
+		}
+		s[i] = string(str)
+	}
+	module, ok := vs[4].(vm.Boolean)
+	if !ok {
+		return vm.NIL, fmt.Errorf("wasm-build: arg 5 is %s, not a boolean", vs[4].Type())
+	}
+	argVals, err := vm.SeqToSlice(vs[5])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("wasm-build: arg 6: %w", err)
+	}
+	args := make([]string, len(argVals))
+	for i, a := range argVals {
+		str, ok := a.(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("wasm-build: flag %d is %s, not a string", i+1, a.Type())
+		}
+		args[i] = string(str)
+	}
+	return vm.NIL, wasmBuildSubprocess(s[0], s[1], s[2], s[3], bool(module), args)
+}
+
+// wasmBuildSubprocess runs this binary's own lg -w on src in a child process,
+// for the reason compileLGBSubprocess gives. The child builds in dir, where
+// the lowered packages already are, instead of a directory of its own, and
+// calls entry from an entry frame. callerModule says dir is in a caller's
+// module, which the child builds read-only.
+func wasmBuildSubprocess(src, dir, out, entry string, callerModule bool, wasmArgs []string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding lg executable: %w", err)
+	}
+	args := append([]string{"-w", out, "-entry-frame-entry", entry}, wasmArgs...)
+	cmd := exec.Command(self, append(args, src)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), preparedDirEnv+"="+dir)
+	if callerModule {
+		cmd.Env = append(cmd.Env, preparedModuleEnv+"=1")
+	}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("building the web app: %w", err)
 	}
 	return nil
 }

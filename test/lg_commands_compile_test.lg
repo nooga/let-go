@@ -40,24 +40,18 @@
     (is (cmd/named-only? {:files ["a.lg"]}))
     (is (cmd/named-only? {:files ["a.lg"] :named-only true}))
     (is (not (cmd/named-only? {:files ["a.lg"] :whole-program true}))))
-  (testing "-lower-into is refused unless lg -w set the variable"
-    (is (re-find #"internal to lg -w"
-                 (:error (cmd/parse-args ["-lower-into" "d" "-import-prefix" "p" "-entry-out" "e" "a.lg"]))))
-    (is (re-find #"internal to lg -w" (:error (cmd/parse-args ["-readonly-module" "a.lg"])))))
-  (os/setenv cmd/lower-into-env "1")
-  (testing "-lower-into, the lowering step lg -w -w-aot runs"
-    (is (= {:files ["a.lg"] :lower-into "d" :import-prefix "m/lgprogram" :entry-out "e"
-            :readonly-module true :lowered-core true}
-           (cmd/parse-args ["-lower-into" "d" "-import-prefix" "m/lgprogram" "-entry-out" "e"
-                            "-readonly-module" "-lowered-core" "a.lg"])))
-    (is (re-find #"needs -import-prefix and -entry-out"
-                 (:error (cmd/parse-args ["-lower-into" "d" "a.lg"]))))
-    (is (re-find #"builds nothing"
-                 (:error (cmd/parse-args ["-lower-into" "d" "-import-prefix" "p" "-entry-out" "e"
-                                          "-o" "x" "a.lg"]))))
-    (is (re-find #"need -lower-into" (:error (cmd/parse-args ["-entry-out" "e" "a.lg"]))))
-    (is (re-find #"need -lower-into" (:error (cmd/parse-args ["-readonly-module" "a.lg"])))))
-  (os/setenv cmd/lower-into-env "")
+  (testing "-w and --wasm name the web app's directory; lg -w flags pass through in order"
+    (is (= {:files ["a.lg"] :wasm-out "site"} (cmd/parse-args ["-w" "site" "a.lg"])))
+    (is (= {:files ["a.lg"] :wasm-out "site"} (cmd/parse-args ["--wasm" "site" "a.lg"])))
+    (is (= {:files ["a.lg"] :wasm-out "site" :lowered-core true
+            :wasm-args ["-w-shell" "none" "-w-audio" "-w-wasm" "external" "-w-host-eval"]}
+           (cmd/parse-args ["-w" "site" "-w-shell" "none" "-w-audio" "-lowered-core"
+                            "-w-wasm" "external" "-w-host-eval" "a.lg"]))))
+  (testing "-w usage errors"
+    (is (re-find #"need -w" (:error (cmd/parse-args ["-w-audio" "a.lg"]))))
+    (is (re-find #"need -w" (:error (cmd/parse-args ["-w-shell" "none" "a.lg"]))))
+    (is (re-find #"drop -o" (:error (cmd/parse-args ["-w" "site" "-o" "x" "a.lg"]))))
+    (is (re-find #"needs a value" (:error (cmd/parse-args ["a.lg" "-w"])))))
   (testing "-- does not skip the checks"
     (is (re-find #"no input" (:error (cmd/parse-args ["--"]))))
     (is (re-find #"exclusive" (:error (cmd/parse-args ["-work" "w" "-module" "m" "--" "a.lg"]))))))
@@ -81,7 +75,9 @@
                       (swap! calls conj [:open-module module-dir imports])
                       {:dir (scratch-dir "gen") :import-path "example.com/host/lgprogram"})
    :make-temp-dir   (fn [] (swap! calls conj [:make-temp-dir]) (scratch-dir "tmp"))
-   :remove-dir      (fn [dir] (swap! calls conj [:remove-dir]) (syscall/rm-rf dir))})
+   :remove-dir      (fn [dir] (swap! calls conj [:remove-dir]) (syscall/rm-rf dir))
+   :wasm-build      (fn [src dir out entry module? args]
+                      (swap! calls conj [:wasm-build out entry module? args]))})
 
 (defn- write-fixture [src]
   (let [path (str (scratch-dir "src") "/prog.lg")]
@@ -196,39 +192,58 @@
             "and an earlier build's core is cleared before the program is written")))
     (remove-fixture path)))
 
-(deftest lower-program-writes-packages-and-imports
+(deftest build-web-program-steps
   (let [calls (atom [])
-        path  (write-fixture "(ns lgc.low)\n(defn sq [^long x] (* x x))\n(defn -main [] (println (sq 3)))\n")
-        dir   (scratch-dir "lower")
-        res   (lg.compiler/lower-program [path] dir "lgprogram" true true false (recording-host calls))
-        imports (slurp (str dir "/" lg.compiler/lowered-imports-file))]
-    (testing "reports the entry as ns/name"
+        path  (write-fixture "(ns lgc.web)\n(defn sq [^long x] (* x x))\n(defn -main [] (println (sq 3)))\n")
+        work  (scratch-dir "web")
+        res   (lg.compiler/build-web-program [path] "site" work nil nil true true ["-w-audio"]
+                                             (recording-host calls))
+        imports (slurp (str work "/" lg.compiler/lowered-imports-file))]
+    (testing "lowers without a native frame and blank-imports each package into lg -w's main"
       (is (nil? (:error res)))
-      (is (= "lgc.low/-main" (:entry-ref res))))
-    (testing "blank-imports each lowered package into the caller's main package"
-      (is (= ["lgprogram/lgc/low"] (:packages res)))
+      (is (= ["lgprogram/lgc/web"] (:packages res)))
       (is (re-find #"package main" imports))
-      (is (re-find #"_ \"lgprogram/lgc/low\"" imports)))
-    (testing "emits no entry frame and builds nothing; lowers the core read-only"
-      (is (= [[:lower-core-readonly "lgprogram"]] @calls))
-      (is (not (file-exists? (str dir "/main.go")))))
-    (syscall/rm-rf dir)
+      (is (re-find #"_ \"lgprogram/lgc/web\"" imports))
+      (is (not (file-exists? (str work "/main.go")))))
+    (testing "scaffolds the module, lowers the core, then hands the dir to lg -w with the entry"
+      (is (= [[:clear-lowered-core]
+              [:scaffold-module "lgprogram"]
+              [:lower-core "lgprogram"]
+              [:wasm-build "site" "lgc.web/-main" false ["-w-audio"]]]
+             @calls))
+      (is (= "site" (:out res))))
+    (syscall/rm-rf work)
     (remove-fixture path)))
 
-(deftest lower-program-without-entry
-  (let [path (write-fixture "(ns lgc.noentry2)\n(defn f [x] (inc x))\n")
-        dir  (scratch-dir "lower")]
+(deftest build-web-program-in-a-caller-module
+  (let [calls (atom [])
+        path  (write-fixture "(ns lgc.webmod)\n(defn -main [] (println 1))\n")
+        res   (lg.compiler/build-web-program [path] "site" nil "mod" ["x/a"] true true []
+                                             (recording-host calls))]
+    (is (nil? (:error res)))
+    (testing "opens the module and builds it read-only, without scaffolding one"
+      (is (= [[:open-module "mod" ["x/a"]]
+              [:clear-lowered-core]
+              [:lower-core-readonly "example.com/host/lgprogram"]
+              [:wasm-build "site" "lgc.webmod/-main" true []]]
+             @calls)))
+    (remove-fixture path)))
+
+(deftest build-web-program-without-entry
+  (let [path (write-fixture "(ns lgc.noentry2)\n(defn f [x] (inc x))\n")]
     (is (re-find #"no program entry"
-                 (:error (lg.compiler/lower-program [path] dir "lgprogram" false false false (recording-host (atom []))))))
-    (syscall/rm-rf dir)
+                 (:error (lg.compiler/build-web-program [path] "site" nil nil nil false true []
+                                                        (recording-host (atom []))))))
     (remove-fixture path)))
 
-(deftest lower-program-needs-an-ns-form
-  (let [path (write-fixture "(defn -main [] (println :hi))\n")
-        dir  (scratch-dir "lower")]
+(deftest build-web-program-needs-an-ns-form
+  (let [calls (atom [])
+        path  (write-fixture "(defn -main [] (println :hi))\n")]
     (is (re-find #"needs an ns form"
-                 (:error (lg.compiler/lower-program [path] dir "lgprogram" false false true (recording-host (atom []))))))
-    (syscall/rm-rf dir)
+                 (:error (lg.compiler/build-web-program [path] "site" nil nil nil false true []
+                                                        (recording-host calls)))))
+    (testing "and stops before lg -w runs"
+      (is (not (some (fn [c] (= :wasm-build (first c))) @calls))))
     (remove-fixture path)))
 
 (deftest program-files-follows-requires-inside-the-roots
@@ -305,19 +320,15 @@
         (is (re-find #"also lowering 1 required program namespace: tool" out)))
       (testing "and the entry is still the named file's main"
         (is (some (fn [c] (= c [:compile-lgb "core2/main"])) @calls))))
-    (testing "lg -w -w-aot's lowering step reports the named file's entry too"
-      (let [dir (scratch-dir "lower")
-            res (atom nil)]
-        (with-out-str (reset! res (lg.compiler/lower-program [core2] dir "lgprogram" false false false host)))
-        (is (= "core2/main" (:entry-ref @res)))
+    (testing "lg compile -w -whole-program reports the named file's entry too"
+      (reset! calls [])
+      (let [res (atom nil)]
+        (with-out-str (reset! res (lg.compiler/build-web-program [core2] "site" nil nil nil false false [] host)))
         (is (= ["lgprogram/core2" "lgprogram/tool"] (sort (:packages @res))))
-        (syscall/rm-rf dir)))
-    (testing "lg -w -w-named-only's lowering step lowers the named file alone"
-      (let [dir (scratch-dir "lower")
-            res (lg.compiler/lower-program [core2] dir "lgprogram" false false true host)]
-        (is (= "core2/main" (:entry-ref res)))
-        (is (= ["lgprogram/core2"] (:packages res)))
-        (syscall/rm-rf dir)))
+        (is (some (fn [c] (= c [:wasm-build "site" "core2/main" false []])) @calls))))
+    (testing "lg compile -w lowers the named file alone by default"
+      (let [res (lg.compiler/build-web-program [core2] "site" nil nil nil false true [] host)]
+        (is (= ["lgprogram/core2"] (:packages res)))))
     (testing "-named-only lowers the named file alone"
       (reset! calls [])
       (let [res (lg.compiler/build-program [core2] "out" nil nil nil false true host)]

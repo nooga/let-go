@@ -110,35 +110,37 @@ plays the same calls when built with `-tags audio_oto`; without either, every
 
 ### Lowered programs in the browser
 
-`-w-aot` lowers the program to Go, as `lg compile` does, and links it into the
-web app, so the code that lowers runs as Go instead of on the VM inside wasm:
+`lg compile -w <dir>` (long form `--wasm <dir>`) writes the same web app with
+the program lowered to Go and linked in, so the code that lowers runs as Go
+instead of on the VM inside wasm:
 
 ```bash
-lg -w site -w-aot app.lg
-LETGO_USE_TINYGO=1 lg -w site -w-aot app.lg    # the same, built with TinyGo
+lg compile -w site app.lg
+LETGO_USE_TINYGO=1 lg compile -w site app.lg    # the same, built with TinyGo
 ```
 
-It lowers the whole program, as `lg compile -whole-program` does, and needs
-the same Go toolchain `-w` already does. The program needs a `-main` or
-`main` in a file that starts with an `ns` form, and keeps
-`(when-not *compiling-aot* (-main))` at top level, as for `lg compile`: the
+It lowers what a native `lg compile` would: the files you name, or with
+`-whole-program` the program namespaces they require, and with
+`-lowered-core` let-go's core too (see [Native binaries](#native-binaries)).
+`-work` and `-module` choose the build directory as they do there, and
+`-import` needs `-module`. The `lg -w` flags `-w-shell`, `-w-wasm`,
+`-w-host-eval` and `-w-audio` pass through to the page. The program needs a
+`-main` or `main` in a file that starts with an `ns` form, and keeps
+`(when-not *compiling-aot* (-main))` at top level, as for a native build: the
 page loads the program, installs the lowered functions, and then calls
-`-main` itself. A script made only of top-level forms has no entry to call,
-and `-w-aot` refuses it. `-w-named-only` lowers just the file you name, as
-`lg compile` does by default. It composes
-with `-w-module`, `-import`, `-w-shell`, `-w-host-eval` and `-w-audio`.
+`-main` itself.
 
 Lowered functions call each other directly, so redefining one (with
 `with-redefs`, or through `-w-host-eval`) changes what VM code sees and not
-what other lowered code calls. That is why the flag is opt-in.
+what other lowered code calls. That is why plain `lg -w` keeps the program on
+the VM.
 
-`-w-lowered-core` also lowers `clojure.core` and `clojure.walk`, as
-`lg compile -lowered-core` does. With the standard Go toolchain it speeds up
-data-heavy code. With TinyGo, measure first: in probes on TinyGo 0.44 (main at
-`e37ed200`, 2026-11-14) it sped up core code over maps (`assoc-in`,
-`select-keys`) and slowed down per-element callbacks into your own function
-(`every?`, or a transducer such as `(filter f)`), which allocate on every
-element there.
+`-lowered-core` with the standard Go toolchain speeds up data-heavy code in
+the browser as it does natively. With TinyGo, measure first: in probes on
+TinyGo 0.44 (main at `e37ed200`, 2026-11-14) it sped up core code over maps
+(`assoc-in`, `select-keys`) and slowed down per-element callbacks into your
+own function (`every?`, or a transducer such as `(filter f)`), which allocate
+on every element there.
 
 ## Native binaries
 
