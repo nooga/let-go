@@ -8,6 +8,7 @@ package rt
 
 import (
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +136,38 @@ func TestAsyncGoroutinesTrackedAndDrained(t *testing.T) {
 	}
 	if got := vm.Goroutines.Live(); got != 0 {
 		t.Fatalf("expected 0 live after drain, got %d", got)
+	}
+}
+
+// TestAsyncMapOwnedByCallerScope (#806): the async/map worker belongs to the
+// scope that called it, so closing that scope stops the worker and the mapped
+// fn never sees a value put after the close.
+func TestAsyncMapOwnedByCallerScope(t *testing.T) {
+	mapf := asyncFn(t, "map")
+	var calls atomic.Int32
+	f, _ := vm.NativeFnType.Wrap(func(a []vm.Value) (vm.Value, error) {
+		calls.Add(1)
+		return a[0], nil
+	})
+	in := make(vm.Chan)
+
+	ec := vm.NewExecContext()
+	s := vm.OpenChildEC(ec)
+	if _, err := ec.Invoke(mapf, []vm.Value{f, vm.NewArrayVector([]vm.Value{in})}); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if got := s.LiveTree(); got != 1 {
+		t.Fatalf("expected the map worker in the calling scope, live=%d", got)
+	}
+	vm.CloseScoped(s, time.Second)
+
+	select {
+	case in <- vm.Int(1):
+		t.Fatal("async/map worker still took input after its scope closed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("mapped fn ran %d time(s) after scope close", n)
 	}
 }
 
