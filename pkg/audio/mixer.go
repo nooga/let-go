@@ -128,10 +128,14 @@ func (m *Mixer) Stream(src io.Reader) (rt.AudioHandle, error) {
 // Stop fades the sound out over edgeFrames and drops it.
 func (m *Mixer) Stop(h rt.AudioHandle) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if v := m.find(h); v != nil {
+	v := m.find(h)
+	if v != nil {
 		v.stopped = true
 		v.release(edgeFrames)
+	}
+	m.mu.Unlock()
+	if v != nil {
+		notifyEnded(v.src)
 	}
 }
 
@@ -140,9 +144,14 @@ func (m *Mixer) Stop(h rt.AudioHandle) {
 // and a Gain fade waits. Pausing a paused sound does nothing.
 func (m *Mixer) Pause(h rt.AudioHandle) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if v := m.find(h); v != nil && !v.stopped {
+	v := m.find(h)
+	ok := v != nil && !v.stopped
+	if ok {
 		v.held = true
+	}
+	m.mu.Unlock()
+	if ok {
+		notifyHeld(v.src, true)
 	}
 }
 
@@ -150,9 +159,41 @@ func (m *Mixer) Pause(h rt.AudioHandle) {
 // where it was held. Resuming a sound that isn't paused does nothing.
 func (m *Mixer) Resume(h rt.AudioHandle) {
 	m.mu.Lock()
+	v := m.find(h)
+	ok := v != nil && !v.stopped
+	if ok {
+		v.held = false
+	}
+	m.mu.Unlock()
+	if ok {
+		notifyHeld(v.src, false)
+	}
+}
+
+// Source returns the reader a live stream is mixing, or nil when h isn't
+// one. It implements rt.AudioSources, which audio/feed! reaches a stream
+// through.
+func (m *Mixer) Source(h rt.AudioHandle) io.Reader {
+	m.mu.Lock()
 	defer m.mu.Unlock()
 	if v := m.find(h); v != nil && !v.stopped {
-		v.held = false
+		return v.src
+	}
+	return nil
+}
+
+// notifyHeld and notifyEnded tell a stream's source about its stream, if it
+// asks to know (rt.StreamNotify). Callers hold no mixer lock, so a source may
+// call back into the mixer.
+func notifyHeld(src io.Reader, held bool) {
+	if n, ok := src.(rt.StreamNotify); ok {
+		n.StreamHeld(held)
+	}
+}
+
+func notifyEnded(src io.Reader) {
+	if n, ok := src.(rt.StreamNotify); ok {
+		n.StreamEnded()
 	}
 }
 
@@ -196,7 +237,13 @@ func (m *Mixer) Read(p []byte) (int, error) {
 		return 0, io.ErrShortBuffer
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var ended []io.Reader
+	defer func() {
+		m.mu.Unlock()
+		for _, src := range ended {
+			notifyEnded(src)
+		}
+	}()
 	if cap(m.mix) < 2*n {
 		m.mix = make([]float64, 2*n)
 	}
@@ -207,6 +254,10 @@ func (m *Mixer) Read(p []byte) (int, error) {
 		v.render(mix)
 		if !v.done {
 			live = append(live, v)
+		} else if v.src != nil {
+			// The stream's source learns it is done with however it ended,
+			// so a writer feeding it doesn't wait on a ring nothing drains.
+			ended = append(ended, v.src)
 		}
 	}
 	clear(m.voices[len(live):])
