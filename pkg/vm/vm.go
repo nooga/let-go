@@ -1144,7 +1144,11 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				fn, ok := AsFn(fraw)
 				if !ok {
-					return NIL, errNotAFunction(fraw)
+					nerr := errNotAFunction(fraw)
+					if f.handleError(nerr) {
+						continue
+					}
+					return NIL, nerr
 				}
 				a, err := f.mult(0, int(arity))
 				if err != nil {
@@ -1187,7 +1191,11 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				fn, ok := AsFn(fraw)
 				if !ok {
-					return NIL, errNotAFunction(fraw)
+					nerr := errNotAFunction(fraw)
+					if f.handleError(nerr) {
+						continue
+					}
+					return NIL, nerr
 				}
 				target, direct, cerr := resolveBytecodeCall(fn, nil)
 				if cerr != nil {
@@ -1233,7 +1241,11 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			}
 			fn, ok := AsFn(fraw)
 			if !ok {
-				return NIL, errNotAFunction(fraw)
+				nerr := errNotAFunction(fraw)
+				if f.handleError(nerr) {
+					continue
+				}
+				return NIL, nerr
 			}
 			var a []Value
 			if arity > 0 {

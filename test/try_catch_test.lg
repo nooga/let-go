@@ -1,6 +1,7 @@
 ;; Exception handling tests: try/catch, throw, ex-info
 (ns test.try-catch-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 (deftest basic-try-catch
   (testing "catch recovers from error"
@@ -74,3 +75,22 @@
            (try
              (vec (filter (fn [x] (if (= x 3) (throw :bad) (even? x))) [1 2 3 4]))
              (catch e :caught))))))
+
+(deftest catch-calling-a-non-function
+  ;; The error is raised by the frame running the try, not by a callee, so the
+  ;; VM must offer it to that frame's own handlers before unwinding.
+  (let [call1 (fn [f] (try (f 1) (catch e :caught)))
+        call0 (fn [f] (try (f) (catch e :caught)))]
+    (testing "with arguments"
+      (is (= :caught (call1 "not a fn")))
+      (is (= :caught (call1 42))))
+    (testing "with no arguments"
+      (is (= :caught (call0 nil))))
+    (testing "the catch sees the error"
+      (is (string? (try ("not a fn" 1) (catch e (ex-message e)))))))
+  (testing "a finally still runs"
+    (let [ran (atom false)]
+      (is (= :escaped (try (try ("not a fn" 1)
+                                (finally (reset! ran true)))
+                           (catch e :escaped))))
+      (is (true? @ran)))))
