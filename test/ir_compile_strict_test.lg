@@ -17,16 +17,13 @@
    [ir.passes.pipeline]
    [test :refer :all]))
 
-;; A shape that does not lower on the bytecode path today: an `if` inside a
-;; recur argument. Chosen because it fails in `lower.lg`'s stack-position
-;; materialize ("value %N not on stack"), which is exactly the class the
-;; lower-go coverage ratchet cannot see.
+;; A shape that does not lower on the bytecode path today: a raw `.` member
+;; form. ir.build emits a :dot inst, which only the Go backend lowers, so
+;; `lower.lg` fails on it — a bytecode-path failure the lower-go coverage
+;; ratchet cannot see. When :dot gains a bytecode lowering, pick another.
 (def unlowerable-form
-  '(defn strict-probe-fn [n]
-     (loop [i 0 acc 0]
-       (if (>= i n)
-         acc
-         (recur (inc i) (if (even? i) (+ acc i) (- acc 1)))))))
+  '(defn strict-probe-fn [x]
+     (. x toString)))
 
 (deftest ir-compile-falls-back-silently-by-default
   (testing "default: the defn compiles, having quietly used bytecode"

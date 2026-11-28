@@ -19,7 +19,7 @@ func TestBytecodeFallthroughSize(t *testing.T) {
 		name, form, calls, want string
 	}{
 		{"choice", `(defn choice [x] (if x 1 2))`, `[(f true) (f false) (f nil)]`, `[44 [1 2 2]]`},
-		{"loop", `(defn loop-sum [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))`, `[(f 0) (f 1) (f 10) (f 1000)]`, `[136 [0 0 45 499500]]`},
+		{"loop", `(defn loop-sum [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))`, `[(f 0) (f 1) (f 10) (f 1000)]`, `[112 [0 0 45 499500]]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Lower directly so compiler fallback cannot hide a lowering failure.

@@ -407,6 +407,106 @@ func installIRBridgeBuiltins() {
 		return vm.MakeInt(offIP), nil
 	})
 	ns.Def("chunk-emit-recur", chunk_chunk_emit_recur_Fn)
+	chunk_chunk_emit_try_push_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-try-push: expected (Self Int), got %d args", len(vs))
+		}
+		arg0, err := chunkFromBoxed(vs[0])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-try-push: %v", err)
+		}
+		arg1Int, ok1 := vs[1].(vm.Int)
+		if !ok1 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-try-push: arg 1 must be Int, got %s", vs[1].Type().Name())
+		}
+		arg1 := int(arg1Int)
+		ip := arg0.Length()
+		arg0.Append(vm.OP_TRY_PUSH | int32(arg1<<16))
+		arg0.Append32(0)
+		arg0.Append32(0)
+		return vm.MakeInt(ip), nil
+	})
+	ns.Def("chunk-emit-try-push", chunk_chunk_emit_try_push_Fn)
+	chunk_chunk_emit_try_pop_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-try-pop: expected (Self Int), got %d args", len(vs))
+		}
+		arg0, err := chunkFromBoxed(vs[0])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-try-pop: %v", err)
+		}
+		arg1Int, ok1 := vs[1].(vm.Int)
+		if !ok1 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-try-pop: arg 1 must be Int, got %s", vs[1].Type().Name())
+		}
+		arg1 := int(arg1Int)
+		arg0.Append(vm.OP_TRY_POP | int32(arg1<<16))
+		return vm.NIL, nil
+	})
+	ns.Def("chunk-emit-try-pop", chunk_chunk_emit_try_pop_Fn)
+	chunk_chunk_emit_pop_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-pop: expected (Self Int), got %d args", len(vs))
+		}
+		arg0, err := chunkFromBoxed(vs[0])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-pop: %v", err)
+		}
+		arg1Int, ok1 := vs[1].(vm.Int)
+		if !ok1 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-pop: arg 1 must be Int, got %s", vs[1].Type().Name())
+		}
+		arg1 := int(arg1Int)
+		arg0.Append(vm.OP_POP | int32(arg1<<16))
+		return vm.NIL, nil
+	})
+	ns.Def("chunk-emit-pop", chunk_chunk_emit_pop_Fn)
+	chunk_chunk_emit_pop_n_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-pop-n: expected (Self Int Int), got %d args", len(vs))
+		}
+		arg0, err := chunkFromBoxed(vs[0])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-pop-n: %v", err)
+		}
+		arg1Int, ok1 := vs[1].(vm.Int)
+		if !ok1 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-pop-n: arg 1 must be Int, got %s", vs[1].Type().Name())
+		}
+		arg1 := int(arg1Int)
+		arg2Int, ok2 := vs[2].(vm.Int)
+		if !ok2 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-pop-n: arg 2 must be Int, got %s", vs[2].Type().Name())
+		}
+		arg2 := int(arg2Int)
+		arg0.Append(vm.OP_POP_N | int32(arg1<<16))
+		arg0.Append32(arg2)
+		return vm.NIL, nil
+	})
+	ns.Def("chunk-emit-pop-n", chunk_chunk_emit_pop_n_Fn)
+	chunk_chunk_emit_finally_end_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-finally-end: expected (Self Int Int), got %d args", len(vs))
+		}
+		arg0, err := chunkFromBoxed(vs[0])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-finally-end: %v", err)
+		}
+		arg1Int, ok1 := vs[1].(vm.Int)
+		if !ok1 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-finally-end: arg 1 must be Int, got %s", vs[1].Type().Name())
+		}
+		arg1 := int(arg1Int)
+		arg2Int, ok2 := vs[2].(vm.Int)
+		if !ok2 {
+			return vm.NIL, fmt.Errorf("ir/chunk-emit-finally-end: arg 2 must be Int, got %s", vs[2].Type().Name())
+		}
+		arg2 := int(arg2Int)
+		arg0.Append(vm.OP_FINALLY_END | int32(arg1<<16))
+		arg0.Append32(arg2)
+		return vm.NIL, nil
+	})
+	ns.Def("chunk-emit-finally-end", chunk_chunk_emit_finally_end_Fn)
 	chunk_chunk_update_bang_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("ir/chunk-update!: expected (Self Int Int), got %d args", len(vs))

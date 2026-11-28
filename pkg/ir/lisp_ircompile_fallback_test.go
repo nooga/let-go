@@ -20,8 +20,9 @@ func TestIRCompileFallbackDiagnostics(t *testing.T) {
 	nsName := "irfallback"
 
 	// Find a fixture that fails IR compilation but succeeds in bytecode.
-	// Try/catch is unsupported in the IR pipeline but works in bytecode.
-	badForm := `(defn bad-defn [x] (try x (catch e e)))`
+	// A raw `.` member form builds a :dot inst, which only the Go backend
+	// lowers; the bytecode compiler handles it.
+	badForm := `(defn bad-defn [x] (. x toString))`
 
 	// First, verify the bad form fails with IR enabled
 	oldIR := setVarRoot(t, "clojure.core", "*ir-compile*", vm.TRUE)
@@ -58,7 +59,7 @@ func TestIRCompileSilentWhenNotVerbose(t *testing.T) {
 	ensureLoader()
 	nsName := "irsilent"
 
-	badForm := `(defn bad-silent [x] (try x (catch e e)))`
+	badForm := `(defn bad-silent [x] (. x toString))`
 
 	// Enable IR but disable verbose
 	oldIR := setVarRoot(t, "clojure.core", "*ir-compile*", vm.TRUE)

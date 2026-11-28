@@ -111,9 +111,9 @@
     ;; A guarded region whose body/handler/finally are inner fn* closures.
     ;; Non-terminator: the orchestration (invoke body; on error bind the
     ;; handler param and invoke the handler; always invoke finally) is emitted
-    ;; as straight-line Go by lower_go's try-assign-stmts. No bytecode op (the
-    ;; bytecode VM compiles try natively via OP_TRY_PUSH/POP); this op exists
-    ;; only on the IR→Go lowering path.
+    ;; as straight-line Go by lower_go's try-assign-stmts. No single bytecode
+    ;; op: ir.lower's lower-try! emits an OP_TRY_PUSH/POP region that invokes
+    ;; the closures, in the bytecode compiler's tryCompiler layout.
     ["Try"       -1  1 false false nil                false true  false true  "Try"        ".Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}. lower? -> TryOp delegates to try-assign-stmts (registered by ir.lower-go)"]
 
     ;; Struct field selector for native deftype lowering: (. obj field)

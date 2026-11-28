@@ -24,7 +24,8 @@
 (ns ir.passes.legalize
   ;; ir.data supplies the ir/* accessors used throughout this pass.
   (:require
-   [ir.data]))
+   [ir.data :refer [drop-block-params! invalidate-uses!]]
+   [ir.passes.dce :refer [dce]]))
 
 ;; --- detection: non-throwing enumeration of illegal cross-block refs ----
 ;; Mirrors ir.validate/check-no-cross-block-refs! EXACTLY (same exemptions)
@@ -166,4 +167,128 @@
                 (let [nid  (:inst e)
                       refs (vec (map (fn [r] (if (= r v) new-id r)) (ir/refs nid f)))]
                   (ir/set-refs! f nid refs)))))
+          (recur (inc guard)))))))
+
+;; --- stack form: what ir.lower (the bytecode backend) needs -------------
+;;
+;; The stack lowerer addresses a value by its position on the current block's
+;; stack, and a block starts with nothing but its own params. So every value a
+;; block reads that is not re-emittable in place must arrive as one of its
+;; params — a stricter rule than the validator's, which lets a block-arg be
+;; read from any block it dominates and never inspects branch-target args.
+;; The Go backend binds values to Go variables and is indifferent to both.
+
+(defn- branch-if-pred? [f bid]
+  (some (fn [p]
+          (let [t (ir/block-term p f)]
+            (and (some? t) (= :branch-if (ir/op t f)))))
+        (ir/block-preds bid f)))
+
+(defn- prune-dead-params! [f]
+  "Drop block params nothing reads, with their in-edge args. Skips any block
+   entered from a :branch-if: dropping an arg on one edge only would break the
+   lowerer's tt.args == ft.args precondition. Returns true if anything changed."
+  (let [uses (ir/uses f)]
+    (reduce
+      (fn [changed bid]
+        (let [ps   (ir/block-params bid f)
+              dead (loop [i 0 acc []]
+                     (if (>= i (count ps))
+                       acc
+                       (let [p (nth ps i)]
+                         (recur (inc i)
+                                (if (or (= :invalid (ir/op p f))
+                                        (ir/uses-empty? (nth uses p)))
+                                  (conj acc i)
+                                  acc)))))]
+          ;; Uses go stale after a drop, but dropping params of one block
+          ;; cannot revive a use of another's, so the snapshot only
+          ;; under-reports — the caller loops until nothing changes.
+          (if (and (seq dead) (not (branch-if-pred? f bid)))
+            (do (drop-block-params! f bid dead) true)
+            changed)))
+      false
+      (ir/blocks f))))
+
+(defn- stack-cross-block-uses [f]
+  "Vector of {:inst nid :ref v :use-block ub :arg? bool} for every operand — an
+   Inst ref or a terminator's branch-target arg — naming a value defined in
+   another block that cannot be re-emitted at the use. Runs on every lowered
+   fn and is almost always empty, so it allocates nothing per inst."
+  (let [insts (ir/all-insts f)
+        n     (count insts)
+        scan  (fn [acc i ub arg? vs]
+                (reduce (fn [a r]
+                          (if (and (not= (ir/block-of r f) ub)
+                                   (not (ir/reemittable-at-use? r f)))
+                            (conj a {:inst i :ref r :use-block ub :arg? arg?})
+                            a))
+                        acc vs))]
+    (loop [i 0 acc []]
+      (if (>= i n)
+        acc
+        (let [ins (nth insts i)
+              op  (nth ins 0)]
+          (if (= op :invalid)
+            (recur (inc i) acc)
+            (let [ub  (nth ins 3)
+                  acc (scan acc i ub false (nth ins 1))
+                  acc (case op
+                        :branch    (scan acc i ub true (ir/branch-target-args (nth ins 2)))
+                        :branch-if (let [x (nth ins 2)]
+                                     (-> acc
+                                         (scan i ub true (ir/branch-target-args (ir/cond-target-true x)))
+                                         (scan i ub true (ir/branch-target-args (ir/cond-target-false x)))))
+                        acc)]
+              (recur (inc i) acc))))))))
+
+(defn- rewrite-term-args! [f term old new]
+  (let [op  (ir/op term f)
+        aux (ir/aux term f)
+        sub (fn [bt] (ir/new-branch-target
+                       (ir/branch-target-target bt)
+                       (vec (map (fn [a] (if (= a old) new a)) (ir/branch-target-args bt)))))]
+    (case op
+      :branch    (ir/set-aux! f term (sub aux))
+      :branch-if (ir/set-aux! f term (ir/new-cond-target (sub (ir/cond-target-true aux))
+                                                         (sub (ir/cond-target-false aux))))
+      nil)))
+
+(defn legalize-for-stack! [f]
+  "Put f in the form ir.lower can lower: drop dead block params (DCE-sweeping
+   what their edge args orphan), then thread every remaining far operand
+   through fresh block-args so each block reads only its own params and
+   re-emittable values. Mutates f; returns f."
+  (loop []
+    (when (prune-dead-params! f)
+      (dce f)
+      (recur)))
+  (loop [guard 0]
+    (let [bad (stack-cross-block-uses f)]
+      (if (empty? bad)
+        (do
+          ;; A use its def does not dominate walks thread-value-to back to the
+          ;; entry block, giving it a param no caller passes: silent stack
+          ;; corruption. Refuse instead, so the fn falls back.
+          (when (seq (ir/block-params (ir/entry-block f) f))
+            (throw (ex-info "legalize-for-stack!: threaded a value into the entry block (non-dominating use)"
+                            {:fn :legalize-for-stack! :type (type f) :value f})))
+          ;; rewrite-term-args! goes through set-aux!, which leaves the uses
+          ;; cache alone; ir.lower reads uses next. Only after threading: an
+          ;; untouched fn keeps its cache.
+          (when (pos? guard) (invalidate-uses! f))
+          f)
+        (do
+          (when (> guard 1000)
+            (throw (ex-info "legalize-for-stack!: did not converge (non-dominating cross-block use?)"
+                            {:fn :legalize-for-stack! :type (type f) :value f})))
+          (doseq [[[v use-block] entries]
+                  (group-by (fn [e] [(:ref e) (:use-block e)]) bad)]
+            (let [new-id (thread-value-to f v use-block)]
+              (doseq [e entries]
+                (let [nid (:inst e)]
+                  (if (:arg? e)
+                    (rewrite-term-args! f nid v new-id)
+                    (ir/set-refs! f nid (vec (map (fn [r] (if (= r v) new-id r))
+                                                  (ir/refs nid f)))))))))
           (recur (inc guard)))))))

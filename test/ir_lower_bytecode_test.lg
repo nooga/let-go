@@ -1,0 +1,171 @@
+;; Shapes the bytecode IR backend (ir.lower) lowers, each checked against the
+;; default compiler.
+;;
+;; Every probe compiles under *ir-compile-strict*, so a fallback to the
+;; bytecode compiler throws instead of passing, and its result (and any side
+;; effects) must match the default compiler's.
+;;
+;; - try/catch/finally: build-try models body, handler and finally as closures
+;;   referenced by one :try inst; ir.lower emits a TRY_PUSH region that
+;;   invokes them.
+;; - values reaching a block from outside it: ir.passes.legalize's
+;;   legalize-for-stack! drops dead block params and threads the rest through
+;;   block args, since the stack lowerer can address only a block's own params.
+;; - joins whose predecessors would carry different junk below their args.
+;; - a fn literal re-emitted at more than one reference keeps its identity.
+(ns test.ir-lower-bytecode-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+(def log (atom []))
+
+(defn- run-both [form call]
+  "Evaluate defn `form` and then `call` under each compiler; returns
+   [default-result ir-result], each paired with the side-effect log."
+  (let [go (fn [ir?]
+             (reset! log [])
+             (binding [*ir-compile* ir? *ir-compile-strict* ir?]
+               (eval form))
+             (let [r (try (eval call) (catch e [:threw (ex-message e)]))]
+               [r @log]))]
+    [(go false) (go true)]))
+
+(defmacro same-on-both [form call]
+  `(let [[d# i#] (run-both '~form '~call)]
+     (is (= d# i#))))
+
+(deftest try-body-value
+  (same-on-both (defn t1 [x] (try (+ x 1) (catch e :caught))) (t1 41)))
+
+(deftest try-catch-binds-thrown
+  (same-on-both (defn t2 [x] (try (throw (ex-info "boom" {:x x}))
+                                  (catch e [:caught (ex-data e)])))
+                (t2 7)))
+
+(deftest try-catch-uses-locals
+  (same-on-both (defn t3 [x y] (let [z (* x y)]
+                                 (try (if (> z 10) (throw (ex-info "big" {})) z)
+                                      (catch e (- z)))))
+                [(t3 2 3) (t3 4 5)]))
+
+(deftest try-finally-runs-on-normal-exit
+  (same-on-both (defn t4 [x] (try (swap! log conj :body) x
+                                  (finally (swap! log conj :fin))))
+                (t4 3)))
+
+(deftest try-finally-runs-on-throw-and-rethrows
+  (same-on-both (defn t5 [] (try (throw (ex-info "out" {}))
+                                 (finally (swap! log conj :fin))))
+                (t5)))
+
+(deftest try-catch-and-finally
+  (same-on-both (defn t6 [x] (try (if x (throw (ex-info "e" {})) :ok)
+                                  (catch e (swap! log conj :caught) :handled)
+                                  (finally (swap! log conj :fin))))
+                [(t6 true) (t6 false)]))
+
+(deftest throw-from-catch-still-runs-finally
+  (same-on-both (defn t7 [] (try (throw (ex-info "first" {}))
+                                 (catch e (throw (ex-info "second" {})))
+                                 (finally (swap! log conj :fin))))
+                (t7)))
+
+(deftest typed-and-multiple-catches
+  (same-on-both (defn t8 [v] (try (throw v)
+                                  (catch String s [:str s])
+                                  (catch e [:other e])))
+                [(t8 "s") (t8 5)]))
+
+(deftest nested-try
+  (same-on-both (defn t9 [] (try (try (throw (ex-info "in" {}))
+                                      (finally (swap! log conj :inner)))
+                                 (catch e (swap! log conj :outer) :done)))
+                (t9)))
+
+(deftest try-as-operand-with-live-values-below
+  ;; The try sits mid-expression: values computed before it are live on the
+  ;; stack beneath the closures and must survive the handler's SP reset.
+  (same-on-both (defn t10 [a b] (+ a (try (if (neg? b) (throw (ex-info "n" {})) b)
+                                          (catch e 100))
+                                   a))
+                [(t10 1 2) (t10 1 -2)]))
+
+(deftest try-in-a-loop
+  (same-on-both (defn t11 [n] (loop [i 0 acc []]
+                                (if (= i n) acc
+                                    (recur (inc i)
+                                           (conj acc (try (if (odd? i) (throw (ex-info "o" {})) i)
+                                                          (catch e :odd)))))))
+                (t11 5)))
+
+(deftest try-without-handlers
+  (same-on-both (defn t12 [x] (try (* x 2))) (t12 21)))
+
+(deftest true-division
+  (same-on-both (defn t13 [a b] (/ a b)) [(t13 1 2) (t13 6 3) (t13 1.0 4)]))
+
+(deftest if-in-a-recur-argument
+  (same-on-both (defn t14 [n] (loop [i 0 acc 0]
+                                (if (>= i n) acc
+                                    (recur (inc i) (if (even? i) (+ acc i) (- acc 1))))))
+                (t14 10)))
+
+(deftest value-forwarded-through-nested-and-or
+  ;; A block param of an outer `and` branch is forwarded as a branch arg
+  ;; several blocks later.
+  (same-on-both (defn t15 [c] (and (some? c) (not (string? c)) (not (map? c))
+                                   (or (vector? c) (list? c) (seq? c))))
+                [(t15 nil) (t15 "s") (t15 {}) (t15 [1]) (t15 '(1)) (t15 5)]))
+
+(deftest range-check-that-throws
+  (same-on-both (defn t16 [x] (if (and (>= x -128) (<= x 127)) (int x)
+                                  (throw (ex-info (str "out of range: " x) {}))))
+                [(t16 5) (t16 300)]))
+
+(deftest join-of-preds-with-different-junk
+  ;; Lowered before; pruning a dead param changed one pred's junk, which the
+  ;; order-dependent JUMP/RECUR choice then mis-handled.
+  (same-on-both (defn t17 [c n] (let [m (if c n 1)] (if m (+ m 1) 0)))
+                [(t17 true nil) (t17 true 2) (t17 false nil)]))
+
+(deftest fn-literal-referenced-twice-by-one-user
+  ;; (eq f f) is ONE user of f with two references; re-emitting the literal
+  ;; per reference must load the same fn, not build a second one.
+  (same-on-both (defn t18 [eq] (let [v (let [f (fn [x] (+ 2 x))] (eq f f))]
+                                 (if v (vector :p) (vector :f))
+                                 v))
+                (t18 identical?)))
+
+(deftest runtime-errors-in-a-try-body
+  ;; Errors the VM raises itself, not thrown values: the body now runs one
+  ;; frame deeper (inside its closure), which must not change what the handler
+  ;; sees.
+  (same-on-both (defn t19 [k] (try (case k
+                                     :nth  (nth [] 3)
+                                     :div  (/ 1 0)
+                                     :ok)
+                                   (catch e (ex-message e))))
+                [(t19 :nth) (t19 :div) (t19 :ok)]))
+
+(deftest value-from-before-a-loop-read-in-two-loop-blocks
+  ;; k is defined before the loop and read on both arms inside it, so it is
+  ;; threaded around the back edge.
+  (same-on-both (defn t20 [xs] (let [k (count xs)]
+                                 (loop [s (seq xs) acc []]
+                                   (if s
+                                     (recur (next s)
+                                            (conj acc (if (odd? (first s)) (+ k (first s)) (- k (first s)))))
+                                     acc))))
+                (t20 [1 2 3 4])))
+
+(defn- read-key [] (str (rand-int 10)))
+
+(deftest call-result-held-across-a-loop
+  ;; A let-bound call the following loop does not read (#1032).
+  (same-on-both (defn t21 [] (let [z (read-key)] (loop [i 0] (when (< i 3) (recur (inc i))))))
+                (t21))
+  (same-on-both (defn t22 [] (let [z (read-key)] (loop [i 0] (when (< i 3) (recur (inc i)))) (string? z)))
+                (t22))
+  (same-on-both (defn t23 [] (let [z (read-key)] (when (= (read-key) "x") z) :done))
+                (t23)))

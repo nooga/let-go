@@ -439,6 +439,44 @@
              arg0.Append32(arg3)
              return vm.MakeInt(offIP), nil"}
 
+   ;; Exception-handler opcodes for lowering a :try region. Same layout as
+   ;; the bytecode compiler's tryCompiler (see exHandler in pkg/vm).
+   ;;
+   ;; OP_TRY_PUSH catchOffset finallyOffset, both 0 (absent) until patched.
+   ;; Returns the IP of the opcode word; the offsets are relative to it and
+   ;; live at IP+1 / IP+2.
+   {:name "chunk-emit-try-push" :lisp-name "ir/chunk-emit-try-push"
+    :args [Self Int]
+    :body "ip := arg0.Length()
+             arg0.Append(vm.OP_TRY_PUSH | int32(arg1<<16))
+             arg0.Append32(0)
+             arg0.Append32(0)
+             return vm.MakeInt(ip), nil"}
+
+   {:name "chunk-emit-try-pop" :lisp-name "ir/chunk-emit-try-pop"
+    :args [Self Int]
+    :body "arg0.Append(vm.OP_TRY_POP | int32(arg1<<16))
+             return vm.NIL, nil"}
+
+   {:name "chunk-emit-pop" :lisp-name "ir/chunk-emit-pop"
+    :args [Self Int]
+    :body "arg0.Append(vm.OP_POP | int32(arg1<<16))
+             return vm.NIL, nil"}
+
+   ;; OP_POP_N n: keep the top value, drop the n slots beneath it.
+   {:name "chunk-emit-pop-n" :lisp-name "ir/chunk-emit-pop-n"
+    :args [Self Int Int]
+    :body "arg0.Append(vm.OP_POP_N | int32(arg1<<16))
+             arg0.Append32(arg2)
+             return vm.NIL, nil"}
+
+   ;; OP_FINALLY_END offset, where offset = finallyIP - (this opcode's IP).
+   {:name "chunk-emit-finally-end" :lisp-name "ir/chunk-emit-finally-end"
+    :args [Self Int Int]
+    :body "arg0.Append(vm.OP_FINALLY_END | int32(arg1<<16))
+             arg0.Append32(arg2)
+             return vm.NIL, nil"}
+
    ;; Patch a previously-written 32-bit slot.
    {:name "chunk-update!" :lisp-name "ir/chunk-update!"
     :args [Self Int Int]

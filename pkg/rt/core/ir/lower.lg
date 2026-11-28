@@ -26,7 +26,8 @@
   ;; happens to pull ir.data in first (e.g. it breaks under -tags bootstrap when
   ;; gogen is required ahead of this ns). Mirrors ir.build.
   (:require
-   [ir.data]))
+   [ir.data]
+   [ir.passes.legalize :refer [legalize-for-stack!]]))
 
 (declare lower)
 
@@ -51,7 +52,7 @@
 
 ;; --- state helpers ---------------------------------------------------
 
-(defn- new-lowerer [f]
+(defn- new-lowerer [f normalize]
   "Construct the lowerer state. uses is the def→use index, computed
    eagerly so seeding use-count and the cross-block check share work."
   (let [uses    (ir/uses f)
@@ -91,7 +92,10 @@
            ;; Exact junk each pred reported per target (nil = none yet);
            ;; disagreement aborts lowering — see record-block-junk!.
            :block-junk-seen {}
-           :current-block 0})))
+           :current-block 0
+           ;; Blocks every :branch must enter through OP_RECUR (junk 0), set
+           ;; by lower's retry after a junk-below mismatch on that block.
+           :normalize normalize})))
 
 ;; Field accessors that read the atom — keep call sites tidy.
 (defn- f-of [l]           (:f @l))
@@ -153,7 +157,7 @@
       (when (not= cur junk)
         (throw (ex-info (str "ir/lower: junk-below mismatch for block " bid
                              " (" cur " vs " junk "); unsupported shape")
-                        {:fn :lower :type (type bid) :value bid}))))))
+                        {:fn :lower :type (type bid) :value bid :junk-block bid :junk-fn (:f @l)}))))))
 
 (defn- bump-max-stack! [l]
   "If current runtime SP (= lower-sp + current block's junk-below)
@@ -486,9 +490,21 @@
 
 ;; --- materialize -----------------------------------------------------
 
+(defn- fn-literal-const-index! [l nid aux]
+  "Chunk const index of fn literal nid, interned once per lowering. A fn
+   literal has identity, and use-count counts USERS, not uses — (f g g) has one
+   user — so a literal can be re-emitted more than once; each must load the
+   same *vm.Func, not a fresh one from another template-value."
+  (or (get (:fn-literal-consts @l) nid)
+      (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
+        (swap! l assoc-in [:fn-literal-consts nid] idx)
+        idx)))
+
 (defn- emit-load! [l nid op aux]
   (let [arg (case op
-              :const (ir/chunk-intern-const (chunk-of l) (template-value aux))
+              :const (if (ir/fn-literal-const? nid (f-of l))
+                       (fn-literal-const-index! l nid aux)
+                       (ir/chunk-intern-const (chunk-of l) (template-value aux)))
               :load-var (ir/chunk-intern-const (chunk-of l) aux)
               :load-arg (int aux)
               :load-closed (int aux)
@@ -519,6 +535,72 @@
         (duplicate-slot! l pos))
       (emit-load! l nid (ir/op nid f) (ir/aux nid f)))))
 
+(defn- lower-try! [l nid]
+  "Lower a :try whose closures (body, then optional handler, then optional
+   finally) sit on top of the stack. Emits the bytecode compiler's
+   tryCompiler layout, invoking the closures instead of inline code:
+
+     TRY_PUSH catch fin
+       DUP body; INVOKE 0
+     TRY_POP; JUMP fin|after
+     catch:  [err] DUP handler; DUP err; INVOKE 1; POP_N 1; TRY_POP if fin
+     fin:    DUP finally; INVOKE 0; POP; FINALLY_END
+     after:  POP_N n          ; drop the closures, keep the result
+
+   Every path reaches fin and after at savedSP+1: the VM restores savedSP
+   and pushes the error (catch) or a placeholder (abnormal finally entry)."
+  (let [f        (f-of l)
+        c        (chunk-of l)
+        aux      (ir/aux nid f)
+        handler? (:has-handler aux)
+        finally? (:has-finally aux)
+        n        (count (ir/refs nid f))
+        base     (- (stack-sp l) n)          ; position of the body closure
+        handler-pos (when handler? (inc base))
+        finally-pos (when finally? (+ base (if handler? 2 1)))
+        s0       (stack-sp l)]
+    (record-source-info! l nid)
+    (if (not (or handler? finally?))
+      ;; Unguarded: the body closure is alone on top; call it in place.
+      (emit-with-arg! l nil :call 0)
+      (let [try-ip (ir/chunk-emit-try-push c s0)]
+        ;; body
+        (duplicate-slot! l base)
+        (emit-with-arg! l nil :call 0)
+        (ir/chunk-emit-try-pop c (stack-sp l))
+        (let [jump-arg-ip (emit-placeholder! l nil :branch)
+              jump-ip     (dec jump-arg-ip)]
+          ;; catch: the VM resets to savedSP (= s0) and pushes the error
+          (when handler?
+            (let [catch-ip (ir/chunk-length c)
+                  err-pos  s0]
+              (ir/chunk-update! c (+ try-ip 1) (- catch-ip try-ip))
+              (set-stack-sp! l (inc s0))
+              (duplicate-slot! l handler-pos)
+              (duplicate-slot! l err-pos)
+              (emit-with-arg! l nil :call 1)
+              (bump-stack-sp! l -1)
+              (ir/chunk-emit-pop-n c (stack-sp l) 1)
+              (bump-stack-sp! l -1)
+              (when finally?
+                (ir/chunk-emit-try-pop c (stack-sp l)))))
+          (if finally?
+            (let [fin-ip (ir/chunk-length c)]
+              (ir/chunk-update! c (+ try-ip 2) (- fin-ip try-ip))
+              (ir/chunk-update! c jump-arg-ip (- fin-ip jump-ip))
+              (set-stack-sp! l (inc s0))
+              (duplicate-slot! l finally-pos)
+              (emit-with-arg! l nil :call 0)
+              (ir/chunk-emit-pop c (stack-sp l))
+              (bump-stack-sp! l -1)
+              (let [end-ip (ir/chunk-length c)]
+                (ir/chunk-emit-finally-end c (stack-sp l) (- fin-ip end-ip))))
+            (ir/chunk-update! c jump-arg-ip (- (ir/chunk-length c) jump-ip)))
+          ;; after: [closures… result] → [result]
+          (set-stack-sp! l (inc s0))
+          (ir/chunk-emit-pop-n c (stack-sp l) n)
+          (set-stack-sp! l (inc base)))))))
+
 ;; --- per-op emission -------------------------------------------------
 
 (defn- lower-node! [l nid]
@@ -537,7 +619,7 @@
       (:add :sub :mul :bit-and :bit-or :bit-xor :bit-and-not
         :bit-shift-left :bit-shift-right :unsigned-bit-shift-right
         :unchecked-add :unchecked-sub :unchecked-mul
-        :quot :lt :lte :gt :gte :eq)
+        :quot :div :lt :lte :gt :gte :eq)
       (do (emit! l nid op)
           (bump-stack-sp! l -1))  ; 2→1
 
@@ -609,7 +691,8 @@
           ;; into a target entered clean (a LICM-threaded loop's back edge).
           (or (pos? drop-count)
               (and (pos? cur-junk)
-                   (= 0 (get (:block-junk-seen @l) target))))
+                   (or (= 0 (get (:block-junk-seen @l) target))
+                       (contains? (:normalize @l) target))))
           (let [;; The emitted drop must empty the RUNTIME stack down to
                 ;; the args: runtime SP = lowerer SP + this block's
                 ;; junk-below, so cur-junk is added to `ignore`. Without
@@ -672,6 +755,9 @@
       :push-closed
       (do (emit! l nid :push-closed)
           (bump-stack-sp! l -1))  ; 2 in, 1 out
+
+      :try
+      (lower-try! l nid)  ; n closures in, 1 out
 
       (throw (ex-info (str "ir/lower: unsupported op for lowering: " op) {:fn :lower :type (type op) :value op})))))
 
@@ -985,13 +1071,8 @@
 
 ;; --- entry point -----------------------------------------------------
 
-(defn lower [f]
-  "Lower IR Function f to a *vm.CodeChunk. Returns the boxed chunk on
-   success; throws on cross-block direct-Refs uses (only branch-arg
-   uses may cross blocks)."
-  (when (nil? f)
-    (throw (ex-info "ir/lower: nil function" {:fn :lower :type (type f) :value f})))
-  (let [l (new-lowerer f)]
+(defn- lower-once [f normalize]
+  (let [l (new-lowerer f normalize)]
     (check-branch-if-symmetric-args! f)
     (check-cross-block! f (:uses @l))
     (let [order   (rpo-block-order f)
@@ -1020,3 +1101,32 @@
                            (recur (inc bid) (if (> p acc) p acc)))))]
       (ir/chunk-set-max-stack! c (+ (ir/chunk-max-stack c) max-params)))
     (chunk-of l)))
+
+(defn lower [f]
+  "Lower IR Function f to a *vm.CodeChunk. Returns the boxed chunk on
+   success; throws on cross-block direct-Refs uses (only branch-arg
+   uses may cross blocks)."
+  (when (nil? f)
+    (throw (ex-info "ir/lower: nil function" {:fn :lower :type (type f) :value f})))
+  ;; Legalize a private copy: the caller's IR may still go to the Go backend
+  ;; (lower-fn-all lowers one IR both ways), which needs none of this.
+  (let [f (legalize-for-stack! (atom @f))]
+    ;; Whether a :branch carries its junk (JUMP) or drops it (RECUR) is decided
+    ;; in emission order, so two preds of one join can disagree. On a mismatch,
+    ;; re-lower with that join normalized: every :branch into it then uses
+    ;; RECUR. Fns that lower first time are emitted exactly as before.
+    (loop [normalize #{}]
+      (let [r (try (lower-once f normalize)
+                   (catch e
+                     ;; :junk-fn — an inner fn's mismatch (lowered while
+                     ;; emitting its template) names a block of THAT fn.
+                     (let [d (ex-data e)
+                           b (:junk-block d)]
+                       (if (and (some? b)
+                                (identical? f (:junk-fn d))
+                                (not (contains? normalize b)))
+                         {::retry b}
+                         (throw e)))))]
+        (if (and (map? r) (contains? r ::retry))
+          (recur (conj normalize (::retry r)))
+          r)))))
